@@ -36,6 +36,19 @@ echo "   Port: $PORT"
 echo "   Data: $KUKUIBOT_HOME"
 echo ""
 
+# --- Prime sudo credentials ---
+# When run via `curl | bash`, stdin is the pipe, so sudo can't prompt normally.
+# We use /dev/tty to read the password from the actual terminal.
+# This caches credentials for the rest of the install (~15 min timeout).
+if ! sudo -n true 2>/dev/null; then
+  echo "→ This installer needs admin access. Enter your password:"
+  sudo -v </dev/tty
+fi
+# Keep sudo alive in the background
+(while true; do sudo -n true; sleep 50; done) &
+SUDO_KEEPALIVE_PID=$!
+trap 'kill $SUDO_KEEPALIVE_PID 2>/dev/null' EXIT
+
 # --- Check/install Xcode Command Line Tools ---
 # On a fresh Mac, `python3` is a shim that triggers the Xcode CLT install dialog.
 # Install CLT automatically and wait for it to finish.
