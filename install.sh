@@ -70,20 +70,29 @@ if ! xcode-select -p &>/dev/null; then
   echo "✓ Xcode Command Line Tools installed"
 fi
 
-# --- Check Homebrew ---
+# --- Check/install Homebrew ---
 if ! command -v brew &>/dev/null; then
-  echo "❌ Homebrew not found. Install it first:"
-  echo "   /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
-  echo ""
-  echo "   Then re-run this installer."
-  exit 1
+  echo "→ Installing Homebrew (this may take a few minutes)..."
+  NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  # Add Homebrew to PATH for Apple Silicon Macs
+  if [ -f /opt/homebrew/bin/brew ]; then
+    eval "$(/opt/homebrew/bin/brew shellenv)"
+  elif [ -f /usr/local/bin/brew ]; then
+    eval "$(/usr/local/bin/brew shellenv)"
+  fi
+  if ! command -v brew &>/dev/null; then
+    echo "❌ Homebrew install failed. Install manually:"
+    echo "   /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+    echo "   Then re-run this installer."
+    exit 1
+  fi
 fi
+echo "✓ Homebrew"
 
-# --- Check Python ---
+# --- Check/install Python ---
 if ! command -v python3 &>/dev/null; then
-  echo "❌ Python 3 not found. Install it first:"
-  echo "   brew install python3"
-  exit 1
+  echo "→ Installing Python 3..."
+  brew install python3
 fi
 
 PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
