@@ -37,7 +37,7 @@ def list_users(db):
     if not rows:
         print("\n⚠️  No users found in the database.")
         print("   Run KukuiBot and complete the setup wizard first.")
-        print("   python3 server.py → open https://localhost:7000")
+        print("   python3 server.py → open https://localhost:<port>")
         sys.exit(0)
     return rows
 
@@ -113,7 +113,8 @@ def main():
     print(f"  ✅ Password reset for @{target}")
     print(f"     All existing sessions cleared.")
     print()
-    print(f"  Log in at: https://localhost:7000")
+    _port = os.environ.get("KUKUIBOT_PORT", "7000")
+    print(f"  Log in at: https://localhost:{_port}")
     print()
 
 

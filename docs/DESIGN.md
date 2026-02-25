@@ -8,13 +8,13 @@
 
 ## 1. Overview
 
-KukuiBot is a standalone, self-hosted AI agent interface powered by GPT-5.3 KukuiBot. It provides a full-featured chat UI with tool execution (bash, file ops, sub-agents), a tiered security/elevation system, and context management — all with **zero external AI dependencies** beyond the KukuiBot API itself.
+KukuiBot is a standalone, self-hosted, multi-provider AI agent interface. It provides a full-featured chat UI with tool execution (bash, file ops, sub-agents), a tiered security/elevation system, and context management. Supports OpenAI, Claude Code, Anthropic API, and OpenRouter.
 
 ### Design Goals
 - **Zero build step** — vanilla HTML/JS/CSS frontend, no React, no Node, no bundler
 - **Single-process backend** — FastAPI/uvicorn, one Python process
 - **Self-contained** — all data in `~/.kukuibot/`, no external databases
-- **Portable** — runs on any machine with Python 3.11+ and a ChatGPT access token
+- **Portable** — runs on any machine with Python 3.11+ and at least one AI provider account
 - **Secure by default** — localhost-only on first run, opt-in LAN access, proper TLS
 
 ---
@@ -30,18 +30,15 @@ KukuiBot is a standalone, self-hosted AI agent interface powered by GPT-5.3 Kuku
 │  │  - Elevation dialogs, reasoning controls       │  │
 │  │  - Login / setup wizard (first-run)            │  │
 │  └──────────────────────┬─────────────────────────┘  │
-│                         │ HTTPS (TLS via Caddy)      │
+│                         │ HTTPS (TLS via mkcert)     │
 ├─────────────────────────┼────────────────────────────┤
-│  Caddy (reverse proxy)  │ TLS termination            │
-│  mkcert localhost cert  │ + LAN hostname cert        │
-├─────────────────────────┼────────────────────────────┤
-│  FastAPI Backend         │ 127.0.0.1:7000 (HTTP)     │
+│  FastAPI Backend         │ 0.0.0.0:7000 (HTTPS)      │
 │  ┌──────────────────────┴─────────────────────────┐  │
 │  │  server.py — main app, SSE streaming, routes   │  │
 │  │  auth.py — OAuth tokens, user auth, sessions   │  │
 │  │  security.py — elevation, path guards, egress  │  │
 │  │  tools.py — bash, read/write/edit, spawn_agent │  │
-│  │  compaction.py — self-compact (KukuiBot-only)     │  │
+│  │  compaction.py — self-compact via AI provider    │  │
 │  │  memory.py — TF-IDF search over memory files   │  │
 │  │  subagent.py — isolated sub-agent spawning     │  │
 │  │  config.py — all paths, env vars, defaults     │  │
@@ -56,8 +53,7 @@ KukuiBot is a standalone, self-hosted AI agent interface powered by GPT-5.3 Kuku
 └─────────────────────────┴────────────────────────────┘
                           │
                           ▼
-              KukuiBot API (chatgpt.com)
-              GPT-5.3 KukuiBot responses endpoint
+              AI Providers (OpenAI / Anthropic / OpenRouter)
 ```
 
 ### Key Components
@@ -68,7 +64,7 @@ KukuiBot is a standalone, self-hosted AI agent interface powered by GPT-5.3 Kuku
 | `auth.py` | ChatGPT OAuth token storage, JWT parsing, user authentication, session management |
 | `security.py` | Elevation system, path access control, bash command checks, egress guards |
 | `tools.py` | Tool definitions and execution (bash, file ops, memory search, spawn_agent) |
-| `compaction.py` | Context compaction via KukuiBot self-summarization (no external deps) |
+| `compaction.py` | Context compaction via AI provider self-summarization |
 | `generate_project_report.py` | Rule-based generator for `~/.kukuibot/PROJECT-REPORT.md` + daily archive |
 | `memory.py` | TF-IDF memory search over markdown files |
 | `subagent.py` | Isolated sub-agent spawning with fresh context windows |
@@ -80,13 +76,13 @@ KukuiBot is a standalone, self-hosted AI agent interface powered by GPT-5.3 Kuku
 User types message
     → POST /api/chat (SSE response)
     → Build prompt (system prompt + memory context + conversation history)
-    → Send to KukuiBot API (streaming)
+    → Send to AI provider (streaming)
     → For each response chunk:
         - text → stream to client
         - tool_call → execute tool → stream result → continue
         - elevation_required → pause, notify client, wait for approval
     → On completion: save to history, update token count
-    → If over compaction threshold: self-compact via KukuiBot
+    → If over compaction threshold: self-compact via AI provider
 ```
 
 ### 2.1 Context Profiles & Accuracy
@@ -113,11 +109,11 @@ Drift metrics are exposed via `/api/token-debug` and logged to `~/.kukuibot/logs
 - Browser automation tools: `browser_open`, `browser_navigate`, `browser_click`, `browser_type`, `browser_extract`, `browser_snapshot`, `browser_close`
 - Core tools: `bash`, `read_file`, `write_file`, `edit_file`, `spawn_agent` (plus background/memory/web utilities)
 - Tiered security: default → auto-approve → root mode (10m TTL)
-- Self-compact via KukuiBot (no Anthropic dependency)
+- Self-compact via connected AI provider
 - Memory search via TF-IDF
 - Disconnect resilience: event sequencing, resume endpoint, runtime restart detection
-- ChatGPT OAuth PKCE flow + API key auth
-- **HTTPS native** — uvicorn serves TLS directly on port 7000 (mkcert certs)
+- Multi-provider auth: OpenAI OAuth PKCE, Claude Code CLI/API key, Anthropic API key, OpenRouter API key
+- **HTTPS native** — uvicorn serves TLS directly (mkcert certs)
 - Root CA download endpoint (`/api/cert`) for device onboarding
 - Live OpenAI usage tracking (`/api/usage`)
 - Context accounting telemetry (`/api/tokens`, `/api/token-debug`)
@@ -136,7 +132,7 @@ Drift metrics are exposed via `/api/token-debug` and logged to `~/.kukuibot/logs
   - Click textarea to cancel voice and edit transcript
   - Auto-restarts on Safari's 60s recognition limit
 - **Reasoning picker** with tooltips: ⚡ Quick / L Low / M Medium / H High
-- Multi-tab: Codex 5.3 + Spark workers, sidebar (desktop) + top bar (mobile)
+- Multi-tab: multiple workers across providers, sidebar (desktop) + top bar (mobile)
 - Cross-device tab metadata sync (`tab_meta`) with server-authoritative label hydration on boot
 - Stable worker IDs for new tabs (legacy numeric IDs still supported)
 - Narrow-screen worker creation modal (name input + OK/Cancel)
@@ -153,13 +149,13 @@ Drift metrics are exposed via `/api/token-debug` and logged to `~/.kukuibot/logs
 
 ### Setup Wizard ✅
 - **Step 0: Trust Certificate** — detects LAN access, offers root CA download with per-OS instructions
-- **Step 1: Create Account** — local admin user (bcrypt hashed)
-- **Step 2: Connect OpenAI** — OAuth PKCE (recommended) or API key (expert)
+- **Step 1: Create Account** — local admin user (bcrypt hashed), or skip for localhost-only mode
+- **Step 2: Connect a Provider** — OpenAI OAuth, Claude Code, Anthropic API, OpenRouter (or skip to configure later)
 - Auto-detects reconfiguration vs first-run
 
 ---
 
-## 4. Phase: Security & First-Run (Next)
+## 4. Security & First-Run Design
 
 ### 4.1 Problem Statement
 
@@ -167,7 +163,7 @@ Currently the app:
 - Binds to `0.0.0.0:7000` (exposed to entire LAN) immediately
 - Has no user authentication (anyone on the network can use it)
 - Serves plain HTTP (no TLS)
-- Requires manually pasting a ChatGPT token with no guided onboarding
+- Requires manually configuring an AI provider with no guided onboarding
 
 This is fine for development but unacceptable for any real deployment.
 
@@ -190,9 +186,9 @@ On first launch (no users exist in the database), the app enters **setup mode**:
 │     │  - Password (shown strength meter)          │     │
 │     │  - Confirm password                         │     │
 │     │                                             │     │
-│     │  Step 2: Connect to KukuiBot                   │     │
-│     │  - Paste ChatGPT access token               │     │
-│     │  - [Verify Token] button                    │     │
+│     │  Step 2: Connect AI Provider                 │     │
+│     │  - OpenAI OAuth / Claude / Anthropic / OR   │     │
+│     │  - Or skip to configure later               │     │
 │     │                                             │     │
 │     │  Step 3: Network Access                     │     │
 │     │  - [ ] Enable LAN access (recommended)      │     │
@@ -216,7 +212,7 @@ On first launch (no users exist in the database), the app enters **setup mode**:
 #### Password Storage
 - **bcrypt** with work factor 12 (not SHA-256 — resistant to GPU cracking)
 - Stored in SQLite `users` table: `(username, password_hash, role, created_at)`
-- Support for multiple users (admin + household roles, same as your other app)
+- Support for multiple users (admin + household roles)
 
 #### Session Management
 - On successful login: generate `secrets.token_hex(32)` session token
@@ -227,7 +223,7 @@ On first launch (no users exist in the database), the app enters **setup mode**:
 #### Localhost Auto-Trust
 - Requests from `127.0.0.1` / `::1` are automatically authenticated as admin
 - No login required when accessing from the machine itself
-- This matches Home Assistant, Portainer, and our existing your other app behavior
+- This matches the pattern used by Home Assistant, Portainer, and similar self-hosted apps
 
 #### Auth Middleware Flow
 ```
@@ -256,7 +252,7 @@ Self-signed certificates always show browser warnings ("Your connection is not p
 **Current state on this machine:**
 - mkcert installed (`/opt/homebrew/bin/mkcert`)
 - Root CA generated and installed in macOS system keychain ✅
-- Certs exist for `yourdomain.com` (used by Caddy for the main your other app app)
+- Certs can be generated for any hostname/IP combination
 
 #### TLS Architecture — Native HTTPS
 
@@ -280,7 +276,7 @@ mkcert -cert-file certs/kukuibot.pem -key-file certs/kukuibot-key.pem \
 - If `certs/kukuibot.pem` + `certs/kukuibot-key.pem` exist → HTTPS on port 7000
 - If certs missing → HTTP fallback on port 7000 (with console warning)
 
-**Optional Caddy integration** (for `/kukuibot/` path under yourdomain.com):
+**Optional reverse proxy** (e.g. Caddy or nginx for path-based routing):
 ```
 handle_path /kukuibot/* {
     reverse_proxy https://localhost:7000 {
@@ -318,7 +314,7 @@ This endpoint is auth-exempt — it only serves the public root CA (not a secret
 |-------|-------------|-----|
 | First run (setup mode) | `127.0.0.1:7000` | Credentials entered over localhost only — no LAN exposure |
 | Normal (LAN disabled) | `127.0.0.1:7000` | User chose localhost-only access |
-| Normal (LAN enabled) | `0.0.0.0:7000` | LAN access via Caddy reverse proxy |
+| Normal (LAN enabled) | `0.0.0.0:7000` | LAN access enabled |
 
 The bind address is stored in config and persists across restarts.
 
@@ -417,9 +413,8 @@ kukuibot/
 | bcrypt | Password hashing | ✅ (new) |
 
 **Explicitly NOT dependencies:**
-- ~~anthropic~~ — removed, compaction is self-compact only
 - ~~React / Node / npm~~ — frontend is vanilla JS
-- ~~legacy gateway integrations~~ — fully standalone, no external gateway dependency
+- ~~external databases~~ — fully standalone, SQLite only
 
 ---
 
@@ -428,7 +423,7 @@ kukuibot/
 | Layer | Mechanism |
 |-------|-----------|
 | Network | Localhost-only by default, opt-in LAN via config |
-| Transport | TLS via Caddy + mkcert (zero browser warnings) |
+| Transport | TLS via mkcert (zero browser warnings) |
 | Authentication | bcrypt passwords, httpOnly secure cookies, localhost auto-trust |
 | Authorization | Role-based (admin/household), middleware on every request |
 | Tool execution | Workspace-first boundary, elevation for dangerous ops |
@@ -471,5 +466,4 @@ This ensures: delete a tab on Device A → Device B won't re-create it on next s
 - **API keys** — for programmatic access (webhooks, automation)
 - **Rate limiting** — prevent brute-force login attempts
 - **Encrypted SQLite** — encrypt tokens at rest with a master key
-- **OAuth flow** — replace manual token paste with proper ChatGPT OAuth redirect
 - **Audit log UI** — surface tool-calls.log in the frontend for admin review

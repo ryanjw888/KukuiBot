@@ -3,7 +3,7 @@
 _This file is the agent's persistent memory across sessions. It reads this on startup and updates it as it learns._
 
 ## Identity
-- **App:** KukuiBot (GPT-5.3 KukuiBot standalone agent)
+- **App:** KukuiBot
 - **First run:** (auto-populated)
 
 ## Key Decisions

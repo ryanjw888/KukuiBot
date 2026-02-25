@@ -13,7 +13,7 @@ fi
 
 # Ensure standalone repo exists
 if [ ! -d "$STANDALONE/.git" ]; then
-  git clone git@github.com:youruser/KukuiBot.git "$STANDALONE"
+  git clone "${KUKUIBOT_GITHUB_REPO:-git@github.com:ryanjw888/KukuiBot.git}" "$STANDALONE"
 fi
 
 cd "$STANDALONE"
@@ -50,5 +50,5 @@ if git diff --cached --quiet; then
 else
   git commit -m "sync: kukuibot $(date +%Y-%m-%d_%H:%M)"
   git push origin main
-  echo "✅ Pushed to github.com/youruser/KukuiBot"
+  echo "✅ Pushed to GitHub"
 fi

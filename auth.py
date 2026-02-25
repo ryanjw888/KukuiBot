@@ -305,12 +305,19 @@ def init_db():
 # =====================
 
 def is_setup_complete() -> bool:
-    """Setup is complete if we have a valid token (OAuth or API key)."""
+    """Setup is complete if the user has explicitly finished (or skipped) the setup wizard."""
     with db_connection() as db:
-        row = db.execute("SELECT access_token, provider_type FROM auth WHERE provider = 'openai-kukuibot'").fetchone()
-        if not row or not row[0]:
-            return False
-        return True
+        row = db.execute("SELECT value FROM config WHERE key = 'setup_complete'").fetchone()
+        if row and row[0] == "1":
+            return True
+        # Legacy check: if an admin user exists, setup was completed before this flag existed
+        user_row = db.execute("SELECT 1 FROM users LIMIT 1").fetchone()
+        if user_row:
+            # Backfill the flag so future checks are fast
+            db.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('setup_complete', '1')")
+            db.commit()
+            return True
+        return False
 
 
 def create_user(username: str, password: str, role: str = "admin", display_name: str = "", email: str = "") -> bool:
@@ -334,17 +341,25 @@ def create_user(username: str, password: str, role: str = "admin", display_name:
             return False
 
 
-def complete_setup(username: str, password: str, display_name: str = "", email: str = "",
-                   provider_type: str = "", api_key: str = "", session_token: str = "") -> dict:
+def complete_setup(username: str = "", password: str = "", display_name: str = "", email: str = "",
+                   provider_type: str = "", api_key: str = "", session_token: str = "",
+                   skip_account: bool = False) -> dict:
     """Complete first-run setup.
 
-    Step 1 data: username, password, display_name, email
-    Step 2 data: provider_type ('openai_api_key' | 'session_token' | 'skip'), api_key or session_token
+    If skip_account is True, no user account is created — the app runs in localhost-only mode.
+    Otherwise, Step 1 data (username, password) creates an admin account.
 
     Returns {"ok": True, "session_token": "..."} or {"error": "..."}.
     """
     if is_setup_complete():
         return {"error": "Setup already complete"}
+
+    if skip_account:
+        # Localhost-only mode — no user account, no provider required
+        _mark_setup_complete()
+        _update_memory_md_date()
+        logger.info("Setup complete — localhost-only mode (no user account)")
+        return {"ok": True, "role": "admin", "name": "localhost", "localhost_only": True}
 
     if not username or not password:
         return {"error": "Username and password are required"}
@@ -372,7 +387,25 @@ def complete_setup(username: str, password: str, display_name: str = "", email: 
     except Exception as e:
         logger.warning(f"Failed to write USER.md: {e}")
 
-    # Update MEMORY.md first run date
+    _mark_setup_complete()
+    _update_memory_md_date()
+
+    # Create a login session for the new admin
+    session = login(username, password)
+
+    logger.info(f"Setup complete — admin user: {username}")
+    return {"ok": True, "session_token": session.get("token", ""), "role": "admin", "name": display_name or username}
+
+
+def _mark_setup_complete():
+    """Set the setup_complete flag in the config table."""
+    with db_connection() as db:
+        db.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('setup_complete', '1')")
+        db.commit()
+
+
+def _update_memory_md_date():
+    """Update MEMORY.md first-run date placeholder."""
     mem_md = KUKUIBOT_HOME / "MEMORY.md"
     if mem_md.exists():
         try:
@@ -382,22 +415,6 @@ def complete_setup(username: str, password: str, display_name: str = "", email: 
             mem_md.write_text(content)
         except Exception:
             pass
-
-    # Save AI provider credentials
-    if provider_type == "openai_api_key" and api_key:
-        save_api_key(api_key)
-    elif provider_type == "session_token" and session_token:
-        account_id = extract_account_id(session_token)
-        if account_id:
-            save_token(session_token, expires_in=14 * 86400, provider_type="session_token")
-        else:
-            logger.warning("Session token provided but couldn't extract account ID")
-
-    # Create a login session for the new admin
-    session = login(username, password)
-
-    logger.info(f"Setup complete — admin user: {username}")
-    return {"ok": True, "session_token": session.get("token", ""), "role": "admin", "name": display_name or username}
 
 
 # =====================

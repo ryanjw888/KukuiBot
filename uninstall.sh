@@ -2,10 +2,20 @@
 # KukuiBot — Uninstaller for macOS
 # Usage: ~/.kukuibot/src/uninstall.sh
 #    or: curl -fsSL <url>/uninstall.sh | bash
+#    or: bash uninstall.sh --dir ~/my-kukuibot
 
 set -e
 
-KUKUIBOT_HOME="${KUKUIBOT_HOME:-$HOME/.kukuibot}"
+# --- Parse flags ---
+CUSTOM_DIR=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dir) CUSTOM_DIR="$2"; shift 2 ;;
+    *)     echo "Unknown option: $1"; echo "Usage: uninstall.sh [--dir DIR]"; exit 1 ;;
+  esac
+done
+
+KUKUIBOT_HOME="${CUSTOM_DIR:-${KUKUIBOT_HOME:-$HOME/.kukuibot}}"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
 
 echo "🧪 Uninstalling KukuiBot..."

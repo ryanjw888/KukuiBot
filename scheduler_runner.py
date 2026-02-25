@@ -22,8 +22,9 @@ import time
 import uuid
 from pathlib import Path
 
-KUKUIBOT_HOME = Path.home() / ".kukuibot"
-KUKUIBOT_URL = os.environ.get("KUKUIBOT_URL", "https://localhost:7000")
+KUKUIBOT_HOME = Path(os.environ.get("KUKUIBOT_HOME", str(Path.home() / ".kukuibot")))
+_PORT = os.environ.get("KUKUIBOT_PORT", "7000")
+KUKUIBOT_URL = os.environ.get("KUKUIBOT_URL", f"https://localhost:{_PORT}")
 LOCK_DIR = KUKUIBOT_HOME / "var" / "locks"
 MAX_OUTPUT = 65536
 

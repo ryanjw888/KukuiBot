@@ -43,8 +43,9 @@ ARCHIVE_DIR = KUKUIBOT_HOME / "daily_reports"
 MEMORY_PATH = KUKUIBOT_HOME / "nightly-analysis-memory.md"
 LOG_PATH = KUKUIBOT_HOME / "logs" / "nightly-analysis.log"
 
-API_BASE = "https://localhost:7000"
-GMAIL_SEND_URL = "https://localhost:7000/api/gmail/send"
+_PORT = os.environ.get("KUKUIBOT_PORT", "7000")
+API_BASE = os.environ.get("KUKUIBOT_URL", f"https://localhost:{_PORT}")
+GMAIL_SEND_URL = f"{API_BASE}/api/gmail/send"
 SESSION_ID = "deleg-claude_opus-nightly-analyst-1"
 TASK_ID_PREFIX = "nightly"
 DEFAULT_TIMEOUT = 300  # 5 minutes

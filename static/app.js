@@ -758,7 +758,7 @@ async function runSlashStatus() {
   const critCount = secFindings.filter(f => String(f?.severity) === 'critical').length;
   const warnCount = secFindings.filter(f => String(f?.severity) === 'warn').length;
 
-  const oaiConnected = Boolean(auth?.authenticated);
+  const oaiConnected = Boolean(auth?.openai_connected);
   const oaiProvider = auth?.provider_type || 'none';
   const oaiState = oaiConnected ? 'ok' : 'down';
 
@@ -5142,7 +5142,7 @@ function renderBackupModal() {
           <li>Copy the repo URL from the green <strong>Code</strong> button and paste it below.</li>
         </ol>
         <div style="margin-top:8px">
-          Need help finding it? <a href="https://github.com/youruser?tab=repositories" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">Your GitHub repositories</a>
+          Need help? <a href="https://github.com/new" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">Create a new repository</a>
           · <a href="https://docs.github.com/en/repositories/creating-and-managing-repositories/quickstart-for-repositories" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">GitHub quickstart</a>
           · <a href="https://docs.github.com/en/get-started/getting-started-with-git/about-remote-repositories" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">About repo URLs</a>
         </div>

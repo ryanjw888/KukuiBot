@@ -299,7 +299,7 @@
     <!-- STEP 1: Create Account -->
     <div class="step visible" id="step-1">
       <h2>Create your local account</h2>
-      <p class="subtitle">Stored on your Mac</p>
+      <p class="subtitle">Stored locally on this machine</p>
 
       <form id="step1-form" action="/auth/setup" method="POST" autocomplete="on" onsubmit="event.preventDefault(); goStep2();">
         <label for="full_name">Full Name</label>
@@ -320,6 +320,9 @@
           <button type="submit" class="btn btn-primary">Continue →</button>
         </div>
       </form>
+      <div id="skip-setup-link" style="text-align:center; margin-top:12px; display:none;">
+        <button class="btn-skip" onclick="skipEverything()">Skip — use localhost only</button>
+      </div>
     </div>
 
     <!-- STEP 2: Connect AI Providers -->
@@ -511,6 +514,10 @@
       <div id="openrouter-success" style="display:none; text-align:center; padding: 20px 0;">
         <div style="font-size:48px; margin-bottom:12px;">✓</div>
         <p style="color:var(--green); font-size:16px; font-weight:600;">OpenRouter Key Saved</p>
+      </div>
+
+      <div id="skip-providers-link" style="text-align:center; margin-top:16px;">
+        <button class="btn-skip" onclick="skipProviders()">Skip — I'll configure providers later in Settings</button>
       </div>
 
       <div class="error" id="step2-error"></div>
@@ -965,21 +972,32 @@
       }
     }
 
-    async function skipSetup() {
-      const body = { ...step1Data };
+    // --- Skip everything (localhost-only mode) ---
+    async function skipEverything() {
       try {
         const res = await fetch('/auth/setup', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
+          body: JSON.stringify({ skip_account: true }),
         });
         const data = await res.json();
-        if (data.error) { document.getElementById('step2-error').textContent = data.error; document.getElementById('step2-error').style.display = 'block'; return; }
+        if (data.error) {
+          const errEl = document.getElementById('step1-error');
+          errEl.textContent = data.error;
+          errEl.style.display = 'block';
+          return;
+        }
         window.location.href = '/';
       } catch (e) {
-        document.getElementById('step2-error').textContent = e.message;
-        document.getElementById('step2-error').style.display = 'block';
+        const errEl = document.getElementById('step1-error');
+        errEl.textContent = 'Connection error: ' + e.message;
+        errEl.style.display = 'block';
       }
+    }
+
+    // --- Skip provider setup (account created, configure providers later) ---
+    async function skipProviders() {
+      await finishSetup();
     }
 
     // If setup is already complete, redirect to home — unless user came to reconfigure OpenAI (#step2)
@@ -987,6 +1005,11 @@
     const forceStep2 = window.location.hash === '#step2';
     const _isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
     const devMode = _isLocal && new URLSearchParams(window.location.search).get('dev') === 'true';
+    // Show "skip — localhost only" link when accessed from localhost
+    if (_isLocal) {
+      const skipLink = document.getElementById('skip-setup-link');
+      if (skipLink) skipLink.style.display = 'block';
+    }
     // In dev mode, disable HTML5 form validation so empty fields don't block Continue
     if (devMode) {
       const f = document.getElementById('step1-form');

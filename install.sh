@@ -1,18 +1,39 @@
 #!/bin/bash
 # KukuiBot — One-line installer for macOS
 # Usage: curl -fsSL <url>/install.sh | bash
+#   or:  bash install.sh --port 8080 --dir ~/my-kukuibot
+#
+# Options:
+#   --port PORT   Server port (default: 7000)
+#   --dir  DIR    Data directory (default: ~/.kukuibot)
 #
 # Architecture:
-#   KukuiBot Server (port 7000) — unified server (auth, chat, tools, settings, API)
+#   KukuiBot Server (single process) — unified server (auth, chat, tools, settings, API)
 #
 # Layout:
-#   ~/.kukuibot/src/           — source code (git repo)
-#   ~/.kukuibot/               — data dir (db, memory, config, logs)
-#   ~/Library/LaunchAgents/  — com.kukuibot.server plist
+#   <dir>/src/              — source code (git repo)
+#   <dir>/                  — data dir (db, memory, config, logs)
+#   ~/Library/LaunchAgents/ — com.kukuibot.server plist
 
 set -e
 
+# --- Parse flags ---
+CUSTOM_PORT=""
+CUSTOM_DIR=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --port) CUSTOM_PORT="$2"; shift 2 ;;
+    --dir)  CUSTOM_DIR="$2";  shift 2 ;;
+    *)      echo "Unknown option: $1"; echo "Usage: install.sh [--port PORT] [--dir DIR]"; exit 1 ;;
+  esac
+done
+
+PORT="${CUSTOM_PORT:-${KUKUIBOT_PORT:-7000}}"
+KUKUIBOT_HOME="${CUSTOM_DIR:-${KUKUIBOT_HOME:-$HOME/.kukuibot}}"
+
 echo "🧪 Installing KukuiBot..."
+echo "   Port: $PORT"
+echo "   Data: $KUKUIBOT_HOME"
 echo ""
 
 # --- Check Python ---
@@ -46,9 +67,8 @@ mkcert -install 2>/dev/null || true
 echo "✓ Root CA trusted"
 
 # --- Set up directories ---
-KUKUIBOT_HOME="${KUKUIBOT_HOME:-$HOME/.kukuibot}"
 SRC_DIR="$KUKUIBOT_HOME/src"
-REPO_URL="${KUKUIBOT_REPO:-https://github.com/youruser/KukuiBot.git}"
+REPO_URL="${KUKUIBOT_REPO:-https://github.com/ryanjw888/KukuiBot.git}"
 PYTHON_BIN=$(command -v python3)
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
 PATH_ENV="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -99,7 +119,7 @@ done
 # Remove legacy worker plist if it exists
 rm -f "$LAUNCH_AGENTS/com.kukuibot.worker.plist"
 
-# --- KukuiBot Server (unified, port 7000) ---
+# --- KukuiBot Server ---
 cat > "$LAUNCH_AGENTS/com.kukuibot.server.plist" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -130,13 +150,17 @@ cat > "$LAUNCH_AGENTS/com.kukuibot.server.plist" << PLIST
         <string>$HOME</string>
         <key>PATH</key>
         <string>${PATH_ENV}</string>
+        <key>KUKUIBOT_HOME</key>
+        <string>${KUKUIBOT_HOME}</string>
+        <key>KUKUIBOT_PORT</key>
+        <string>${PORT}</string>
     </dict>
 </dict>
 </plist>
 PLIST
 
 launchctl load "$LAUNCH_AGENTS/com.kukuibot.server.plist"
-echo "✓ KukuiBot server (port 7000) installed"
+echo "✓ KukuiBot server (port $PORT) installed"
 
 # =============================================
 # Privileged helper daemon (root launchd)
@@ -225,9 +249,9 @@ fi
 sleep 3
 SERVER_OK=false
 
-if lsof -nP -iTCP:7000 -sTCP:LISTEN >/dev/null 2>&1; then
+if lsof -nP -iTCP:${PORT} -sTCP:LISTEN >/dev/null 2>&1; then
   SERVER_OK=true
-  echo "✓ KukuiBot server running on port 7000"
+  echo "✓ KukuiBot server running on port $PORT"
 else
   echo "⚠️  Server didn't start — check /tmp/kukuibot-server.log"
 fi
@@ -238,8 +262,8 @@ echo ""
 echo "═══════════════════════════════════════════════════"
 echo "  🧪 KukuiBot installed successfully!"
 echo ""
-echo "  Open:    https://localhost:7000"
-echo "  LAN:     https://${LAN_IP}:7000"
+echo "  Open:    https://localhost:${PORT}"
+echo "  LAN:     https://${LAN_IP}:${PORT}"
 echo ""
 echo "  Manage:"
 echo "    Restart server:   launchctl stop com.kukuibot.server"
@@ -250,5 +274,5 @@ echo "════════════════════════�
 if [ "$SERVER_OK" = true ]; then
   echo ""
   echo "→ Opening KukuiBot in your browser..."
-  open "https://localhost:7000"
+  open "https://localhost:${PORT}"
 fi

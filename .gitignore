@@ -28,6 +28,9 @@ Thumbs.db
 # Logs
 *.log
 
+# Runtime config (user-specific)
+config/security-policy.json
+
 # Session state
 .claude_session_*
 .claude_compaction_*

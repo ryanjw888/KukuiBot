@@ -31,7 +31,9 @@ if _src_dir not in sys.path:
 
 
 DAILY_REPORTS_DIR = KUKUIBOT_HOME / "daily_reports"
-GMAIL_SEND_URL = "https://localhost:7000/api/gmail/send"
+_PORT = os.environ.get("KUKUIBOT_PORT", "7000")
+_API_BASE = os.environ.get("KUKUIBOT_URL", f"https://localhost:{_PORT}")
+GMAIL_SEND_URL = f"{_API_BASE}/api/gmail/send"
 DB_PATH = KUKUIBOT_HOME / "kukuibot.db"
 
 

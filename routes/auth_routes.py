@@ -185,10 +185,16 @@ async def auth_status_endpoint(request: Request):
         status["logged_in"] = True
         status["user"] = user.get("user", "")
         status["role"] = user.get("role", "")
+        # User is logged in (or localhost auto-admin) — they're authenticated
+        # to use the app regardless of whether an AI provider is connected.
+        # Provider connection status is in provider_type / openai_connected.
+        status["openai_connected"] = status.get("authenticated", False)
+        status["authenticated"] = True
     else:
         status["logged_in"] = False
         status["user"] = ""
         status["role"] = ""
+        status["openai_connected"] = False
 
     status["is_localhost"] = is_local
     status["force_login_required"] = is_local and force_login
@@ -199,21 +205,26 @@ async def auth_status_endpoint(request: Request):
 async def setup_endpoint(req: Request):
     """First-run setup — create admin + connect AI provider."""
     body = await req.json()
+    skip_account = body.get("skip_account", False)
+
+    if skip_account:
+        # Localhost-only mode — skip account creation entirely
+        if not is_localhost(req):
+            return JSONResponse({"error": "Skip is only available from localhost"}, status_code=403)
+        result = complete_setup(skip_account=True)
+        if result.get("error"):
+            return JSONResponse(result, status_code=400)
+        return JSONResponse({"ok": True, "name": "localhost", "localhost_only": True})
+
     username = body.get("username", "").strip()
     password = body.get("password", "")
     display_name = body.get("display_name", "").strip()
     email = body.get("email", "").strip()
-    provider_type = body.get("provider_type", "skip").strip()  # 'openai_api_key' | 'session_token' | 'skip'
-    api_key = body.get("api_key", "").strip()
-    session_token = body.get("session_token", "").strip()
 
     result = complete_setup(
         username, password,
         display_name=display_name or username,
         email=email,
-        provider_type=provider_type,
-        api_key=api_key,
-        session_token=session_token,
     )
     if result.get("error"):
         return JSONResponse(result, status_code=400)
