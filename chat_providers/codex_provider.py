@@ -76,7 +76,8 @@ def _do_request(token, account_id, headers, instructions, items, tools, tool_cho
         body["prompt_cache_key"] = session_id
     if tools:
         body["tools"] = tools
-    return http_requests.post(KUKUIBOT_API_URL, headers=headers, json=body, timeout=1800, stream=True)
+    # timeout=(connect, read): 30s to connect, 120s between SSE chunks
+    return http_requests.post(KUKUIBOT_API_URL, headers=headers, json=body, timeout=(30, 120), stream=True)
 
 
 def _parse_sse(response):
@@ -128,6 +129,7 @@ async def process_chat_codex(
         profile, context_window, compaction_threshold = profile_limits(session_id)
         model_name = MODEL_PROFILES[profile]["api_model"]
         items, _, _ = load_history(session_id)
+        logger.info(f"[{session_id}] Starting chat: {len(items)} history items, profile={profile}, model={model_name}")
 
         if attachments:
             att_parts = build_codex_attachment_items(attachments)
@@ -197,8 +199,10 @@ async def process_chat_codex(
                     None, _do_request, token, account_id, headers, instructions, items, TOOL_DEFINITIONS, tc, session_id, model_name,
                 )
 
+                logger.info(f"[{session_id}] API response: status={response.status_code}, round={round_num}")
                 if not response.ok:
                     error_text = response.text
+                    logger.warning(f"[{session_id}] API error: {response.status_code} — {error_text[:300]}")
                     if response.status_code == 429:
                         await _emit_event(session_id, queue, {"type": "error", "message": "Rate limited — try again shortly."}, run_id=run_id)
                     elif response.status_code in (401, 403):
@@ -394,8 +398,13 @@ async def process_chat_codex(
                     await _emit_event(session_id, queue, {"type": "context", "tokens": post, "max": context_window, "pct": round(post / context_window, 4), "source": "estimate"}, run_id=run_id)
 
             except Exception as e:
-                logger.error(f"Stream error: {e}", exc_info=True)
-                await _emit_event(session_id, queue, {"type": "error", "message": str(e) or type(e).__name__}, run_id=run_id)
+                import requests as _rq
+                if isinstance(e, (_rq.exceptions.ReadTimeout, _rq.exceptions.ConnectionError)):
+                    logger.warning(f"[{session_id}] API connection issue (round {round_num}): {type(e).__name__}: {e}")
+                    await _emit_event(session_id, queue, {"type": "error", "message": f"Connection to OpenAI lost — try again."}, run_id=run_id)
+                else:
+                    logger.error(f"Stream error: {e}", exc_info=True)
+                    await _emit_event(session_id, queue, {"type": "error", "message": str(e) or type(e).__name__}, run_id=run_id)
                 break
 
         items = repair_tool_items(items)
