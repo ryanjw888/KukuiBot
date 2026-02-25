@@ -45,13 +45,13 @@ Open **https://localhost:7000** — the setup wizard walks you through everythin
 ### One-Line Install (macOS)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ryanjw888/KukuiBot/main/install.sh | bash
+curl -fsSL https://github.com/ryanjw888/KukuiBot/raw/main/install.sh | bash
 ```
 
 Or with custom options:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ryanjw888/KukuiBot/main/install.sh | bash -s -- --port 8443 --dir ~/my-kukuibot
+curl -fsSL https://github.com/ryanjw888/KukuiBot/raw/main/install.sh | bash -s -- --port 8443 --dir ~/my-kukuibot
 ```
 
 The installer handles dependencies (mkcert, ripgrep), HTTPS certs, launchd services, and cron jobs.
