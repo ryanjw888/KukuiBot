@@ -2739,7 +2739,7 @@ async function submitPastedCode() {
   try { const u = new URL(raw); code = u.searchParams.get('code') || ''; } catch { code = raw; }
   if (!code) { document.getElementById('oauth-msg').textContent = '❌ No code found in URL'; return; }
   try {
-    const r = await fetch(API + '/api/oauth/exchange', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ code }) });
+    const r = await fetch(API + '/auth/oauth/exchange', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ code }) });
     const d = await r.json();
     if (d.error) { document.getElementById('oauth-msg').textContent = '❌ ' + d.error; return; }
     if (oauthPolling) { clearInterval(oauthPolling); oauthPolling = null; }
@@ -2779,7 +2779,7 @@ async function startOAuth() {
   msg.textContent = '';
 
   try {
-    const r = await fetch(API + '/api/oauth/start', { method: 'POST' });
+    const r = await fetch(API + '/auth/oauth/start', { method: 'POST' });
     const d = await r.json();
     if (d.error) {
       if (popupOpened && authWindow && !authWindow.closed) authWindow.close();
@@ -2821,11 +2821,11 @@ async function startOAuth() {
 
     oauthPolling = setInterval(async () => {
       try {
-        const sr = await fetch(API + '/api/oauth/status');
+        const sr = await fetch(API + '/auth/oauth/status');
         const sd = await sr.json();
         if (sd.status === 'complete' || sd.status === 'success') {
           clearInterval(oauthPolling); oauthPolling = null;
-          await fetch(API + '/api/oauth/complete', { method: 'POST' });
+          await fetch(API + '/auth/oauth/complete', { method: 'POST' });
           msg.textContent = '✅ Connected!';
           resetOAuthUI();
           loadAuth();
@@ -2845,11 +2845,11 @@ async function startOAuth() {
   }
 }
 async function checkOAuth() {
-  try { const r = await fetch(API + '/api/oauth/status'); const d = await r.json(); document.getElementById('oauth-msg').textContent = 'Status: ' + (d.status || 'unknown'); } catch {}
+  try { const r = await fetch(API + '/auth/oauth/status'); const d = await r.json(); document.getElementById('oauth-msg').textContent = 'Status: ' + (d.status || 'unknown'); } catch {}
 }
 async function cancelOAuth() {
   if (oauthPolling) { clearInterval(oauthPolling); oauthPolling = null; }
-  try { await fetch(API + '/api/oauth/cancel', { method: 'POST' }); } catch {}
+  try { await fetch(API + '/auth/oauth/cancel', { method: 'POST' }); } catch {}
   document.getElementById('oauth-msg').textContent = 'Cancelled.'; resetOAuthUI();
 }
 function resetOAuthUI() {
