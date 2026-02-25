@@ -2194,9 +2194,13 @@ function _isComboInUse(modelKey, workerKey) {
 // Default model for new tabs: claude_opus if connected, then codex
 function _defaultModel() {
   if (MODELS['claude_opus'] && _isModelAvailable('claude_opus', MODELS['claude_opus'])) return 'claude_opus';
-  if (MODELS['codex']) return 'codex';
-  const keys = Object.keys(MODELS);
-  return keys.length ? keys[0] : 'codex';
+  if (MODELS['codex'] && _isModelAvailable('codex', MODELS['codex'])) return 'codex';
+  // Fall back to first available model
+  for (const [key, m] of Object.entries(MODELS)) {
+    if (_isModelAvailable(key, m)) return key;
+  }
+  // Nothing connected — return codex as placeholder (callers should check availability)
+  return 'codex';
 }
 
 function _bestModelForWorker(workerKey) {
@@ -2303,7 +2307,8 @@ function _isModelAvailable(key, m) {
   if (m.model === 'anthropic') return _anthropicApiConnected;
   // OpenRouter models require the API key (only loaded if config returned models)
   if (m.model === 'openrouter') return _orModelsLoaded;
-  // Codex/Spark — always available
+  // Codex/Spark — available only when OpenAI is connected
+  if (key === 'codex' || key === 'spark') return authenticated;
   return true;
 }
 
@@ -5639,16 +5644,22 @@ async function boot() {
       // cache miss (or forced refresh) can create a brand-new Codex tab every boot.
       // That tab then gets pushed to /api/tabs/sync and accumulates as phantom "Codex 1" tabs.
       if (!restored && tabs.length === 0) {
-        const tab = createTab(_defaultModel(), { silent: true, explicit: false });
-        editingTabId = null;
-        editingTabRendered = false;
-        activeTabId = tab.id;
+        const dm = _defaultModel();
+        if (_isModelAvailable(dm, MODELS[dm])) {
+          const tab = createTab(dm, { silent: true, explicit: false });
+          editingTabId = null;
+          editingTabRendered = false;
+          activeTabId = tab.id;
+        }
       }
 
       // Ensure a manager tab always exists (recreated on every boot if closed)
+      // But only if at least one model is actually connected
       if (!tabs.some(t => t.workerIdentity === 'dev-manager')) {
         const mk = _bestModelForWorker('dev-manager');
-        createTab(mk, { silent: true, explicit: false, workerIdentity: 'dev-manager', label: 'Manager' });
+        if (_isModelAvailable(mk, MODELS[mk])) {
+          createTab(mk, { silent: true, explicit: false, workerIdentity: 'dev-manager', label: 'Manager' });
+        }
       }
       _sortManagerTabsFirst();
 
