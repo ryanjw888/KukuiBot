@@ -41,11 +41,15 @@ echo ""
 # Install CLT automatically and wait for it to finish.
 if ! xcode-select -p &>/dev/null; then
   echo "→ Installing Xcode Command Line Tools (required for Python, git, etc.)..."
-  echo "  A system dialog will appear — click 'Install' to continue."
+  echo ""
+  echo "  ⚠️  A system dialog will appear — it may be BEHIND other windows."
+  echo "     Look for 'Install Command Line Developer Tools' and click 'Install'."
+  echo "     Waiting..."
+  echo ""
   xcode-select --install 2>/dev/null || true
-  # Wait for the install to complete (polls every 5s)
+  # Wait for the install to complete (polls every 10s)
   until xcode-select -p &>/dev/null; do
-    sleep 5
+    sleep 10
   done
   echo "✓ Xcode Command Line Tools installed"
 fi
