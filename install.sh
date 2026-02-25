@@ -208,12 +208,19 @@ echo "✓ HTTPS certs ready"
 
 echo "→ Setting up services..."
 
-# Unload old plists (including legacy worker plist)
+# Clear old server log so stale errors don't persist
+: > /tmp/kukuibot-server.log 2>/dev/null || true
+
+# Stop and remove any existing services (use both old and new launchctl API)
+UID_VAL=$(id -u)
 for svc in com.kukuibot.server com.kukuibot.worker; do
+  launchctl bootout "gui/${UID_VAL}/${svc}" 2>/dev/null || true
   launchctl unload "$LAUNCH_AGENTS/${svc}.plist" 2>/dev/null || true
 done
 # Remove legacy worker plist if it exists
 rm -f "$LAUNCH_AGENTS/com.kukuibot.worker.plist"
+
+echo "  Using Python: $PYTHON_BIN"
 
 # --- KukuiBot Server ---
 cat > "$LAUNCH_AGENTS/com.kukuibot.server.plist" << PLIST
@@ -255,7 +262,8 @@ cat > "$LAUNCH_AGENTS/com.kukuibot.server.plist" << PLIST
 </plist>
 PLIST
 
-launchctl load "$LAUNCH_AGENTS/com.kukuibot.server.plist"
+launchctl bootstrap "gui/${UID_VAL}" "$LAUNCH_AGENTS/com.kukuibot.server.plist" 2>/dev/null || \
+  launchctl load "$LAUNCH_AGENTS/com.kukuibot.server.plist" 2>/dev/null || true
 echo "✓ KukuiBot server (port $PORT) installed"
 
 # =============================================

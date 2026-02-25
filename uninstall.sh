@@ -36,7 +36,9 @@ fi
 
 # --- Stop and unload services ---
 echo "→ Stopping services..."
+UID_VAL=$(id -u)
 for svc in com.kukuibot.server com.kukuibot.worker; do
+  launchctl bootout "gui/${UID_VAL}/${svc}" 2>/dev/null || true
   launchctl stop "$svc" 2>/dev/null || true
   launchctl unload "$LAUNCH_AGENTS/${svc}.plist" 2>/dev/null || true
   rm -f "$LAUNCH_AGENTS/${svc}.plist"
