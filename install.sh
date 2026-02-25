@@ -40,17 +40,33 @@ echo ""
 # On a fresh Mac, `python3` is a shim that triggers the Xcode CLT install dialog.
 # Install CLT automatically and wait for it to finish.
 if ! xcode-select -p &>/dev/null; then
-  echo "→ Installing Xcode Command Line Tools (required for Python, git, etc.)..."
+  echo "→ Xcode Command Line Tools not found. Installing..."
   echo ""
   echo "  ⚠️  A system dialog will appear — it may be BEHIND other windows."
   echo "     Look for 'Install Command Line Developer Tools' and click 'Install'."
-  echo "     Waiting..."
   echo ""
+  # Trigger the installer (async — spawns a GUI dialog and returns)
   xcode-select --install 2>/dev/null || true
-  # Wait for the install to complete (polls every 10s)
-  until xcode-select -p &>/dev/null; do
+  # Wait up to 30 minutes, printing dots so the user knows we're alive.
+  # Disable set -e for this block — xcode-select -p returns non-zero until done.
+  set +e
+  CLT_WAIT=0
+  CLT_MAX=1800
+  while true; do
+    xcode-select -p &>/dev/null && break
+    if [ "$CLT_WAIT" -ge "$CLT_MAX" ]; then
+      echo ""
+      echo "❌ Timed out waiting for Xcode Command Line Tools."
+      echo "   Install them manually:  xcode-select --install"
+      echo "   Then re-run this installer."
+      exit 1
+    fi
+    printf "." 2>/dev/null
     sleep 10
+    CLT_WAIT=$((CLT_WAIT + 10))
   done
+  set -e
+  echo ""
   echo "✓ Xcode Command Line Tools installed"
 fi
 
