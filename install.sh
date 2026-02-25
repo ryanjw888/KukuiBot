@@ -115,7 +115,12 @@ else
 fi
 if [ "$NEED_PYTHON" = true ]; then
   brew install python@3.13 </dev/null
-  # Prefer Homebrew Python over system Python
+  # Homebrew Python doesn't always win over /usr/bin/python3 via PATH alone.
+  # Explicitly prepend the brew Python's libexec/bin to guarantee it's first.
+  BREW_PY_PREFIX="$(brew --prefix python@3.13 2>/dev/null)"
+  if [ -n "$BREW_PY_PREFIX" ] && [ -d "$BREW_PY_PREFIX/libexec/bin" ]; then
+    export PATH="$BREW_PY_PREFIX/libexec/bin:$PATH"
+  fi
   eval "$(brew shellenv)"
 fi
 
@@ -139,9 +144,11 @@ echo "✓ Root CA trusted"
 # --- Set up directories ---
 SRC_DIR="$KUKUIBOT_HOME/src"
 REPO_URL="${KUKUIBOT_REPO:-https://github.com/ryanjw888/KukuiBot.git}"
-PYTHON_BIN=$(command -v python3)
+PYTHON_BIN=$(python3 -c 'import sys; print(sys.executable)')
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
-PATH_ENV="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# Build PATH_ENV that includes the directory containing our resolved python3
+PYTHON_BIN_DIR="$(dirname "$PYTHON_BIN")"
+PATH_ENV="${PYTHON_BIN_DIR}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 mkdir -p "$KUKUIBOT_HOME" "$LAUNCH_AGENTS"
 
@@ -164,7 +171,7 @@ cd "$SRC_DIR"
 
 # --- Install Python deps ---
 echo "→ Installing Python dependencies..."
-pip3 install -q -r requirements.txt </dev/null 2>/dev/null || pip install -q -r requirements.txt </dev/null
+python3 -m pip install -q -r requirements.txt </dev/null 2>/dev/null || pip3 install -q -r requirements.txt </dev/null
 
 # --- Generate HTTPS certs ---
 if [ ! -f certs/kukuibot.pem ]; then
