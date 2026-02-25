@@ -102,10 +102,21 @@ if ! command -v brew &>/dev/null; then
 fi
 echo "✓ Homebrew"
 
-# --- Check/install Python ---
+# --- Check/install Python 3.11+ ---
+NEED_PYTHON=false
 if ! command -v python3 &>/dev/null; then
-  echo "→ Installing Python 3..."
-  brew install python3 </dev/null
+  NEED_PYTHON=true
+else
+  PY_MINOR=$(python3 -c 'import sys; print(sys.version_info.minor)')
+  if [ "$PY_MINOR" -lt 11 ]; then
+    echo "→ System Python is 3.$PY_MINOR (need 3.11+), installing via Homebrew..."
+    NEED_PYTHON=true
+  fi
+fi
+if [ "$NEED_PYTHON" = true ]; then
+  brew install python@3.13 </dev/null
+  # Prefer Homebrew Python over system Python
+  eval "$(brew shellenv)"
 fi
 
 PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
@@ -308,10 +319,18 @@ fi
 # Verify
 # =============================================
 
-sleep 3
+# Give the server more time on first launch (imports take a while)
+echo "→ Waiting for server to start..."
 SERVER_OK=false
+for i in 1 2 3 4 5 6; do
+  if lsof -nP -iTCP:${PORT} -sTCP:LISTEN >/dev/null 2>&1; then
+    SERVER_OK=true
+    break
+  fi
+  sleep 2
+done
 
-if lsof -nP -iTCP:${PORT} -sTCP:LISTEN >/dev/null 2>&1; then
+if [ "$SERVER_OK" = true ]; then
   SERVER_OK=true
   echo "✓ KukuiBot server running on port $PORT"
 else
