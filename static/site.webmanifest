@@ -1,0 +1,20 @@
+{
+  "name": "KukuiBot",
+  "short_name": "KukuiBot",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#10b981",
+  "icons": [
+    {
+      "src": "/icon-512.png?v=20260215-2240",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/favicon-64.png?v=20260215-2240",
+      "sizes": "64x64",
+      "type": "image/png"
+    }
+  ]
+}

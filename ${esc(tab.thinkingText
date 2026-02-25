@@ -1,0 +1,96 @@
+_legacy/static/sentinel-v3.js:108:      return `<div class="md-content">${html}</div>`;
+_legacy/static/sentinel-v3.js:112:  return `<div class="md-content">${lines.map(l => mdEscape(l)).join('<br>')}</div>`;
+_legacy/static/sentinel-v3.js:152:  else bubble.innerHTML = `<div class="md-content">${escapeHtml(String(text || '')).replace(/\n/g, '<br>')}</div>`;
+_legacy/static/sentinel-v3.js:552:        ctx.bubble.innerHTML = `<div class="md-content"><span style="color:#fca5a5">Error: ${escapeHtml(ctx.errorText)}</span></div>`;
+_legacy/static/sentinel-v3.css:70:.md-content p { margin-bottom: 8px; }
+_legacy/static/sentinel-v3.css:71:.md-content p:last-child { margin-bottom: 0; }
+_legacy/static/sentinel-v3.css:72:.md-content strong { font-weight: 600; color: #fff; }
+_legacy/static/sentinel-v3.css:73:.md-content em { font-style: italic; }
+_legacy/static/sentinel-v3.css:74:.md-content code { background: rgba(255,255,255,0.08); color: var(--accent); padding: 1px 5px; border-radius: 4px; font-family: 'SF Mono', Monaco, Consolas, monospace; font-size: 13px; }
+_legacy/static/sentinel-v3.css:91:.md-content pre { background: rgba(0,0,0,0.3); padding: 12px; padding-top: 34px; border-radius: 10px; overflow-x: auto; margin: 0; }
+_legacy/static/sentinel-v3.css:92:.md-content pre code { background: none; color: var(--green); padding: 0; font-size: 13px; white-space: pre-wrap; }
+_legacy/static/sentinel-v3.css:93:.md-content ul, .md-content ol { padding-left: 20px; margin-bottom: 8px; }
+_legacy/static/sentinel-v3.css:94:.md-content li { margin-bottom: 2px; }
+_legacy/static/sentinel-v3.css:95:.md-content h1, .md-content h2, .md-content h3 { font-weight: 600; margin: 12px 0 4px; }
+_legacy/static/sentinel-v3.css:96:.md-content h1 { font-size: 16px; }
+_legacy/static/sentinel-v3.css:97:.md-content h2 { font-size: 15px; }
+_legacy/static/sentinel-v3.css:98:.md-content h3 { font-size: 14px; }
+_legacy/static/sentinel-v3.css:99:.md-content blockquote { border-left: 2px solid var(--accent); padding-left: 12px; margin: 8px 0; color: var(--muted); font-style: italic; }
+_legacy/static/sentinel-v3.css:100:.md-content hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+_legacy/static/sentinel-v3.css:101:.md-content a { color: var(--accent); text-decoration: underline; }
+_legacy/static/sentinel-v3.css:102:.md-content table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 13px; }
+_legacy/static/sentinel-v3.css:103:.md-content th { background: rgba(255,255,255,0.04); padding: 6px 10px; text-align: left; font-size: 11px; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--border); }
+_legacy/static/sentinel-v3.css:104:.md-content td { padding: 5px 10px; border-bottom: 1px solid var(--border); }
+_legacy/static/sentinel-v3.css:105:.md-content img { max-width: 100%; border-radius: 8px; margin: 8px 0; }
+static/app.js:1901:    : `<div class="md-content">${esc(m.text)}</div>`;
+static/app.js:1907:    ? `<div class="thinking-block thinking-saved${m.thinkingExpanded ? ' expanded' : ''}"><button class="thinking-toggle"${canToggleThinking ? ` onclick="toggleMessageThinking('${tabId}',${msgIdx})"` : ''}>${m.thinkingExpanded ? '▼' : '▶'} 🧠 Thought process</button>${m.thinkingExpanded ? `<div class="thinking-content"><div class="md-content">${esc(m.thinking)}</div></div>` : ''}</div>`
+static/app.js:1942:    ${tab && isLoading && isStreamOwner ? `<div class="thinking-block" id="live-thinking-${tabId}"${tab.thinkingText ? '' : ' style="display:none"'}><button class="thinking-toggle" onclick="toggleThinking('${tabId}')">${tab.thinkingExpanded ? '▼' : '▶'} 🧠 Thinking…</button>${tab.thinkingExpanded ? `<div class="thinking-content" id="live-thinking-content-${tabId}"><div class="md-content">${esc(tab.thinkingText || '')}</div></div>` : ''}</div>` : ''}
+static/app.js:1971:  const liveThinkingBody = document.getElementById(`live-thinking-content-${tab.id}`);
+static/app.js:1975:    if (bubble) bubble.innerHTML = `<div class="md-content">${esc(tabStreamingText(tab))}</div>`;
+static/app.js:1986:          liveThinkingBody.innerHTML = `<div class="md-content">${esc(tab.thinkingText || '')}</div>`;
+static/style.css:33:.sol-dark .md-content strong { color: #93a1a1; }
+static/style.css:34:.sol-dark .md-content pre { background: rgba(10,10,10,0.8); }
+static/style.css:35:.sol-dark .md-content pre code { color: #859900; }
+static/style.css:36:.sol-dark .md-content code { background: rgba(88,110,117,0.25); color: var(--accent); }
+static/style.css:41:.sol-dark .md-content blockquote { border-left-color: rgba(38,139,210,0.5); }
+static/style.css:55:.sol-light .md-content strong { color: #586e75; }
+static/style.css:56:.sol-light .md-content pre { background: rgba(238,232,213,0.8); }
+static/style.css:57:.sol-light .md-content pre code { color: #859900; }
+static/style.css:58:.sol-light .md-content code { background: rgba(147,161,161,0.2); color: #268bd2; }
+static/style.css:82:.claude-theme .md-content strong { color: #ddd0c4; }
+static/style.css:83:.claude-theme .md-content pre { background: rgba(0,0,0,0.3); }
+static/style.css:84:.claude-theme .md-content pre code { color: #8fae6b; }
+static/style.css:85:.claude-theme .md-content code { background: rgba(212,131,107,0.12); color: var(--accent); }
+static/style.css:90:.claude-theme .md-content blockquote { border-left-color: rgba(212,131,107,0.5); }
+static/style.css:626:.md-content p { margin-bottom: 8px; }
+static/style.css:627:.md-content p:last-child { margin-bottom: 0; }
+static/style.css:628:.md-content strong { font-weight: 600; color: var(--text); }
+static/style.css:629:.md-content em { font-style: italic; }
+static/style.css:630:.md-content code { background: rgba(255,255,255,0.08); color: var(--accent); padding: 1px 5px; border-radius: 4px; font-family: 'SF Mono', Monaco, Consolas, monospace; font-size: 13px; }
+static/style.css:647:.md-content pre { background: rgba(0,0,0,0.3); padding: 12px; padding-top: 34px; border-radius: 10px; overflow-x: auto; margin: 0; }
+static/style.css:648:.md-content pre code { background: none; color: var(--green); padding: 0; font-size: 13px; white-space: pre-wrap; }
+static/style.css:649:.md-content ul, .md-content ol { padding-left: 20px; margin-bottom: 8px; }
+static/style.css:650:.md-content li { margin-bottom: 2px; }
+static/style.css:651:.md-content h1, .md-content h2, .md-content h3 { font-weight: 600; margin: 12px 0 4px; }
+static/style.css:652:.md-content h1 { font-size: 16px; } .md-content h2 { font-size: 15px; } .md-content h3 { font-size: 14px; }
+static/style.css:653:.md-content blockquote { border-left: 2px solid var(--accent); padding-left: 12px; margin: 8px 0; color: var(--muted); font-style: italic; }
+static/style.css:654:.md-content hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+static/style.css:655:.md-content a { color: var(--accent); text-decoration: underline; }
+static/style.css:656:.md-content table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 13px; }
+static/style.css:657:.md-content th { background: rgba(255,255,255,0.04); padding: 6px 10px; text-align: left; font-size: 11px; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--border); }
+static/style.css:658:.md-content td { padding: 5px 10px; border-bottom: 1px solid var(--border); }
+static/style.css:659:.md-content img { max-width: 100%; border-radius: 8px; margin: 8px 0; cursor: pointer; }
+static/style.css:662:.md-content .search-results { display: flex; flex-direction: column; gap: 14px; margin: 4px 0 10px; }
+static/style.css:663:.md-content .search-result { padding: 2px 0 4px; }
+static/style.css:664:.md-content .search-meta {
+static/style.css:670:.md-content .search-favicon {
+static/style.css:677:.md-content .search-site-wrap {
+static/style.css:682:.md-content .search-site {
+static/style.css:687:.md-content .search-url {
+static/style.css:696:.md-content .search-title {
+static/style.css:704:.md-content .search-title:hover { text-decoration: underline; }
+static/style.css:705:.md-content .search-snippet {
+static/sentinel/v3.js:168:      return `<div class="md-content">${html}</div>`;
+static/sentinel/v3.js:172:  return `<div class="md-content">${lines.map(l => mdEscape(l)).join('<br>')}</div>`;
+static/sentinel/v3.js:212:  else bubble.innerHTML = `<div class="md-content">${escapeHtml(String(text || '')).replace(/\n/g, '<br>')}</div>`;
+static/sentinel/v3.js:597:        ctx.bubble.innerHTML = `<div class="md-content"><span style="color:#fca5a5">Error: ${escapeHtml(ctx.errorText)}</span></div>`;
+static/sentinel/v3.css:113:.md-content p { margin-bottom: 8px; }
+static/sentinel/v3.css:114:.md-content p:last-child { margin-bottom: 0; }
+static/sentinel/v3.css:115:.md-content strong { font-weight: 600; color: #fff; }
+static/sentinel/v3.css:116:.md-content em { font-style: italic; }
+static/sentinel/v3.css:117:.md-content code { background: rgba(255,255,255,0.08); color: var(--accent); padding: 1px 5px; border-radius: 4px; font-family: 'SF Mono', Monaco, Consolas, monospace; font-size: 13px; }
+static/sentinel/v3.css:134:.md-content pre { background: rgba(0,0,0,0.3); padding: 12px; padding-top: 34px; border-radius: 10px; overflow-x: auto; margin: 0; }
+static/sentinel/v3.css:135:.md-content pre code { background: none; color: var(--green); padding: 0; font-size: 13px; white-space: pre-wrap; }
+static/sentinel/v3.css:136:.md-content ul, .md-content ol { padding-left: 20px; margin-bottom: 8px; }
+static/sentinel/v3.css:137:.md-content li { margin-bottom: 2px; }
+static/sentinel/v3.css:138:.md-content h1, .md-content h2, .md-content h3 { font-weight: 600; margin: 12px 0 4px; }
+static/sentinel/v3.css:139:.md-content h1 { font-size: 16px; }
+static/sentinel/v3.css:140:.md-content h2 { font-size: 15px; }
+static/sentinel/v3.css:141:.md-content h3 { font-size: 14px; }
+static/sentinel/v3.css:142:.md-content blockquote { border-left: 2px solid var(--accent); padding-left: 12px; margin: 8px 0; color: var(--muted); font-style: italic; }
+static/sentinel/v3.css:143:.md-content hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+static/sentinel/v3.css:144:.md-content a { color: var(--accent); text-decoration: underline; }
+static/sentinel/v3.css:145:.md-content table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 13px; }
+static/sentinel/v3.css:146:.md-content th { background: rgba(255,255,255,0.04); padding: 6px 10px; text-align: left; font-size: 11px; text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--border); }
+static/sentinel/v3.css:147:.md-content td { padding: 5px 10px; border-bottom: 1px solid var(--border); }
+static/sentinel/v3.css:148:.md-content img { max-width: 100%; border-radius: 8px; margin: 8px 0; }

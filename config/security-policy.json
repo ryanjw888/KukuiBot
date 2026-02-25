@@ -1,0 +1,44 @@
+{
+  "workspace_root": "~/.kukuibot",
+  "allow_read_paths": [
+    "~/"
+  ],
+  "allow_write_paths": [
+    "~/"
+  ],
+  "elevate_write_paths": [
+    "SOUL.md",
+    "USER.md",
+    "IDENTITY.md",
+    "AGENTS.md",
+    "TOOLS.md",
+    "MEMORY.md"
+  ],
+  "elevate_self_modify": [
+    "server.py",
+    "tools.py",
+    "security.py",
+    "auth.py",
+    "config.py"
+  ],
+  "admin_bypass_sessions": [],
+  "elevate_bash_patterns": [
+    "sudo ",
+    "launchctl ",
+    "systemctl ",
+    "rm -rf",
+    " curl ",
+    " wget ",
+    " scp ",
+    " sftp ",
+    " rsync ",
+    " nc ",
+    " ncat ",
+    " netcat ",
+    " ftp ",
+    " python -c",
+    " python3 -c"
+  ],
+  "egress_command_regex": "(^|[;&|()\\s])(curl|wget|scp|sftp|rsync|nc|ncat|netcat|ftp)([\\s;&|()]|$)",
+  "blocked_write_files": []
+}

@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KukuiBot Monitor Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        :root {
+            --bg: #0f0f1e;
+            --surface: #1a1a2e;
+            --surface2: #16213e;
+            --text: #e0e0e0;
+            --muted: #a0a0a0;
+            --accent: #00d4ff;
+            --success: #00ff88;
+            --warning: #ffaa00;
+            --error: #ff3333;
+            --border: #333;
+        }
+        
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            line-height: 1.6;
+        }
+        
+        .header {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 20px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        
+        .header h1 {
+            font-size: 24px;
+            margin-bottom: 8px;
+        }
+        
+        .header-info {
+            display: flex;
+            gap: 20px;
+            font-size: 13px;
+            color: var(--muted);
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .btn {
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.15s;
+        }
+        
+        .btn:hover {
+            background: var(--accent);
+            color: var(--bg);
+            border-color: var(--accent);
+        }
+        
+        .btn.active {
+            background: var(--accent);
+            color: var(--bg);
+        }
+        
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+        }
+        
+        .card h2 {
+            font-size: 16px;
+            margin-bottom: 15px;
+            color: var(--accent);
+        }
+        
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+        }
+        
+        .metric-row:last-child {
+            border-bottom: none;
+        }
+        
+        .metric-label {
+            color: var(--muted);
+        }
+        
+        .metric-value {
+            font-weight: 600;
+            font-family: 'SF Mono', Menlo, monospace;
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 6px;
+        }
+        
+        .status-ok { background: var(--success); }
+        .status-warning { background: var(--warning); }
+        .status-error { background: var(--error); }
+        
+        .chart-container {
+            background: var(--surface2);
+            border-radius: 6px;
+            padding: 15px;
+            margin-top: 20px;
+            min-height: 200px;
+        }
+        
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        
+        .table th {
+            background: var(--surface2);
+            padding: 12px;
+            text-align: left;
+            color: var(--muted);
+            border-bottom: 1px solid var(--border);
+            font-weight: 600;
+        }
+        
+        .table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .table tr:hover {
+            background: rgba(0, 212, 255, 0.05);
+        }
+        
+        .endpoint-name {
+            font-family: 'SF Mono', Menlo, monospace;
+            color: var(--accent);
+        }
+        
+        .response-time {
+            font-family: 'SF Mono', Menlo, monospace;
+        }
+        
+        .error-rate {
+            font-weight: 600;
+        }
+        
+        .error-rate.ok { color: var(--success); }
+        .error-rate.warning { color: var(--warning); }
+        .error-rate.error { color: var(--error); }
+        
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin: 30px 0 15px 0;
+            color: var(--accent);
+        }
+        
+        .full-width {
+            grid-column: 1 / -1;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: var(--muted);
+        }
+        
+        .error-message {
+            background: rgba(255, 51, 51, 0.1);
+            border: 1px solid var(--error);
+            color: var(--error);
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+        
+        .success-message {
+            background: rgba(0, 255, 136, 0.1);
+            border: 1px solid var(--success);
+            color: var(--success);
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+        
+        @media (max-width: 768px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .controls {
+                flex-direction: column;
+            }
+            
+            .btn {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔍 KukuiBot Performance Monitor</h1>
+        <div class="header-info">
+            <div>
+                <span class="status-indicator status-ok"></span>
+                <span id="status">Connecting...</span>
+            </div>
+            <div>Last updated: <span id="last-update">--</span></div>
+            <div>Uptime: <span id="uptime">--</span></div>
+        </div>
+    </div>
+    
+    <div class="container">
+        <div class="controls">
+            <button class="btn active" onclick="loadReports('periodic')">Last 5 Minutes</button>
+            <button class="btn" onclick="loadReports('daily')">Daily Reports</button>
+            <button class="btn" onclick="refreshData()">🔄 Refresh</button>
+            <button class="btn" onclick="exportData()">📥 Export</button>
+        </div>
+        
+        <div id="error-container"></div>
+        
+        <div class="section-title">System Health</div>
+        <div class="grid">
+            <div class="card">
+                <h2>Overall Status</h2>
+                <div class="metric-row">
+                    <span class="metric-label">Availability</span>
+                    <span class="metric-value" id="availability">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Avg Response Time</span>
+                    <span class="metric-value" id="avg-response">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">P95 Response Time</span>
+                    <span class="metric-value" id="p95-response">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Error Rate</span>
+                    <span class="metric-value" id="error-rate">--</span>
+                </div>
+            </div>
+            
+            <div class="card">
+                <h2>Critical Endpoints</h2>
+                <div class="metric-row">
+                    <span class="metric-label">Chat API</span>
+                    <span class="metric-value" id="chat-status">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Gmail Status</span>
+                    <span class="metric-value" id="gmail-status">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Reports Config</span>
+                    <span class="metric-value" id="reports-status">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Home Page</span>
+                    <span class="metric-value" id="home-status">--</span>
+                </div>
+            </div>
+            
+            <div class="card">
+                <h2>Performance Trend</h2>
+                <div class="metric-row">
+                    <span class="metric-label">Response Time Trend</span>
+                    <span class="metric-value" id="trend">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Most Affected Endpoint</span>
+                    <span class="metric-value" id="slowest-endpoint">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Highest Error Rate</span>
+                    <span class="metric-value" id="highest-error">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Total Checks</span>
+                    <span class="metric-value" id="total-checks">--</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section-title">Endpoint Details</div>
+        <div class="card full-width">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Endpoint</th>
+                        <th>Requests</th>
+                        <th>Avg (ms)</th>
+                        <th>P50 (ms)</th>
+                        <th>P95 (ms)</th>
+                        <th>P99 (ms)</th>
+                        <th>Error Rate</th>
+                        <th>Success Rate</th>
+                    </tr>
+                </thead>
+                <tbody id="endpoint-table">
+                    <tr>
+                        <td colspan="8" class="loading">Loading...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <script>
+        let currentReportType = 'periodic';
+        let sessionStart = new Date();
+        
+        async function loadReports(type) {
+            currentReportType = type;
+            document.querySelectorAll('.controls .btn').forEach(b => b.classList.remove('active'));
+            event.target.classList.add('active');
+            
+            await refreshData();
+        }
+        
+        async function refreshData() {
+            try {
+                const response = await fetch(`/api/monitor/latest?type=${currentReportType}`);
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    showError(data.error || 'Failed to load data');
+                    return;
+                }
+                
+                updateDashboard(data);
+                updateStatus('Connected');
+                document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+            } catch (e) {
+                showError(`Connection error: ${e.message}`);
+                updateStatus('Error');
+            }
+        }
+        
+        function updateDashboard(data) {
+            if (!data.aggregates || data.aggregates.length === 0) {
+                document.getElementById('endpoint-table').innerHTML = 
+                    '<tr><td colspan="8" class="loading">No data available yet. Monitor is collecting data...</td></tr>';
+                return;
+            }
+            
+            // Calculate overall metrics
+            const allMetrics = data.aggregates;
+            const totalChecks = allMetrics.reduce((sum, m) => sum + m.count, 0);
+            const totalErrors = allMetrics.reduce((sum, m) => sum + m.error_count, 0);
+            const avgResponseTime = allMetrics.reduce((sum, m) => sum + m.avg_response_time_ms * m.count, 0) / totalChecks;
+            const p95ResponseTime = Math.max(...allMetrics.map(m => m.p95_response_time_ms));
+            const overallErrorRate = totalErrors / totalChecks;
+            
+            // Update summary cards
+            document.getElementById('availability').textContent = 
+                `${((1 - overallErrorRate) * 100).toFixed(1)}%`;
+            document.getElementById('avg-response').textContent = 
+                `${avgResponseTime.toFixed(1)}ms`;
+            document.getElementById('p95-response').textContent = 
+                `${p95ResponseTime.toFixed(1)}ms`;
+            document.getElementById('error-rate').textContent = 
+                `${(overallErrorRate * 100).toFixed(2)}%`;
+            document.getElementById('total-checks').textContent = 
+                `${totalChecks}`;
+            
+            // Find slowest and highest error endpoints
+            const slowest = allMetrics.reduce((a, b) => 
+                a.avg_response_time_ms > b.avg_response_time_ms ? a : b
+            );
+            const highestError = allMetrics.reduce((a, b) => 
+                a.error_rate > b.error_rate ? a : b
+            );
+            
+            document.getElementById('slowest-endpoint').textContent = 
+                `${slowest.endpoint} (${slowest.avg_response_time_ms.toFixed(1)}ms)`;
+            document.getElementById('highest-error').textContent = 
+                `${highestError.endpoint} (${(highestError.error_rate * 100).toFixed(1)}%)`;
+            
+            // Update endpoint table
+            const tbody = document.getElementById('endpoint-table');
+            tbody.innerHTML = allMetrics.map(m => `
+                <tr>
+                    <td class="endpoint-name">${m.endpoint}</td>
+                    <td>${m.count}</td>
+                    <td class="response-time">${m.avg_response_time_ms.toFixed(1)}</td>
+                    <td class="response-time">${m.p50_response_time_ms.toFixed(1)}</td>
+                    <td class="response-time">${m.p95_response_time_ms.toFixed(1)}</td>
+                    <td class="response-time">${m.p99_response_time_ms.toFixed(1)}</td>
+                    <td class="error-rate ${getErrorClass(m.error_rate)}">${(m.error_rate * 100).toFixed(2)}%</td>
+                    <td>${(m.success_rate * 100).toFixed(1)}%</td>
+                </tr>
+            `).join('');
+            
+            // Update critical endpoints
+            updateCriticalEndpoint('chat', 'chat');
+            updateCriticalEndpoint('gmail_status', 'gmail');
+            updateCriticalEndpoint('reports_config', 'reports');
+            updateCriticalEndpoint('home', 'home');
+        }
+        
+        function updateCriticalEndpoint(endpointName, displayName) {
+            const metric = data?.aggregates?.find(m => m.endpoint === endpointName);
+            if (metric) {
+                const statusClass = metric.error_rate === 0 ? 'status-ok' : 
+                                   metric.error_rate < 0.1 ? 'status-warning' : 'status-error';
+                document.getElementById(`${displayName}-status`).innerHTML = 
+                    `<span class="status-indicator ${statusClass}"></span>${metric.count} checks`;
+            }
+        }
+        
+        function getErrorClass(errorRate) {
+            if (errorRate === 0) return 'ok';
+            if (errorRate < 0.05) return 'warning';
+            return 'error';
+        }
+        
+        function updateStatus(status) {
+            document.getElementById('status').textContent = status;
+        }
+        
+        function showError(message) {
+            const container = document.getElementById('error-container');
+            container.innerHTML = `<div class="error-message">${message}</div>`;
+        }
+        
+        function updateUptime() {
+            const elapsed = Math.floor((new Date() - sessionStart) / 1000);
+            const hours = Math.floor(elapsed / 3600);
+            const minutes = Math.floor((elapsed % 3600) / 60);
+            document.getElementById('uptime').textContent = 
+                hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+        }
+        
+        function exportData() {
+            alert('Export feature coming soon - will export current metrics as JSON/CSV');
+        }
+        
+        // Auto-refresh every 10 seconds
+        setInterval(refreshData, 10000);
+        setInterval(updateUptime, 1000);
+        
+        // Initial load
+        refreshData();
+    </script>
+</body>
+</html>

@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>KukuiBot — Settings</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --surface2: #1c2129;
+    --border: #30363d; --text: #e6edf3; --muted: #8b949e;
+    --accent: #58a6ff; --green: #3fb950; --red: #f85149;
+    --yellow: #d29922; --radius: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro', system-ui, sans-serif;
+    background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  .header { background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 16px 24px; display: flex; align-items: center; gap: 12px; }
+  .header h1 { font-size: 18px; font-weight: 600; }
+
+  .container { max-width: 640px; margin: 0 auto; padding: 20px; }
+
+  .back-link { display: inline-flex; align-items: center; gap: 4px; color: var(--accent);
+    text-decoration: none; font-size: 13px; margin-bottom: 20px; }
+  .back-link:hover { text-decoration: underline; }
+
+  /* Cards */
+  .card { background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
+  .card h2 { font-size: 13px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 12px; font-weight: 600; }
+
+  /* Setting rows */
+  .setting-row { display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 0; border-bottom: 1px solid var(--border); gap: 16px; }
+  .setting-row:last-child { border-bottom: none; }
+  .setting-info { flex: 1; min-width: 0; }
+  .setting-label { font-size: 14px; font-weight: 500; }
+  .setting-desc { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .setting-value { font-size: 13px; color: var(--muted); }
+
+  /* Inputs */
+  select, input[type="text"], input[type="password"] { background: var(--surface2);
+    border: 1px solid var(--border); color: var(--text); padding: 8px 12px;
+    border-radius: 6px; font-size: 13px; }
+  select { width: auto; }
+  select:focus, input:focus { outline: none; border-color: var(--accent); }
+
+  /* Toggle */
+  .toggle { width: 40px; height: 22px; border-radius: 11px; background: var(--border);
+    position: relative; cursor: pointer; transition: background 0.2s; flex-shrink: 0; }
+  .toggle.on { background: var(--accent); }
+  .toggle::after { content: ''; position: absolute; width: 18px; height: 18px;
+    border-radius: 50%; background: #fff; top: 2px; left: 2px; transition: left 0.2s; }
+  .toggle.on::after { left: 20px; }
+
+  /* Buttons */
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px;
+    border-radius: 8px; border: 1px solid var(--border); background: var(--surface2);
+    color: var(--text); font-size: 13px; font-weight: 500; cursor: pointer;
+    transition: all 0.15s; }
+  .btn:hover { background: var(--border); }
+  .btn:active { transform: scale(0.97); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { opacity: 0.9; }
+  .btn.danger { border-color: var(--red); color: var(--red); }
+  .btn.danger:hover { background: rgba(248,81,73,0.1); }
+  .btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+
+  /* Usage bar */
+  .usage-bar { height: 6px; background: rgba(255,255,255,0.06); border-radius: 3px;
+    overflow: hidden; margin: 6px 0 4px; }
+  .usage-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
+  .usage-text { font-size: 11px; color: var(--muted); }
+
+  /* Auth */
+  .auth-status-line { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 4px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .dot.ok { background: var(--green); }
+  .dot.warn { background: var(--yellow); }
+  .dot.bad { background: var(--red); }
+  .auth-tabs { display: flex; gap: 0; margin: 12px 0; border-bottom: 1px solid var(--border); }
+  .auth-tab { padding: 8px 14px; font-size: 13px; cursor: pointer; color: var(--muted);
+    border-bottom: 2px solid transparent; transition: all 0.15s; background: none;
+    border-top: none; border-left: none; border-right: none; }
+  .auth-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .auth-pane { display: none; }
+  .auth-pane.active { display: block; }
+  .auth-pane p { font-size: 13px; color: var(--muted); margin-bottom: 10px; }
+  .auth-input-group { margin-bottom: 8px; }
+  .auth-input-group label { display: block; font-size: 12px; color: var(--muted);
+    margin-bottom: 4px; font-weight: 500; }
+  .auth-input-group input { width: 100%; }
+
+  /* Backup config */
+  .backup-input-group { margin-bottom: 10px; }
+  .backup-input-group label { display: block; font-size: 12px; color: var(--muted);
+    margin-bottom: 4px; font-weight: 500; }
+  .backup-input-group input { width: 100%; }
+
+  /* Password */
+  .pw-input-group { margin-bottom: 8px; }
+  .pw-input-group label { display: block; font-size: 12px; color: var(--muted);
+    margin-bottom: 4px; font-weight: 500; }
+  .pw-input-group input { width: 100%; }
+
+  /* Toast */
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+    padding: 10px 20px; border-radius: 8px; font-size: 13px; z-index: 100;
+    opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+
+  /* KukuiBot Nav Dropdown */
+  .nav-header { background: var(--surface); border-bottom: 1px solid var(--border);
+    position: relative; z-index: 100; }
+  .nav-btn { width: 100%; padding: 14px 20px; display: flex; align-items: center; gap: 10px;
+    background: none; border: none; cursor: pointer; transition: background 0.15s; }
+  .nav-btn:hover { background: rgba(255,255,255,0.03); }
+  .nav-logo { width: 22px; height: 22px; border-radius: 5px; }
+  .nav-title { font-size: 16px; font-weight: 700; color: var(--accent); }
+  .nav-page { font-size: 14px; color: var(--muted); font-weight: 500; }
+  .nav-chevron { margin-left: auto; font-size: 12px; color: var(--muted); }
+  .nav-menu { display: none; position: absolute; top: 100%; left: 0; right: 0;
+    background: var(--surface); border: 1px solid var(--border); border-top: none;
+    border-radius: 0 0 12px 12px; box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+    padding: 8px 0; z-index: 101; }
+  .nav-menu.open { display: block; }
+  .nav-menu .nav-item { display: block; width: 100%; text-align: left; padding: 10px 20px;
+    border: none; background: none; font-size: 15px; color: #e5e5e5; cursor: pointer;
+    transition: all 0.1s; text-decoration: none; }
+  .nav-menu .nav-item:hover { background: rgba(255,255,255,0.06); color: #fff; }
+  .nav-menu .nav-item.active { color: var(--accent); font-weight: 600; }
+  .nav-menu .nav-item.logout { color: var(--muted); }
+  .nav-menu .nav-item.logout:hover { background: rgba(255,255,255,0.04); color: var(--muted); }
+  .nav-menu .nav-sep { border-top: 1px solid var(--border); margin: 4px 0; }
+</style>
+</head>
+<body>
+
+<div class="nav-header">
+  <button class="nav-btn" onclick="toggleNav()">
+    <img class="nav-logo" src="/favicon-64.png?v=20260215-2240" alt="KukuiBot" />
+    <span class="nav-title">KukuiBot</span>
+    <span class="nav-page">· Settings</span>
+    <span class="nav-chevron" id="nav-chevron">▾</span>
+  </button>
+  <div class="nav-menu" id="nav-menu">
+    <a class="nav-item" href="/">💬 Chat</a>
+    <a class="nav-item" href="/admin">🤖 Admin Bot</a>
+    <a class="nav-item active" href="/settings">⚙️ Settings</a>
+    <div class="nav-sep"></div>
+    <a class="nav-item" href="#" onclick="checkForUpdates(event)">📦 Check for Updates</a>
+    <a class="nav-item" href="/" onclick="forceRefresh()">🔄 Reload App</a>
+    <a class="nav-item logout" href="#" onclick="doLogout()">🚪 Logout</a>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- Usage -->
+  <div class="card" id="usage-card" style="display:none;">
+    <h2>Usage</h2>
+    <div id="usage-content"></div>
+  </div>
+
+  <!-- Default Worker Settings -->
+  <div class="card">
+    <h2>Default Worker Settings</h2>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:12px;">These apply when creating a new worker tab.</p>
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-label">Reasoning Effort</div>
+        <div class="setting-desc">Controls depth of model thinking per turn</div>
+      </div>
+      <select id="reasoning-select" onchange="saveConfig()">
+        <option value="none">⚡ None</option>
+        <option value="low">L · Low</option>
+        <option value="medium" selected>M · Medium</option>
+        <option value="high">H · High</option>
+      </select>
+    </div>
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-label">Auto-Compact</div>
+        <div class="setting-desc">Automatically compact context when it gets full</div>
+      </div>
+      <div id="compact-toggle" class="toggle" onclick="toggleCompact()"></div>
+    </div>
+  </div>
+
+  <!-- OpenAI Connection -->
+  <div class="card">
+    <h2>OpenAI Connection</h2>
+    <div class="auth-status-line" id="auth-status-line">
+      <span class="dot bad"></span> Checking…
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:8px;" id="auth-detail"></div>
+
+    <div class="auth-tabs">
+      <button class="auth-tab active" onclick="switchAuthTab('oauth')">OAuth</button>
+      <button class="auth-tab" onclick="switchAuthTab('token')">Session Token</button>
+      <button class="auth-tab" onclick="switchAuthTab('apikey')">API Key</button>
+    </div>
+
+    <div id="auth-pane-oauth" class="auth-pane active">
+      <p>Sign in with your ChatGPT account.</p>
+      <div id="oauth-local-warning" style="display:none;padding:8px 12px;border-radius:8px;background:rgba(210,153,34,0.1);border:1px solid rgba(210,153,34,0.3);margin-bottom:10px;">
+        <p style="font-size:12px;color:#d29922;margin:0;">⚠️ <strong>OAuth works best from the Mac itself.</strong> The callback redirects to <code>localhost</code> which won't reach this device. You can still sign in, but you'll need to swap <code>localhost:1455</code> → <code id="oauth-host-hint"></code> in the redirect URL.</p>
+      </div>
+      <div class="btn-row" style="margin-top:0;">
+        <button class="btn primary" id="oauth-start-btn" onclick="startOAuth()">🔐 Start OAuth</button>
+        <button class="btn" id="oauth-check-btn" onclick="checkOAuth()" style="display:none;">Check</button>
+        <button class="btn danger" id="oauth-cancel-btn" onclick="cancelOAuth()" style="display:none;">Cancel</button>
+      </div>
+      <div id="oauth-msg" style="font-size:12px;color:var(--muted);margin-top:8px;"></div>
+      <div id="oauth-paste-section" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
+        <p style="font-size:12px;color:var(--muted);margin-bottom:6px;">Paste the redirect URL from your browser:</p>
+        <div class="auth-input-group">
+          <input type="text" id="oauth-paste-url" placeholder="http://localhost:1455/auth/callback?code=...">
+        </div>
+        <button class="btn primary" onclick="submitPastedCode()" style="margin-top:4px;">Exchange Code</button>
+      </div>
+    </div>
+    <div id="auth-pane-token" class="auth-pane">
+      <p>Paste a ChatGPT session token from browser DevTools.</p>
+      <div class="auth-input-group">
+        <label>Session Token</label>
+        <input type="text" id="token-input" placeholder="eyJhbGciOiJSUzI1NiI...">
+      </div>
+      <button class="btn primary" onclick="saveToken()">Save Token</button>
+    </div>
+    <div id="auth-pane-apikey" class="auth-pane">
+      <p>Paste an OpenAI API key from platform.openai.com.</p>
+      <div class="auth-input-group">
+        <label>API Key</label>
+        <input type="text" id="apikey-input" placeholder="sk-...">
+      </div>
+      <button class="btn primary" onclick="saveApiKey()">Save API Key</button>
+    </div>
+  </div>
+
+  <!-- Backup -->
+  <div class="card">
+    <h2>Backup</h2>
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-label" id="backup-status-label">GitHub Backup</div>
+        <div class="setting-desc" id="backup-status-desc">Checking…</div>
+      </div>
+      <button class="btn" onclick="doBackup()">☁️ Backup Now</button>
+    </div>
+    <div id="backup-config-section" style="margin-top:12px;display:none;">
+      <div class="backup-input-group">
+        <label>Repository URL</label>
+        <input type="text" id="backup-repo-input" placeholder="https://github.com/user/repo.git">
+      </div>
+      <div class="backup-input-group">
+        <label>Branch</label>
+        <input type="text" id="backup-branch-input" placeholder="main" value="main">
+      </div>
+      <div class="btn-row">
+        <button class="btn primary" onclick="saveBackupConfig()">Save</button>
+        <button class="btn" onclick="toggleBackupConfig()">Cancel</button>
+      </div>
+    </div>
+    <div id="backup-config-btn-wrap" style="margin-top:8px;">
+      <button class="btn" onclick="toggleBackupConfig()">⚙️ Configure</button>
+    </div>
+  </div>
+
+  <!-- Account -->
+  <div class="card">
+    <h2>Account</h2>
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-label">Change Password</div>
+        <div class="setting-desc">Update your KukuiBot login password</div>
+      </div>
+      <button class="btn" onclick="showPasswordChange()">🔑 Change</button>
+    </div>
+    <div id="pw-section" style="display:none;margin-top:8px;">
+      <div class="pw-input-group" id="pw-current-group" style="display:none;">
+        <label>Current Password</label>
+        <input type="password" id="pw-current" placeholder="Current password" autocomplete="current-password">
+      </div>
+      <div class="pw-input-group">
+        <label>New Password</label>
+        <input type="password" id="pw-new" placeholder="Min 6 characters">
+      </div>
+      <div class="pw-input-group">
+        <label>Confirm Password</label>
+        <input type="password" id="pw-confirm" placeholder="Confirm">
+      </div>
+      <div class="btn-row">
+        <button class="btn primary" onclick="changePassword()">Save Password</button>
+        <button class="btn" onclick="document.getElementById('pw-section').style.display='none'">Cancel</button>
+      </div>
+    </div>
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-label">Logout</div>
+        <div class="setting-desc">Sign out of KukuiBot on this device</div>
+      </div>
+      <button class="btn danger" onclick="doLogout()">↩ Logout</button>
+    </div>
+  </div>
+
+  <!-- Certificate -->
+  <div class="card">
+    <h2>Certificate</h2>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:14px;">Install the root certificate so other devices trust KukuiBot's HTTPS connection. The Mac running KukuiBot handles this automatically during install.</p>
+
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-label">Download Root CA</div>
+        <div class="setting-desc">Install this on any device connecting to KukuiBot</div>
+      </div>
+      <a href="/api/cert" download class="btn" style="text-decoration:none;">📥 Download</a>
+    </div>
+
+    <div id="cert-instructions" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border);">
+      <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:10px;">Installation Instructions</div>
+
+      <div style="margin-bottom:12px;">
+        <div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:4px;">🍎 macOS</div>
+        <ol style="font-size:12px;color:var(--muted);margin:0;padding-left:20px;line-height:1.8;">
+          <li>Open the downloaded <code>.pem</code> file</li>
+          <li><strong>Keychain Access</strong> opens automatically</li>
+          <li>Double-click the certificate (named "mkcert …")</li>
+          <li>Expand <strong>Trust</strong> → set to <strong>Always Trust</strong></li>
+          <li>Close and enter your password to confirm</li>
+        </ol>
+      </div>
+
+      <div style="margin-bottom:12px;">
+        <div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:4px;">📱 iPhone / iPad</div>
+        <ol style="font-size:12px;color:var(--muted);margin:0;padding-left:20px;line-height:1.8;">
+          <li>Tap the <strong>Download</strong> button above (in Safari)</li>
+          <li>Tap <strong>Allow</strong> when prompted to download the profile</li>
+          <li>Open <strong>Settings</strong> → a "Profile Downloaded" banner appears at the top → tap it</li>
+          <li>Tap <strong>Install</strong> → enter your passcode → tap <strong>Install</strong> again</li>
+          <li>Go to <strong>Settings → General → About → Certificate Trust Settings</strong></li>
+          <li>Toggle <strong>ON</strong> for the mkcert certificate</li>
+        </ol>
+      </div>
+
+      <div style="margin-bottom:12px;">
+        <div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:4px;">🪟 Windows</div>
+        <ol style="font-size:12px;color:var(--muted);margin:0;padding-left:20px;line-height:1.8;">
+          <li>Double-click the downloaded file</li>
+          <li>Click <strong>Install Certificate</strong></li>
+          <li>Select <strong>Local Machine</strong> → <strong>Next</strong></li>
+          <li>Choose <strong>Place all certificates in the following store</strong></li>
+          <li>Browse → select <strong>Trusted Root Certification Authorities</strong></li>
+          <li>Click <strong>Finish</strong></li>
+        </ol>
+      </div>
+
+      <div>
+        <div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:4px;">🐧 Linux</div>
+        <ol style="font-size:12px;color:var(--muted);margin:0;padding-left:20px;line-height:1.8;">
+          <li>Copy the file to <code>/usr/local/share/ca-certificates/kukuibot.crt</code></li>
+          <li>Run <code>sudo update-ca-certificates</code></li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+  <!-- System -->
+  <div class="card">
+    <h2>System</h2>
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-label">Restart Worker</div>
+        <div class="setting-desc">Restart the chat/tools backend process</div>
+      </div>
+      <button class="btn" onclick="restartWorker()">♻️ Restart</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+
+let navOpen = false;
+function toggleNav() {
+  navOpen = !navOpen;
+  document.getElementById('nav-menu').classList.toggle('open', navOpen);
+  document.getElementById('nav-chevron').textContent = navOpen ? '▴' : '▾';
+  if (navOpen) setTimeout(() => document.addEventListener('click', closeNav, { once: true }), 0);
+}
+function closeNav() {
+  navOpen = false;
+  const m = document.getElementById('nav-menu');
+  if (m) m.classList.remove('open');
+  const c = document.getElementById('nav-chevron');
+  if (c) c.textContent = '▾';
+}
+function forceRefresh() {
+  event.preventDefault();
+  const u = new URL(window.location.origin + '/');
+  u.searchParams.set('refresh', Date.now());
+  window.location.assign(u);
+}
+async function checkForUpdates(e) {
+  if (e) e.preventDefault();
+  closeNav();
+  const status = document.createElement('div');
+  status.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:var(--surface);border:1px solid var(--border);padding:12px 20px;border-radius:10px;z-index:300;font-size:14px;box-shadow:0 8px 32px rgba(0,0,0,0.4);';
+  status.textContent = '📦 Checking for updates...';
+  document.body.appendChild(status);
+  try {
+    const r = await fetch('/api/update/check', { method: 'POST' });
+    const d = await r.json();
+    if (d.error) {
+      status.textContent = '❌ ' + d.error;
+    } else if (d.up_to_date) {
+      status.textContent = '✅ KukuiBot is up to date.';
+    } else {
+      status.textContent = '📦 ' + d.behind + ' update(s) available. Applying...';
+      const ur = await fetch('/api/update/apply', { method: 'POST' });
+      const ud = await ur.json();
+      if (ud.error) {
+        status.textContent = '❌ Update failed: ' + ud.error;
+      } else {
+        status.textContent = '✅ Updated! Reloading...';
+        setTimeout(() => window.location.reload(), 2000);
+        return;
+      }
+    }
+  } catch (e) {
+    status.textContent = '❌ Network error';
+  }
+  setTimeout(() => status.remove(), 4000);
+}
+
+async function doLogout() {
+  event.preventDefault();
+  try { await fetch('/auth/logout', { method: 'POST' }); } catch {}
+  window.location.href = '/login.html';
+}
+
+const API = '';
+let config = {};
+let oauthPolling = null;
+
+function toast(msg, ms = 2500) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), ms);
+}
+
+// ---- Config ----
+async function loadConfig() {
+  try {
+    const r = await fetch(API + '/api/config');
+    config = await r.json();
+    document.getElementById('reasoning-select').value = config.reasoning_effort || 'medium';
+    document.getElementById('compact-toggle').className = 'toggle' + (config.self_compact ? ' on' : '');
+  } catch {}
+}
+async function saveConfig() {
+  config.reasoning_effort = document.getElementById('reasoning-select').value;
+  try {
+    await fetch(API + '/api/config', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(config) });
+    toast('Saved');
+  } catch { toast('Failed'); }
+}
+function toggleCompact() {
+  config.self_compact = !config.self_compact;
+  document.getElementById('compact-toggle').className = 'toggle' + (config.self_compact ? ' on' : '');
+  saveConfig();
+}
+
+// ---- Usage ----
+async function loadUsage() {
+  try {
+    const r = await fetch(API + '/api/usage');
+    const d = await r.json();
+    if (!d.ok) return;
+    const card = document.getElementById('usage-card');
+    const content = document.getElementById('usage-content');
+    card.style.display = '';
+    let html = '';
+    for (const [key, profile] of Object.entries(d).filter(([k]) => k !== 'ok')) {
+      if (!profile || typeof profile !== 'object' || !profile.weeklyUsedPct && profile.weeklyUsedPct !== 0) continue;
+      const pct = profile.weeklyUsedPct || 0;
+      const color = pct > 80 ? 'var(--red)' : pct > 60 ? 'var(--yellow)' : 'var(--green)';
+      html += `<div style="margin-bottom:10px;">
+        <div style="font-size:13px;font-weight:500;text-transform:capitalize;">${key}</div>
+        <div class="usage-bar"><div class="usage-fill" style="width:${pct}%;background:${color};"></div></div>
+        <div class="usage-text">${pct}% used · ${profile.weeklyLeft || 0}% remaining</div>
+      </div>`;
+    }
+    content.innerHTML = html || '<div class="usage-text">No usage data</div>';
+  } catch {}
+}
+
+// ---- Auth ----
+async function loadAuth() {
+  try {
+    const r = await fetch(API + '/auth/status');
+    const d = await r.json();
+    const el = document.getElementById('auth-status-line');
+    const detail = document.getElementById('auth-detail');
+    if (d.authenticated) {
+      const hrs = d.remaining_hours;
+      const hrsText = hrs != null ? ` · ${Math.round(hrs)}h remaining` : '';
+      const cls = (hrs != null && hrs < 24) ? 'warn' : 'ok';
+      el.innerHTML = `<span class="dot ${cls}"></span> Connected (${d.provider_type || 'unknown'})${hrsText}`;
+      detail.textContent = d.account_id ? `Account: ${d.account_id}` : '';
+    } else if (d.expired) {
+      el.innerHTML = '<span class="dot bad"></span> Token expired';
+      detail.textContent = '';
+    } else {
+      el.innerHTML = '<span class="dot bad"></span> Not connected';
+      detail.textContent = '';
+    }
+  } catch {
+    document.getElementById('auth-status-line').innerHTML = '<span class="dot bad"></span> Error';
+  }
+}
+function switchAuthTab(tab) {
+  document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.auth-pane').forEach(p => p.classList.remove('active'));
+  document.querySelector(`.auth-tab[onclick*="${tab}"]`).classList.add('active');
+  document.getElementById('auth-pane-' + tab).classList.add('active');
+}
+async function submitPastedCode() {
+  const urlInput = document.getElementById('oauth-paste-url');
+  const raw = (urlInput.value || '').trim();
+  if (!raw) { return; }
+  let code = '';
+  try { const u = new URL(raw); code = u.searchParams.get('code') || ''; } catch { code = raw; }
+  if (!code) { document.getElementById('oauth-msg').textContent = '❌ No code found in URL'; return; }
+  try {
+    const r = await fetch(API + '/auth/oauth/exchange', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ code }) });
+    const d = await r.json();
+    if (d.error) { document.getElementById('oauth-msg').textContent = '❌ ' + d.error; return; }
+    if (oauthPolling) { clearInterval(oauthPolling); oauthPolling = null; }
+    document.getElementById('oauth-paste-section').style.display = 'none';
+    closeOAuthOverlay();
+    document.getElementById('oauth-msg').textContent = '✅ Connected!';
+    urlInput.value = '';
+    document.getElementById('oauth-start-btn').style.display = '';
+    document.getElementById('oauth-start-btn').disabled = false;
+    document.getElementById('oauth-start-btn').textContent = '🔐 Start OAuth';
+    document.getElementById('oauth-check-btn').style.display = 'none';
+    document.getElementById('oauth-cancel-btn').style.display = 'none';
+    // Show OAuth warning if remote
+if (!['localhost','127.0.0.1','::1'].includes(window.location.hostname)) {
+  document.getElementById('oauth-local-warning').style.display = 'block';
+  document.getElementById('oauth-host-hint').textContent = window.location.host;
+}
+loadAuth();
+  } catch (e) { document.getElementById('oauth-msg').textContent = '❌ ' + e.message; }
+}
+
+function openOAuthOverlay(url) {
+  let ov = document.getElementById('oauth-overlay');
+  if (!ov) {
+    ov = document.createElement('div');
+    ov.id = 'oauth-overlay';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:200;display:flex;flex-direction:column;padding:20px;';
+    ov.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:#1a1a1a;border:1px solid #333;border-bottom:none;border-radius:10px 10px 0 0;"><span style="font-size:13px;color:#a3a3a3;">🔐 Sign in to OpenAI</span><button onclick="closeOAuthOverlay()" style="width:32px;height:32px;border-radius:6px;border:1px solid #333;background:#252525;color:#e5e5e5;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;" onmouseover="this.style.background='#ef4444';this.style.borderColor='#ef4444'" onmouseout="this.style.background='#252525';this.style.borderColor='#333'">✕</button></div><iframe id="oauth-iframe" style="flex:1;border:1px solid #333;border-radius:0 0 10px 10px;background:#fff;" sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox"></iframe>`;
+    document.body.appendChild(ov);
+  }
+  ov.style.display = 'flex';
+  document.getElementById('oauth-iframe').src = url;
+}
+
+function closeOAuthOverlay() {
+  const ov = document.getElementById('oauth-overlay');
+  if (ov) { ov.style.display = 'none'; const f = document.getElementById('oauth-iframe'); if (f) f.src = ''; }
+}
+
+async function startOAuth() {
+  const btn = document.getElementById('oauth-start-btn');
+  const msg = document.getElementById('oauth-msg');
+  const isRemote = !['localhost','127.0.0.1','::1'].includes(window.location.hostname);
+  btn.disabled = true; btn.textContent = '⏳ Starting…'; msg.textContent = '';
+  try {
+    const r = await fetch(API + '/auth/oauth/start', { method: 'POST' });
+    const d = await r.json();
+    if (d.error) { msg.textContent = '❌ ' + d.error; btn.disabled = false; btn.textContent = '🔐 Start OAuth'; return; }
+    if (d.login_url) window.open(d.login_url, '_blank');
+    msg.innerHTML = '🔗 Sign in in the browser window. Waiting…';
+    document.getElementById('oauth-check-btn').style.display = '';
+    document.getElementById('oauth-cancel-btn').style.display = '';
+    btn.style.display = 'none';
+    oauthPolling = setInterval(async () => {
+      try {
+        const sr = await fetch(API + '/auth/oauth/status');
+        const sd = await sr.json();
+        if (sd.status === 'complete' || sd.status === 'success') {
+          clearInterval(oauthPolling); oauthPolling = null;
+          await fetch(API + '/auth/oauth/complete', { method: 'POST' });
+          msg.textContent = '✅ Connected!'; resetOAuthUI(); loadAuth(); toast('✅ Connected');
+        } else if (sd.status === 'error' || sd.status === 'failed') {
+          clearInterval(oauthPolling); oauthPolling = null;
+          msg.textContent = '❌ Failed: ' + (sd.error || 'unknown'); resetOAuthUI();
+        }
+      } catch {}
+    }, 2000);
+  } catch (e) { msg.textContent = '❌ ' + e.message; btn.disabled = false; btn.textContent = '🔐 Start OAuth'; }
+}
+async function checkOAuth() {
+  try { const r = await fetch(API + '/auth/oauth/status'); const d = await r.json(); document.getElementById('oauth-msg').textContent = 'Status: ' + (d.status || 'unknown'); } catch {}
+}
+async function cancelOAuth() {
+  if (oauthPolling) { clearInterval(oauthPolling); oauthPolling = null; }
+  try { await fetch(API + '/auth/oauth/cancel', { method: 'POST' }); } catch {}
+  document.getElementById('oauth-msg').textContent = 'Cancelled.'; resetOAuthUI();
+}
+function resetOAuthUI() {
+  const btn = document.getElementById('oauth-start-btn');
+  btn.style.display = ''; btn.disabled = false; btn.textContent = '🔐 Start OAuth';
+  document.getElementById('oauth-check-btn').style.display = 'none';
+  document.getElementById('oauth-cancel-btn').style.display = 'none';
+}
+async function saveToken() {
+  const v = document.getElementById('token-input').value.trim();
+  if (!v) { toast('Paste a token'); return; }
+  try {
+    const r = await fetch(API + '/auth/token', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ token: v, provider_type: 'session_token' }) });
+    const d = await r.json();
+    if (d.error) { toast('❌ ' + d.error); return; }
+    toast('✅ Saved'); document.getElementById('token-input').value = ''; loadAuth();
+  } catch (e) { toast('Error: ' + e.message); }
+}
+async function saveApiKey() {
+  const v = document.getElementById('apikey-input').value.trim();
+  if (!v) { toast('Paste an API key'); return; }
+  try {
+    const r = await fetch(API + '/auth/token', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ token: v, provider_type: 'api_key' }) });
+    const d = await r.json();
+    if (d.error) { toast('❌ ' + d.error); return; }
+    toast('✅ Saved'); document.getElementById('apikey-input').value = ''; loadAuth();
+  } catch (e) { toast('Error: ' + e.message); }
+}
+
+// ---- Backup ----
+async function loadBackup() {
+  try {
+    const r = await fetch(API + '/api/backup/status');
+    const d = await r.json();
+    const label = document.getElementById('backup-status-label');
+    const desc = document.getElementById('backup-status-desc');
+    if (d.configured) {
+      label.textContent = 'GitHub Backup — configured';
+      desc.textContent = d.last_backup || 'No backup yet';
+      document.getElementById('backup-repo-input').value = d.repo_url || '';
+      document.getElementById('backup-branch-input').value = d.branch || 'main';
+    } else {
+      label.textContent = 'GitHub Backup — not configured';
+      desc.textContent = 'Set up a repository to back up to';
+    }
+  } catch { document.getElementById('backup-status-desc').textContent = 'Error loading status'; }
+}
+function toggleBackupConfig() {
+  const sec = document.getElementById('backup-config-section');
+  const btn = document.getElementById('backup-config-btn-wrap');
+  sec.style.display = sec.style.display === 'none' ? '' : 'none';
+  btn.style.display = sec.style.display === 'none' ? '' : 'none';
+}
+async function saveBackupConfig() {
+  const url = document.getElementById('backup-repo-input').value.trim();
+  const branch = document.getElementById('backup-branch-input').value.trim() || 'main';
+  if (!url) { toast('Enter a repo URL'); return; }
+  try {
+    const r = await fetch(API + '/api/backup/config', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ repo_url: url, branch }) });
+    const d = await r.json();
+    if (d.error) { toast('❌ ' + d.error); return; }
+    toast('✅ Backup configured'); toggleBackupConfig(); loadBackup();
+  } catch (e) { toast('Error: ' + e.message); }
+}
+async function doBackup() {
+  toast('Running backup…');
+  try {
+    const r = await fetch(API + '/api/backup', { method: 'POST' });
+    const d = await r.json();
+    toast(d.ok ? '✅ Backup done' : '❌ ' + (d.error || 'Failed'));
+    loadBackup();
+  } catch (e) { toast('Error: ' + e.message); }
+}
+
+// ---- Password ----
+const _isLocalSettings = ['localhost', '127.0.0.1', '::1'].includes(location.hostname);
+function showPasswordChange() {
+  document.getElementById('pw-section').style.display = '';
+  // Show current password field for remote sessions
+  if (!_isLocalSettings) document.getElementById('pw-current-group').style.display = '';
+}
+async function changePassword() {
+  const currentPw = document.getElementById('pw-current')?.value || '';
+  const pw = document.getElementById('pw-new').value;
+  const confirm = document.getElementById('pw-confirm').value;
+  if (!_isLocalSettings && !currentPw) { toast('Current password is required'); return; }
+  if (!pw || pw.length < 6) { toast('Min 6 characters'); return; }
+  if (pw !== confirm) { toast('Passwords don\'t match'); return; }
+  const payload = { new_password: pw };
+  if (currentPw) payload.current_password = currentPw;
+  try {
+    const r = await fetch(API + '/auth/change-password', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    if (r.status === 401) { window.location.href = '/login.html'; return; }
+    const d = await r.json();
+    if (d.error) { toast('❌ ' + d.error); return; }
+    toast('✅ Password changed');
+    document.getElementById('pw-section').style.display = 'none';
+    if (document.getElementById('pw-current')) document.getElementById('pw-current').value = '';
+    document.getElementById('pw-new').value = '';
+    document.getElementById('pw-confirm').value = '';
+  } catch (e) { toast('Error: ' + e.message); }
+}
+
+// ---- Logout ----
+async function checkForUpdates(e) {
+  if (e) e.preventDefault();
+  closeNav();
+  const status = document.createElement('div');
+  status.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:var(--surface);border:1px solid var(--border);padding:12px 20px;border-radius:10px;z-index:300;font-size:14px;box-shadow:0 8px 32px rgba(0,0,0,0.4);';
+  status.textContent = '📦 Checking for updates...';
+  document.body.appendChild(status);
+  try {
+    const r = await fetch('/api/update/check', { method: 'POST' });
+    const d = await r.json();
+    if (d.error) {
+      status.textContent = '❌ ' + d.error;
+    } else if (d.up_to_date) {
+      status.textContent = '✅ KukuiBot is up to date.';
+    } else {
+      status.textContent = '📦 ' + d.behind + ' update(s) available. Applying...';
+      const ur = await fetch('/api/update/apply', { method: 'POST' });
+      const ud = await ur.json();
+      if (ud.error) {
+        status.textContent = '❌ Update failed: ' + ud.error;
+      } else {
+        status.textContent = '✅ Updated! Reloading...';
+        setTimeout(() => window.location.reload(), 2000);
+        return;
+      }
+    }
+  } catch (e) {
+    status.textContent = '❌ Network error';
+  }
+  setTimeout(() => status.remove(), 4000);
+}
+
+async function doLogout() {
+  if (!confirm('Sign out of KukuiBot?')) return;
+  try { await fetch(API + '/auth/logout', { method: 'POST' }); } catch {}
+  window.location.href = '/login.html';
+}
+
+// ---- System ----
+async function restartWorker() {
+  toast('Restarting…');
+  try { await fetch(API + '/api/restart', { method: 'POST' }); toast('♻️ Restart requested'); } catch { toast('Failed'); }
+}
+
+// ---- Init ----
+loadConfig();
+loadUsage();
+loadAuth();
+loadBackup();
+</script>
+</body>
+</html>

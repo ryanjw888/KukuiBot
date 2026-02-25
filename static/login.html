@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KukuiBot — Login</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=20260215-2240">
+  <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png?v=20260215-2240">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon-180.png?v=20260215-2240">
+  <style>
+    :root { --bg: #0a0a0a; --surface: #141414; --surface2: #1e1e1e; --border: #2a2a2a;
+            --text: #e5e5e5; --muted: #737373; --accent: #10b981; --red: #ef4444; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro', system-ui, sans-serif;
+           background: var(--bg); color: var(--text); min-height: 100vh;
+           display: flex; align-items: center; justify-content: center; }
+    .container { width: 100%; max-width: 400px; padding: 20px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 40px; }
+    .logo { text-align: center; margin-bottom: 32px; }
+    .logo .emoji { font-size: 48px; margin-bottom: 8px; }
+    .logo h1 { font-size: 28px; font-weight: 700; }
+    .logo p { color: var(--muted); font-size: 13px; margin-top: 4px; }
+    label { display: block; font-size: 13px; font-weight: 500; color: var(--muted); margin-bottom: 6px; margin-top: 16px; }
+    label:first-of-type { margin-top: 0; }
+    input { width: 100%; padding: 10px 14px; background: var(--surface2); border: 1px solid var(--border);
+            border-radius: 8px; color: var(--text); font-size: 14px; outline: none; transition: border 0.2s;
+            -webkit-text-fill-color: var(--text); }
+    input:focus { border-color: var(--accent); }
+    input::placeholder { color: #525252; }
+    input:-webkit-autofill,
+    input:-webkit-autofill:hover,
+    input:-webkit-autofill:focus,
+    input:-webkit-autofill:active {
+      -webkit-box-shadow: 0 0 0 1000px var(--surface2) inset !important;
+      -webkit-text-fill-color: var(--text) !important;
+      caret-color: var(--text) !important;
+      transition: background-color 5000s ease-in-out 0s;
+    }
+    .btn { display: block; width: 100%; padding: 12px; margin-top: 24px; border: none; border-radius: 10px;
+           background: var(--accent); color: #000; font-size: 14px; font-weight: 600; cursor: pointer; }
+    .btn:hover { filter: brightness(1.1); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .error { color: var(--red); font-size: 13px; margin-top: 12px; display: none; text-align: center; }
+    .error.show { display: block; }
+    .divider { display: flex; align-items: center; margin: 20px 0 4px; }
+    .divider::before, .divider::after { content: ''; flex: 1; border-bottom: 1px solid var(--border); }
+    .divider span { padding: 0 12px; color: var(--muted); font-size: 12px; }
+    .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); margin-top: 16px; }
+    .btn-outline:hover { background: var(--surface2); filter: none; }
+    .sys-login { display: none; margin-top: 16px; }
+    .sys-login.show { display: block; }
+    .sys-login .btn { margin-top: 14px; font-size: 13px; }
+    .sys-error { color: var(--red); font-size: 13px; margin-top: 8px; display: none; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="logo">
+        <div class="emoji">🖥️</div>
+        <h1>KukuiBot</h1>
+        <p>Sign in to continue</p>
+      </div>
+
+      <div id="main-login">
+        <label for="username">Username</label>
+        <input type="text" id="username" placeholder="Username" autocomplete="username" autofocus>
+
+        <label for="password">Password</label>
+        <input type="password" id="password" placeholder="Password" autocomplete="current-password">
+
+        <div class="error" id="error"></div>
+        <button class="btn" id="login-btn" onclick="doLogin()">Sign In</button>
+      </div>
+
+      <div id="sys-section" style="display:none;">
+        <div class="divider"><span>or</span></div>
+        <button class="btn btn-outline" id="sys-toggle" onclick="toggleSysLogin()">Sign in with Mac password</button>
+        <div class="sys-login" id="sys-login">
+          <label for="sys-password">macOS Password</label>
+          <input type="password" id="sys-password" placeholder="Your Mac login password" autocomplete="off">
+          <div class="sys-error" id="sys-error"></div>
+          <button class="btn" id="sys-btn" onclick="doSysLogin()">Sign In</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const isLocal = ['localhost', '127.0.0.1', '::1'].includes(location.hostname);
+
+    // Show Mac password option only on localhost
+    if (isLocal) document.getElementById('sys-section').style.display = 'block';
+
+    async function doLogin() {
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+      const errEl = document.getElementById('error');
+      const btn = document.getElementById('login-btn');
+
+      errEl.className = 'error';
+      if (!username || !password) { errEl.textContent = 'Enter username and password'; errEl.className = 'error show'; return; }
+
+      btn.disabled = true;
+      try {
+        const res = await fetch('/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        window.location.href = '/';
+      } catch (e) {
+        errEl.textContent = e.message;
+        errEl.className = 'error show';
+        btn.disabled = false;
+      }
+    }
+
+    function toggleSysLogin() {
+      const el = document.getElementById('sys-login');
+      el.classList.toggle('show');
+      if (el.classList.contains('show')) document.getElementById('sys-password').focus();
+    }
+
+    async function doSysLogin() {
+      const pw = document.getElementById('sys-password').value;
+      const errEl = document.getElementById('sys-error');
+      const btn = document.getElementById('sys-btn');
+
+      errEl.style.display = 'none';
+      if (!pw) { errEl.textContent = 'Enter your macOS password'; errEl.style.display = 'block'; return; }
+
+      btn.disabled = true;
+      btn.textContent = 'Verifying...';
+      try {
+        const res = await fetch('/auth/system-login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ system_password: pw }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        window.location.href = '/';
+      } catch (e) {
+        errEl.textContent = e.message;
+        errEl.style.display = 'block';
+        btn.disabled = false;
+        btn.textContent = 'Sign In';
+      }
+    }
+
+    document.addEventListener('keydown', e => {
+      if (e.key !== 'Enter') return;
+      const active = document.activeElement;
+      if (active && active.id === 'sys-password') doSysLogin();
+      else doLogin();
+    });
+
+    // Auto-redirect if already authenticated
+    fetch('/auth/status').then(r => r.json()).then(data => {
+      if (!data.setup_complete) { window.location.href = '/setup.html'; return; }
+      if (data.force_login_required) return;
+      if (data.logged_in) { window.location.href = '/'; }
+    });
+  </script>
+</body>
+</html>

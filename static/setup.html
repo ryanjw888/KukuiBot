@@ -1,0 +1,1013 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KukuiBot — Setup</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=20260215-2240">
+  <link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png?v=20260215-2240">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon-180.png?v=20260215-2240">
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    body { background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, sans-serif; margin: 0; display: flex; justify-content: center; align-items: flex-start; min-height: 100vh; overflow-y: auto; padding: 40px 0; box-sizing: border-box; }
+    .setup { max-width: 480px; width: 100%; padding: 32px; }
+    .logo { text-align: center; margin-bottom: 32px; }
+    .logo .emoji { font-size: 48px; }
+    .logo h1 { margin: 8px 0 4px; font-size: 28px; font-weight: 700; }
+    .logo p { color: var(--muted); font-size: 13px; margin: 0; }
+
+    .steps { display: flex; gap: 8px; margin-bottom: 24px; justify-content: center; }
+    .step-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--border); transition: background 0.2s; }
+    .step-dot.active { background: var(--accent); }
+    .step-dot.done { background: var(--green); }
+
+    .step { display: none; }
+    .step.visible { display: block; animation: fadeIn 0.2s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+    h2 { font-size: 18px; font-weight: 600; margin: 0 0 4px; }
+    .subtitle { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+
+    label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: var(--text); }
+    input[type="text"], input[type="password"], input[type="email"], textarea {
+      width: 100%; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px;
+      background: var(--surface); color: var(--text); font-size: 17px; margin-bottom: 14px;
+      box-sizing: border-box; outline: none; transition: border-color 0.15s;
+      -webkit-text-fill-color: var(--text);
+    }
+    .name-row { display: flex; gap: 10px; }
+    .name-row input { flex: 1; }
+    /* Override browser autofill styling (Chrome/Safari force light backgrounds) */
+    input:-webkit-autofill,
+    input:-webkit-autofill:hover,
+    input:-webkit-autofill:focus,
+    input:-webkit-autofill:active,
+    textarea:-webkit-autofill {
+      -webkit-box-shadow: 0 0 0 1000px var(--surface) inset !important;
+      -webkit-text-fill-color: var(--text) !important;
+      caret-color: var(--text) !important;
+      border-color: var(--border) !important;
+      transition: background-color 5000s ease-in-out 0s;
+    }
+    input:focus, textarea:focus { border-color: var(--accent); }
+    textarea { resize: vertical; min-height: 80px; font-family: monospace; font-size: 12px; }
+
+    .btn-oauth {
+      display: inline-flex; align-items: center; gap: 10px; padding: 14px 32px;
+      background: #fff; color: #000; border: none; border-radius: 10px;
+      font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.2s;
+    }
+    .btn-oauth:hover { filter: brightness(0.95); transform: translateY(-1px); box-shadow: 0 4px 20px rgba(255,255,255,0.1); }
+    .btn-oauth:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+
+    .btn-skip { background: none; border: none; color: var(--muted); font-size: 12px; cursor: pointer; padding: 6px; }
+    .btn-skip:hover { color: var(--text); }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner-lg { width: 36px; height: 36px; border: 3px solid var(--border); border-top-color: var(--accent);
+                  border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto; }
+
+    .btn-row { display: flex; gap: 10px; margin-top: 20px; }
+    .btn { flex: 1; padding: 11px; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+    .btn-primary { background: var(--accent); color: white; }
+    .btn-primary:hover { filter: brightness(1.1); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+    .btn-secondary:hover { border-color: var(--muted); }
+
+    .error { color: var(--red); font-size: 13px; margin-top: 8px; display: none; }
+    .success { color: var(--green); font-size: 13px; margin-top: 8px; display: none; text-align: center; }
+
+    .instructions { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin: 10px 0; }
+    .instructions ol { margin: 8px 0; padding-left: 20px; font-size: 12px; line-height: 1.8; color: var(--muted); }
+    .instructions li { margin-bottom: 4px; }
+
+    /* --- Provider cards (Step 2) --- */
+    .provider-options { display: flex; flex-direction: column; gap: 12px; }
+
+    .provider-card {
+      position: relative;
+      display: flex; align-items: flex-start; gap: 16px;
+      padding: 20px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      cursor: pointer;
+      transition: all 0.25s ease;
+    }
+    .provider-card:hover {
+      border-color: rgba(255,255,255,0.15);
+      background: var(--surface-hover);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+    }
+    .provider-card:active { transform: translateY(0); }
+
+    .provider-card .card-icon {
+      flex-shrink: 0;
+      width: 44px; height: 44px;
+      border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px;
+    }
+    .provider-card .card-icon.icon-oauth {
+      background: linear-gradient(135deg, rgba(99,102,241,0.2), rgba(99,102,241,0.05));
+      border: 1px solid rgba(99,102,241,0.2);
+    }
+    .provider-card .card-icon.icon-apikey {
+      background: linear-gradient(135deg, rgba(250,204,21,0.15), rgba(250,204,21,0.03));
+      border: 1px solid rgba(250,204,21,0.15);
+    }
+    .provider-card .card-icon.icon-claude {
+      background: linear-gradient(135deg, rgba(217,119,87,0.2), rgba(217,119,87,0.05));
+      border: 1px solid rgba(217,119,87,0.2);
+    }
+    .provider-card .card-icon.icon-anthropic {
+      background: linear-gradient(135deg, rgba(180,160,255,0.2), rgba(180,160,255,0.05));
+      border: 1px solid rgba(180,160,255,0.2);
+    }
+    .provider-card .card-icon.icon-openrouter {
+      background: linear-gradient(135deg, rgba(76,175,80,0.2), rgba(76,175,80,0.05));
+      border: 1px solid rgba(76,175,80,0.15);
+    }
+
+    .provider-card .card-body { flex: 1; min-width: 0; }
+
+    .provider-card .card-title {
+      font-size: 15px; font-weight: 600; color: var(--text);
+      display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+    }
+
+    .provider-card .card-desc {
+      font-size: 12.5px; color: var(--muted); line-height: 1.5;
+    }
+
+    .provider-card .card-arrow {
+      flex-shrink: 0;
+      color: var(--muted);
+      font-size: 18px;
+      align-self: center;
+      transition: transform 0.2s, color 0.2s;
+    }
+    .provider-card:hover .card-arrow { color: var(--text); transform: translateX(3px); }
+
+    .badge {
+      display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.5px; padding: 2px 7px; border-radius: 4px;
+    }
+    .badge-rec { background: rgba(99,102,241,0.2); color: var(--accent); }
+    .badge-adv { background: rgba(255,255,255,0.06); color: var(--muted); }
+
+    .help-text { font-size: 12px; color: var(--muted); margin-top: -8px; margin-bottom: 14px; }
+    .help-text a { color: var(--accent); text-decoration: none; }
+    .help-text a:hover { text-decoration: underline; }
+
+    .btn-oauth {
+      display: inline-flex; align-items: center; gap: 10px; padding: 14px 32px;
+      background: #fff; color: #000; border: none; border-radius: 10px;
+      font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.2s;
+    }
+    .btn-oauth:hover { filter: brightness(0.95); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(255,255,255,0.1); }
+    .btn-oauth:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+
+    .btn-skip { background: none; border: none; color: var(--muted); font-size: 12px; cursor: pointer; padding: 4px 8px; }
+    .btn-skip:hover { color: var(--text); }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner-lg {
+      width: 32px; height: 32px; border: 3px solid var(--border);
+      border-top-color: var(--accent); border-radius: 50%;
+      animation: spin 0.8s linear infinite; margin: 0 auto;
+    }
+  
+  .cert-step-card { display: flex; align-items: flex-start; gap: 14px; padding: 12px 14px;
+    background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 10px;
+    margin-bottom: 10px; }
+  .cert-step-num { width: 28px; height: 28px; border-radius: 50%; background: var(--accent);
+    color: #fff; font-size: 14px; font-weight: 700; display: flex; align-items: center;
+    justify-content: center; flex-shrink: 0; }
+  .cert-step-title { font-size: 14px; font-weight: 600; color: var(--text); margin: 0 0 4px 0; }
+  .cert-step-desc { font-size: 13px; color: var(--muted); margin: 0; line-height: 1.5; }
+  .cert-step-desc strong { color: var(--text); }
+</style>
+</head>
+<body>
+  <div class="setup">
+    <div class="logo">
+      <div class="emoji">🖥️</div>
+      <h1>KukuiBot</h1>
+      <p>Experimental Open Source Project</p>
+    </div>
+
+    <div class="steps">
+      <div class="step-dot" id="dot-0"></div>
+      <div class="step-dot" id="dot-1"></div>
+      <div class="step-dot" id="dot-2"></div>
+    </div>
+
+    <!-- STEP 0: Trust Certificate (shown only for LAN devices) -->
+    <div class="step" id="step-0">
+      <h2>🔒 Trust this server</h2>
+      <p class="subtitle">Install the certificate so your browser trusts KukuiBot.</p>
+
+      <!-- iPhone / iPad -->
+      <div id="cert-ios" style="display:none;">
+        <div class="cert-step-card">
+          <div class="cert-step-num">1</div>
+          <div>
+            <p class="cert-step-title">Install Certificate</p>
+            <p class="cert-step-desc">Tap the button below. When prompted, tap <strong>Allow</strong> to download the profile.</p>
+          </div>
+        </div>
+        <div style="text-align:center; margin: 12px 0;">
+          <a href="/api/cert" download class="btn-oauth" style="text-decoration:none;">⬇ Install Certificate</a>
+        </div>
+        <div class="cert-step-card">
+          <div class="cert-step-num">2</div>
+          <div>
+            <p class="cert-step-title">Install Profile</p>
+            <p class="cert-step-desc">Open <strong>Settings</strong> → A "Profile Downloaded" prompt will appear at the top → Tap <strong>Install</strong>.</p>
+          </div>
+        </div>
+        <div class="cert-step-card">
+          <div class="cert-step-num">3</div>
+          <div>
+            <p class="cert-step-title">Enable Trust</p>
+            <p class="cert-step-desc">Go to <strong>Settings → General → About → Certificate Trust Settings</strong> → Toggle on the KukuiBot certificate.</p>
+          </div>
+        </div>
+        <div class="cert-step-card">
+          <div class="cert-step-num">4</div>
+          <div>
+            <p class="cert-step-title">Reload</p>
+            <p class="cert-step-desc">Come back here and <strong>reload the page</strong>. The warning will be gone.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- macOS -->
+      <div id="cert-mac" style="display:none;">
+        <div class="cert-step-card">
+          <div class="cert-step-num">1</div>
+          <div>
+            <p class="cert-step-title">Download & Open</p>
+            <p class="cert-step-desc">Click below to download, then <strong>open the file</strong>. Keychain Access will launch.</p>
+          </div>
+        </div>
+        <div style="text-align:center; margin: 12px 0;">
+          <a href="/api/cert" download class="btn-oauth" style="text-decoration:none;">⬇ Download Certificate</a>
+        </div>
+        <div class="cert-step-card">
+          <div class="cert-step-num">2</div>
+          <div>
+            <p class="cert-step-title">Trust the Certificate</p>
+            <p class="cert-step-desc">In Keychain Access, double-click the cert → expand <strong>Trust</strong> → set to <strong>Always Trust</strong> → close (enter password).</p>
+          </div>
+        </div>
+        <div class="cert-step-card">
+          <div class="cert-step-num">3</div>
+          <div>
+            <p class="cert-step-title">Reload</p>
+            <p class="cert-step-desc"><strong>Reload this page.</strong> The padlock will turn green.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Windows / Linux / Android -->
+      <div id="cert-other" style="display:none;">
+        <div style="text-align:center; margin: 12px 0;">
+          <a href="/api/cert" download class="btn-oauth" style="text-decoration:none;">⬇ Download Certificate</a>
+        </div>
+        <div class="instructions" style="margin-top:12px;">
+          <ol>
+            <li><strong>Windows:</strong> Double-click → Install Certificate → Local Machine → Trusted Root CAs</li>
+            <li><strong>Linux:</strong> Copy to <code>/usr/local/share/ca-certificates/</code> then <code>sudo update-ca-certificates</code></li>
+            <li><strong>Android:</strong> Open file → enter device PIN → installs as user cert</li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="btn-row" style="margin-top:16px;">
+        <button class="btn btn-primary" onclick="skipCertStep()">I've installed it — Continue →</button>
+      </div>
+      <div style="text-align:center; margin-top:8px;">
+        <button class="btn-skip" onclick="skipCertStep()">Skip for now</button>
+      </div>
+    </div>
+
+    <!-- STEP 1: Create Account -->
+    <div class="step visible" id="step-1">
+      <h2>Create your local account</h2>
+      <p class="subtitle">Stored on your Mac</p>
+
+      <form id="step1-form" action="/auth/setup" method="POST" autocomplete="on" onsubmit="event.preventDefault(); goStep2();">
+        <label for="full_name">Full Name</label>
+        <input type="text" id="full_name" name="name" placeholder="Your name" autocomplete="name" autofocus>
+
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" placeholder="you@example.com" autocomplete="email">
+
+        <label for="username">Username</label>
+        <input type="text" id="username" name="username" autocomplete="username">
+
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" placeholder="At least 6 characters" autocomplete="new-password">
+
+        <div class="error" id="step1-error"></div>
+
+        <div class="btn-row">
+          <button type="submit" class="btn btn-primary">Continue →</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- STEP 2: Connect AI Providers -->
+    <div class="step" id="step-2">
+      <h2>Connect AI Providers</h2>
+      <p class="subtitle">Connect at least one provider to get started. You can add more later in Settings.</p>
+
+      <!-- Method picker — large cards -->
+      <div id="method-picker">
+        <div class="provider-options">
+          <div class="provider-card" id="card-oauth" onclick="startOAuth()">
+            <div class="card-icon icon-oauth">
+              <img src="/openai-icon.svg" width="24" height="24" style="display:block;">
+            </div>
+            <div class="card-body">
+              <div class="card-title">Sign in with OpenAI <span class="badge badge-rec">One-Click Login</span></div>
+              <div class="card-desc">Use your ChatGPT Plus or Pro subscription. Just sign in — no keys to copy, tokens refresh automatically.</div>
+            </div>
+            <div class="card-arrow">›</div>
+          </div>
+          <div class="provider-card" id="card-claude" onclick="selectMethod('claude')">
+            <div class="card-icon icon-claude">
+              <img src="/claude-opus-icon.png" width="24" height="24" style="display:block;">
+            </div>
+            <div class="card-body">
+              <div class="card-title">Claude Code <span class="badge badge-adv">Anthropic</span></div>
+              <div class="card-desc">Connect Claude Opus &amp; Sonnet via Anthropic API key. Powers the Claude Code tab.</div>
+            </div>
+            <div class="card-arrow">›</div>
+          </div>
+          <div class="provider-card" id="card-anthropic" onclick="selectMethod('anthropic')">
+            <div class="card-icon icon-anthropic">
+              <img src="/claude-icon.svg" width="24" height="24" style="display:block;">
+            </div>
+            <div class="card-body">
+              <div class="card-title">Anthropic API Key <span class="badge badge-adv">Direct</span></div>
+              <div class="card-desc">Use an Anthropic API key for direct model access. Separate from Claude Code.</div>
+            </div>
+            <div class="card-arrow">›</div>
+          </div>
+          <div class="provider-card" id="card-openrouter" onclick="selectMethod('openrouter')">
+            <div class="card-icon icon-openrouter">
+              <span style="font-size:24px;">🌐</span>
+            </div>
+            <div class="card-body">
+              <div class="card-title">OpenRouter API Key</div>
+              <div class="card-desc">Access 100+ models (Gemini, Llama, Mistral, etc.) through a single API key.</div>
+            </div>
+            <div class="card-arrow">›</div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- OAUTH: Waiting for callback -->
+      <div id="oauth-waiting" style="display:none; text-align:center; padding: 20px 0;">
+        <div class="spinner-lg"></div>
+        <p style="color:var(--text); font-size:14px; margin-top:16px;">Waiting for you to sign in...</p>
+        <p id="oauth-waiting-hint" style="color:var(--muted); font-size:12px; margin-top:4px;">A browser tab opened with OpenAI login.</p>
+
+        <div id="paste-fallback" style="display:none; margin-top:20px; text-align:left;">
+          <div style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:14px;">
+            <p style="font-size:12px; color:var(--muted); margin-bottom:8px;">
+              <strong style="color:var(--yellow);">📋 Extra step needed</strong> — After signing in, your browser will show a "can't connect" page.
+              That's OK! Copy the <strong>full URL</strong> from your browser's address bar and paste it below:
+            </p>
+            <input type="text" id="paste-redirect-url" placeholder="Paste the localhost:1455/auth/callback?code=... URL here"
+                   style="width:100%; font-size:12px; font-family:monospace;">
+            <button class="btn btn-primary" onclick="submitPastedUrl()" style="margin-top:10px; padding:8px 16px; width:auto;">
+              Submit
+            </button>
+          </div>
+        </div>
+
+        <button class="btn btn-secondary" onclick="cancelOAuth()" style="margin-top:12px; width:auto; padding:8px 20px; display:inline-block;">Cancel</button>
+      </div>
+
+      <!-- OAUTH: Success -->
+      <div id="oauth-success" style="display:none; text-align:center; padding: 20px 0;">
+        <div style="font-size:48px; margin-bottom:12px;">✓</div>
+        <p style="color:var(--green); font-size:16px; font-weight:600;">Connected to OpenAI</p>
+        <p id="oauth-account" style="color:var(--muted); font-size:12px; margin-top:4px;"></p>
+      </div>
+
+
+      <!-- CLAUDE CODE: Instructions + Key Input -->
+      <div id="claude-flow" style="display:none;">
+        <h3 style="font-size:16px; margin:0 0 12px;">Connect Claude Code</h3>
+
+        <div id="claude-method-picker">
+          <p style="font-size:13px; color:var(--muted); margin:0 0 14px;">Choose how to authenticate:</p>
+          <div class="provider-options">
+            <div class="provider-card" onclick="selectClaudeMethod('cli')" style="padding:14px 16px;">
+              <div class="card-icon icon-claude" style="width:36px; height:36px;">
+                <span style="font-size:18px;">⌨️</span>
+              </div>
+              <div class="card-body">
+                <div class="card-title" style="font-size:14px;">Use Local CLI Auth <span class="badge badge-rec">Easiest</span></div>
+                <div class="card-desc">Run <code style="background:rgba(255,255,255,0.06); padding:1px 5px; border-radius:3px;">claude login</code> in Terminal. KukuiBot uses the CLI credentials automatically.</div>
+              </div>
+              <div class="card-arrow">›</div>
+            </div>
+            <div class="provider-card" onclick="selectClaudeMethod('apikey')" style="padding:14px 16px;">
+              <div class="card-icon icon-claude" style="width:36px; height:36px;">
+                <span style="font-size:18px;">🔑</span>
+              </div>
+              <div class="card-body">
+                <div class="card-title" style="font-size:14px;">Paste API Key</div>
+                <div class="card-desc">Use an Anthropic API key from <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color:var(--accent);">console.anthropic.com</a>.</div>
+              </div>
+              <div class="card-arrow">›</div>
+            </div>
+          </div>
+          <div style="text-align:center; margin-top:10px;">
+            <button class="btn-skip" onclick="backToMethods()">← Back to providers</button>
+          </div>
+        </div>
+
+        <!-- CLI auth instructions -->
+        <div id="claude-cli-flow" style="display:none;">
+          <div class="instructions">
+            <p style="font-size:13px; color:var(--muted); margin:0 0 8px;">Open Terminal on this Mac and run:</p>
+            <div style="background:rgba(0,0,0,0.3); border-radius:6px; padding:10px 14px; font-family:monospace; font-size:13px; color:var(--text); margin:8px 0; user-select:all;">claude login</div>
+            <p style="font-size:12px; color:var(--muted); margin:8px 0 0;">Follow the prompts to sign in with your Anthropic account. KukuiBot will use the CLI credentials automatically — no key to paste.</p>
+          </div>
+          <div class="btn-row" style="margin-top:16px;">
+            <button class="btn btn-secondary" onclick="document.getElementById('claude-cli-flow').style.display='none'; document.getElementById('claude-method-picker').style.display='block';">← Back</button>
+            <button class="btn btn-primary" onclick="submitClaudeCli()">I've logged in — Continue</button>
+          </div>
+        </div>
+
+        <!-- API key input -->
+        <div id="claude-apikey-flow" style="display:none;">
+          <label for="claude_key">Anthropic API Key</label>
+          <input type="password" id="claude_key" placeholder="sk-ant-...">
+          <div class="help-text">
+            Get your key at <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com/settings/keys</a>.
+          </div>
+          <div class="btn-row" style="margin-top:12px;">
+            <button class="btn btn-secondary" onclick="document.getElementById('claude-apikey-flow').style.display='none'; document.getElementById('claude-method-picker').style.display='block';">← Back</button>
+            <button class="btn btn-primary" onclick="submitClaudeKey()" id="claude-btn">Connect</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- CLAUDE CODE: Success -->
+      <div id="claude-success" style="display:none; text-align:center; padding: 20px 0;">
+        <div style="font-size:48px; margin-bottom:12px;">✓</div>
+        <p style="color:var(--green); font-size:16px; font-weight:600;">Claude Code Connected</p>
+      </div>
+
+      <!-- ANTHROPIC: Key Input -->
+      <div id="anthropic-flow" style="display:none;">
+        <h3 style="font-size:16px; margin:0 0 6px;">Anthropic API Key</h3>
+        <p class="subtitle">For direct Anthropic model access (separate from Claude Code).</p>
+        <label for="anthropic_key">API Key</label>
+        <input type="password" id="anthropic_key" placeholder="sk-ant-...">
+        <div class="help-text">
+          Get your key at <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com/settings/keys</a>.
+        </div>
+        <div class="btn-row" style="margin-top:12px;">
+          <button class="btn btn-secondary" onclick="backToMethods()">← Back</button>
+          <button class="btn btn-primary" onclick="submitAnthropicKey()" id="anthropic-btn">Connect</button>
+        </div>
+      </div>
+
+      <!-- ANTHROPIC: Success -->
+      <div id="anthropic-success" style="display:none; text-align:center; padding: 20px 0;">
+        <div style="font-size:48px; margin-bottom:12px;">✓</div>
+        <p style="color:var(--green); font-size:16px; font-weight:600;">Anthropic Key Saved</p>
+      </div>
+
+      <!-- OPENROUTER: Key Input -->
+      <div id="openrouter-flow" style="display:none;">
+        <h3 style="font-size:16px; margin:0 0 6px;">OpenRouter API Key</h3>
+        <p class="subtitle">Access 100+ models through a single key.</p>
+        <label for="openrouter_key">API Key</label>
+        <input type="password" id="openrouter_key" placeholder="sk-or-...">
+        <div class="help-text">
+          Get your key at <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai/keys</a>.
+        </div>
+        <div class="btn-row" style="margin-top:12px;">
+          <button class="btn btn-secondary" onclick="backToMethods()">← Back</button>
+          <button class="btn btn-primary" onclick="submitOpenRouterKey()" id="openrouter-btn">Connect</button>
+        </div>
+      </div>
+
+      <!-- OPENROUTER: Success -->
+      <div id="openrouter-success" style="display:none; text-align:center; padding: 20px 0;">
+        <div style="font-size:48px; margin-bottom:12px;">✓</div>
+        <p style="color:var(--green); font-size:16px; font-weight:600;">OpenRouter Key Saved</p>
+      </div>
+
+      <div class="error" id="step2-error"></div>
+      <div class="success" id="setup-success">Setup complete! Redirecting...</div>
+    </div>
+  </div>
+
+  <script>
+    let currentStep = 1;
+    let oauthConnected = false;
+    let oauthPollTimer = null;
+    const step1Data = {};
+
+    // --- Step 0: Certificate trust detection ---
+    function showCertStep() {
+      const ua = navigator.userAgent || '';
+      const isIOS = /iPhone|iPad|iPod/i.test(ua);
+      const isMac = /Macintosh|Mac OS/i.test(ua) && !isIOS;
+
+      if (isIOS) document.getElementById('cert-ios').style.display = 'block';
+      else if (isMac) document.getElementById('cert-mac').style.display = 'block';
+      else document.getElementById('cert-other').style.display = 'block';
+
+      document.getElementById('step-0').classList.add('visible');
+      document.getElementById('step-1').classList.remove('visible');
+      document.getElementById('dot-0').classList.add('active');
+      currentStep = 0;
+    }
+
+    function skipCertStep() {
+      document.getElementById('step-0').classList.remove('visible');
+      document.getElementById('step-1').classList.add('visible');
+      document.getElementById('dot-0').classList.replace('active', 'done');
+      document.getElementById('dot-1').classList.add('active');
+      currentStep = 1;
+    }
+
+    // Check if we're on HTTPS with an untrusted cert
+    (function detectCertTrust() {
+      if (location.protocol !== 'https:') return; // HTTP, no cert needed
+
+      // Localhost — mkcert -install already trusted the CA during install, skip Step 0
+      if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+        skipCertStep();
+        return;
+      }
+
+      // Cloudflare tunnel / public domain — cert is already trusted
+      const isLocalIP = /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.|\[?fe80)/i.test(location.hostname);
+      if (!isLocalIP) { skipCertStep(); return; }
+
+      // Check if this is a first-time setup (not reconfigure)
+      if (window.location.hash === '#step2') return;
+
+      // LAN IP — show cert step (other devices need to install the CA manually)
+      showCertStep();
+    })();
+
+    // --- Auto-populate username from name (first word, lowercased) ---
+    function syncUsername() {
+      const nameEl = document.getElementById('full_name');
+      const unEl = document.getElementById('username');
+      if (nameEl && unEl) {
+        const first = nameEl.value.trim().split(/\s+/)[0] || '';
+        unEl.value = first.toLowerCase().replace(/[^a-z0-9._-]/g, '');
+      }
+    }
+
+    document.getElementById('full_name').addEventListener('input', syncUsername);
+
+    // Poll for autofill (Safari fills after DOMContentLoaded)
+    let _autofillCheck = setInterval(() => {
+      const nameEl = document.getElementById('full_name');
+      if (nameEl && nameEl.value) { syncUsername(); clearInterval(_autofillCheck); }
+    }, 300);
+    setTimeout(() => clearInterval(_autofillCheck), 5000);
+
+    function goStep2() {
+      // Flush autofill
+      ['full_name', 'email', 'password'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.focus(); el.blur(); }
+      });
+      syncUsername();
+
+      const fullName = document.getElementById('full_name').value.trim();
+      const email = document.getElementById('email').value.trim();
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+      const errEl = document.getElementById('step1-error');
+      errEl.style.display = 'none';
+
+      // In dev preview mode, skip validation — just advance to Step 2
+      if (devMode) {
+        step1Data.display_name = fullName || 'Dev User';
+        step1Data.email = email;
+        step1Data.username = username || 'dev';
+        step1Data.password = password || 'devdev';
+      } else {
+        if (!fullName) { errEl.textContent = 'Name is required'; errEl.style.display = 'block'; return; }
+        if (!username) { errEl.textContent = 'Username could not be generated'; errEl.style.display = 'block'; return; }
+        if (password.length < 6) { errEl.textContent = 'Password must be at least 6 characters'; errEl.style.display = 'block'; return; }
+      }
+
+      step1Data.display_name = fullName;
+      step1Data.email = email;
+      step1Data.username = username;
+      step1Data.password = password;
+
+      document.getElementById('step-1').classList.remove('visible');
+      document.getElementById('step-2').classList.add('visible');
+      document.getElementById('dot-0').className = 'step-dot done';
+      document.getElementById('dot-1').className = 'step-dot done';
+      document.getElementById('dot-2').className = 'step-dot active';
+      currentStep = 2;
+    }
+
+    function goStep1() {
+      cancelOAuth();
+      document.getElementById('step-2').classList.remove('visible');
+      document.getElementById('step-1').classList.add('visible');
+      document.getElementById('dot-2').classList.remove('active');
+      document.getElementById('dot-1').classList.replace('done', 'active');
+      currentStep = 1;
+    }
+
+    // --- Method Picker ---
+
+    let selectedMethod = 'oauth';
+    const _allFlows = ['claude-flow', 'anthropic-flow', 'openrouter-flow'];
+
+    function selectMethod(method) {
+      selectedMethod = method;
+      document.getElementById('method-picker').style.display = 'none';
+      document.getElementById('step2-error').style.display = 'none';
+      _allFlows.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+      });
+      const flowId = method + '-flow';
+      const flowEl = document.getElementById(flowId);
+      if (flowEl) flowEl.style.display = 'block';
+    }
+
+    function backToMethods() {
+      _allFlows.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+      });
+      document.getElementById('method-picker').style.display = 'block';
+      document.getElementById('step2-error').style.display = 'none';
+    }
+
+    // --- Claude Code Flow ---
+
+    function selectClaudeMethod(method) {
+      document.getElementById('claude-method-picker').style.display = 'none';
+      if (method === 'cli') {
+        document.getElementById('claude-cli-flow').style.display = 'block';
+      } else {
+        document.getElementById('claude-apikey-flow').style.display = 'block';
+      }
+    }
+
+    async function submitClaudeCli() {
+      // Set auth strategy to "local" — uses CLI credentials
+      try {
+        const res = await fetch('/auth/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: 'local', provider_type: 'claude_code_cli' }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+
+        document.getElementById('claude-flow').style.display = 'none';
+        document.getElementById('method-picker').style.display = 'none';
+        document.getElementById('claude-success').style.display = 'block';
+        setTimeout(() => finishSetup(), 800);
+      } catch (e) {
+        const errEl = document.getElementById('step2-error');
+        errEl.textContent = e.message;
+        errEl.style.display = 'block';
+      }
+    }
+
+    async function submitClaudeKey() {
+      const key = document.getElementById('claude_key').value.trim();
+      const errEl = document.getElementById('step2-error');
+      errEl.style.display = 'none';
+
+      if (!key) { errEl.textContent = 'Please enter your Anthropic API key'; errEl.style.display = 'block'; return; }
+
+      document.getElementById('claude-btn').disabled = true;
+      try {
+        const res = await fetch('/auth/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: key, provider_type: 'claude_code' }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+
+        document.getElementById('claude-flow').style.display = 'none';
+        document.getElementById('method-picker').style.display = 'none';
+        document.getElementById('claude-success').style.display = 'block';
+        setTimeout(() => finishSetup(), 800);
+      } catch (e) {
+        errEl.textContent = e.message;
+        errEl.style.display = 'block';
+        document.getElementById('claude-btn').disabled = false;
+      }
+    }
+
+    // --- Anthropic Key Flow ---
+
+    async function submitAnthropicKey() {
+      const key = document.getElementById('anthropic_key').value.trim();
+      const errEl = document.getElementById('step2-error');
+      errEl.style.display = 'none';
+
+      if (!key) { errEl.textContent = 'Please enter your Anthropic API key'; errEl.style.display = 'block'; return; }
+
+      document.getElementById('anthropic-btn').disabled = true;
+      try {
+        const res = await fetch('/auth/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: key, provider_type: 'anthropic' }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+
+        document.getElementById('anthropic-flow').style.display = 'none';
+        document.getElementById('method-picker').style.display = 'none';
+        document.getElementById('anthropic-success').style.display = 'block';
+        setTimeout(() => finishSetup(), 800);
+      } catch (e) {
+        errEl.textContent = e.message;
+        errEl.style.display = 'block';
+        document.getElementById('anthropic-btn').disabled = false;
+      }
+    }
+
+    // --- OpenRouter Key Flow ---
+
+    async function submitOpenRouterKey() {
+      const key = document.getElementById('openrouter_key').value.trim();
+      const errEl = document.getElementById('step2-error');
+      errEl.style.display = 'none';
+
+      if (!key) { errEl.textContent = 'Please enter your OpenRouter API key'; errEl.style.display = 'block'; return; }
+
+      document.getElementById('openrouter-btn').disabled = true;
+      try {
+        const res = await fetch('/auth/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: key, provider_type: 'openrouter' }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+
+        document.getElementById('openrouter-flow').style.display = 'none';
+        document.getElementById('method-picker').style.display = 'none';
+        document.getElementById('openrouter-success').style.display = 'block';
+        setTimeout(() => finishSetup(), 800);
+      } catch (e) {
+        errEl.textContent = e.message;
+        errEl.style.display = 'block';
+        document.getElementById('openrouter-btn').disabled = false;
+      }
+    }
+
+    // --- OAuth Flow ---
+
+    const isLocalAccess = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+
+    async function startOAuth() {
+      const errEl = document.getElementById('step2-error');
+      errEl.style.display = 'none';
+
+      // IMPORTANT: Open the window FIRST (in the user gesture call stack)
+      // to avoid popup blockers. We'll set the URL after the fetch.
+      const authWindow = window.open('about:blank', '_blank');
+      if (authWindow) {
+        authWindow.document.write('<html><head><title>Connecting to OpenAI\u2026</title><style>body{background:#0a0a0f;color:#e0e0e8;font-family:system-ui,-apple-system,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0}.c{text-align:center}.s{width:28px;height:28px;border:3px solid rgba(255,255,255,0.06);border-top-color:#6366f1;border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 16px}@keyframes spin{to{transform:rotate(360deg)}}</style></head><body><div class="c"><div class="s"></div><p>Redirecting to OpenAI\u2026</p></div></body></html>');
+        authWindow.document.close();
+      }
+
+      // Show waiting state
+      document.getElementById('method-picker').style.display = 'none';
+      document.getElementById('oauth-waiting').style.display = 'block';
+
+      // If not on localhost, show the paste fallback immediately
+      // because the localhost:1455 callback won't reach this browser
+      if (!isLocalAccess) {
+        document.getElementById('paste-fallback').style.display = 'block';
+        document.getElementById('oauth-waiting-hint').textContent =
+          'Sign in at the OpenAI tab, then paste the redirect URL below.';
+      }
+
+      try {
+        const res = await fetch('/auth/oauth/start', { method: 'POST' });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+
+        // Navigate the already-opened window to the auth URL
+        if (authWindow && !authWindow.closed) {
+          authWindow.location.href = data.url;
+        } else {
+          // Popup was blocked — show the URL as a link instead
+          document.getElementById('paste-fallback').style.display = 'block';
+          document.getElementById('oauth-waiting-hint').innerHTML =
+            '<a href="' + data.url + '" target="_blank" style="color:var(--accent);">Click here to open OpenAI login</a>' +
+            '<br>Then paste the redirect URL below.';
+        }
+
+        // Poll for completion (works when accessing from localhost)
+        oauthPollTimer = setInterval(pollOAuth, 1500);
+      } catch (e) {
+        if (authWindow && !authWindow.closed) authWindow.close();
+        errEl.textContent = e.message;
+        errEl.style.display = 'block';
+        document.getElementById('method-picker').style.display = 'block';
+        document.getElementById('oauth-waiting').style.display = 'none';
+      }
+    }
+
+    async function submitPastedUrl() {
+      const input = document.getElementById('paste-redirect-url');
+      const url = input.value.trim();
+      const errEl = document.getElementById('step2-error');
+      errEl.style.display = 'none';
+
+      if (!url) return;
+
+      // Extract the code from the pasted URL
+      try {
+        const parsed = new URL(url.startsWith('http') ? url : 'http://' + url);
+        const code = parsed.searchParams.get('code');
+        const state = parsed.searchParams.get('state');
+
+        if (!code) {
+          errEl.textContent = 'Could not find authorization code in that URL. Make sure you copied the full address bar.';
+          errEl.style.display = 'block';
+          return;
+        }
+
+        // Send the code to the server for exchange
+        const res = await fetch('/auth/oauth/exchange', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code, state }),
+        });
+        const data = await res.json();
+
+        if (data.error) throw new Error(data.error);
+
+        // Success!
+        clearInterval(oauthPollTimer);
+        oauthConnected = true;
+        document.getElementById('oauth-waiting').style.display = 'none';
+        document.getElementById('method-picker').style.display = 'none';
+        document.getElementById('oauth-success').style.display = 'block';
+        document.getElementById('oauth-account').textContent = 'Account: ' + (data.account_id || '');
+
+        // Auto-finish setup after a brief pause
+        setTimeout(() => finishSetup(), 800);
+
+      } catch (e) {
+        errEl.textContent = e.message;
+        errEl.style.display = 'block';
+      }
+    }
+
+    async function pollOAuth() {
+      try {
+        const res = await fetch('/auth/oauth/status');
+        const data = await res.json();
+
+        if (data.status === 'success') {
+          clearInterval(oauthPollTimer);
+          // Complete the flow — exchange code for tokens and save
+          const completeRes = await fetch('/auth/oauth/complete', { method: 'POST' });
+          const completeData = await completeRes.json();
+
+          oauthConnected = true;
+          document.getElementById('oauth-waiting').style.display = 'none';
+          document.getElementById('method-picker').style.display = 'none';
+          document.getElementById('oauth-success').style.display = 'block';
+          document.getElementById('oauth-account').textContent = 'Account: ' + (completeData.account_id || '');
+
+          // Auto-finish setup after a brief pause
+          setTimeout(() => finishSetup(), 800);
+        } else if (data.status === 'error' || data.status === 'timeout') {
+          clearInterval(oauthPollTimer);
+          const errEl = document.getElementById('step2-error');
+          errEl.textContent = data.error || 'Authentication failed. Try again.';
+          errEl.style.display = 'block';
+          document.getElementById('oauth-waiting').style.display = 'none';
+          document.getElementById('method-picker').style.display = 'block';
+        }
+        // else status === 'waiting' — keep polling
+      } catch (e) {
+        // Network error — keep polling, it might recover
+      }
+    }
+
+    async function cancelOAuth() {
+      clearInterval(oauthPollTimer);
+      try { await fetch('/auth/oauth/cancel', { method: 'POST' }); } catch {}
+      document.getElementById('oauth-waiting').style.display = 'none';
+      document.getElementById('method-picker').style.display = 'block';
+    }
+
+    // --- Finish Setup ---
+
+    async function finishSetup() {
+      const errEl = document.getElementById('step2-error');
+      const successEl = document.getElementById('setup-success');
+      errEl.style.display = 'none';
+      successEl.style.display = 'none';
+
+      // If reconfiguring or dev preview (account already exists), just redirect — token was already saved by OAuth/API key flow
+      if (forceStep2 || devMode) {
+        successEl.style.display = 'block';
+        setTimeout(() => { window.location.href = '/'; }, 800);
+        return;
+      }
+
+      // Create the admin account (token already saved by OAuth or API key)
+      const body = { ...step1Data };
+
+      try {
+        const res = await fetch('/auth/setup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          errEl.textContent = data.error || 'Setup failed';
+          errEl.style.display = 'block';
+          return;
+        }
+        successEl.style.display = 'block';
+        setTimeout(() => { window.location.href = '/'; }, 1000);
+      } catch (e) {
+        errEl.textContent = 'Connection error: ' + e.message;
+        errEl.style.display = 'block';
+      }
+    }
+
+    async function skipSetup() {
+      const body = { ...step1Data };
+      try {
+        const res = await fetch('/auth/setup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (data.error) { document.getElementById('step2-error').textContent = data.error; document.getElementById('step2-error').style.display = 'block'; return; }
+        window.location.href = '/';
+      } catch (e) {
+        document.getElementById('step2-error').textContent = e.message;
+        document.getElementById('step2-error').style.display = 'block';
+      }
+    }
+
+    // If setup is already complete, redirect to home — unless user came to reconfigure OpenAI (#step2)
+    // ?dev=true bypasses the redirect so the full setup flow can be previewed
+    const forceStep2 = window.location.hash === '#step2';
+    const _isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+    const devMode = _isLocal && new URLSearchParams(window.location.search).get('dev') === 'true';
+    // In dev mode, disable HTML5 form validation so empty fields don't block Continue
+    if (devMode) {
+      const f = document.getElementById('step1-form');
+      if (f) f.setAttribute('novalidate', '');
+    }
+    fetch('/auth/status').then(r => r.json()).then(data => {
+      if (data.setup_complete && !forceStep2 && !devMode) {
+        window.location.href = '/';
+      } else if (data.setup_complete && forceStep2) {
+        // Skip step 1 (account already exists), go straight to OpenAI setup
+        document.getElementById('step-1').style.display = 'none';
+        document.getElementById('step-2').classList.add('visible');
+        // Hide progress dots since we're only doing step 2
+        const dots = document.querySelector('.steps');
+        if (dots) dots.style.display = 'none';
+        currentStep = 2;
+      } else if (data.setup_complete && devMode) {
+        // Dev preview mode — show the full flow but don't submit to /auth/setup
+        // (account already exists, just previewing the UI)
+      }
+    });
+  </script>
+</body>
+</html>
