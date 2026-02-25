@@ -4,7 +4,7 @@
 #    or: curl -fsSL <url>/uninstall.sh | bash
 #    or: bash uninstall.sh --dir ~/my-kukuibot
 
-set -e
+set +e  # Don't bail on errors — uninstall should keep going
 
 # --- Parse flags ---
 CUSTOM_DIR=""
@@ -28,6 +28,12 @@ if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
   exit 0
 fi
 
+# --- Prime sudo ---
+if ! sudo -n true 2>/dev/null; then
+  echo "→ This uninstaller needs admin access. Enter your password:"
+  sudo -v
+fi
+
 # --- Stop and unload services ---
 echo "→ Stopping services..."
 for svc in com.kukuibot.server com.kukuibot.worker; do
@@ -41,7 +47,7 @@ done
 echo "→ Removing privileged helper daemon..."
 sudo launchctl bootout system/com.kukuibot.privhelper 2>/dev/null || true
 sudo rm -f /Library/LaunchDaemons/com.kukuibot.privhelper.plist
-rm -f /tmp/kukuibot-priv.sock /tmp/kukuibot-privhelper.log /tmp/kukuibot-privileged.log
+sudo rm -f /tmp/kukuibot-priv.sock /tmp/kukuibot-privhelper.log /tmp/kukuibot-privileged.log
 echo "  ✓ com.kukuibot.privhelper removed"
 
 # --- Remove cron jobs ---
@@ -75,7 +81,7 @@ fi
 
 # --- Clean up logs ---
 echo "→ Cleaning up logs..."
-rm -f /tmp/kukuibot-server.log /tmp/kukuibot-worker.log
+sudo rm -f /tmp/kukuibot-*.log /tmp/kukuibot-priv.sock
 echo "  ✓ Logs removed"
 
 echo ""
