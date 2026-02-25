@@ -380,6 +380,19 @@ async def api_tabs_sync(req: Request):
                     elif model_key == "spark":
                         active_spark += 1
 
+            # Garbage-collect orphaned tab_meta entries: no worker_identity, no history,
+            # older than 24h. Prevents phantom "Other" tabs on fresh browser loads.
+            gc_cutoff = now - 86400
+            db.execute(
+                """
+                DELETE FROM tab_meta
+                WHERE owner = ? AND (worker_identity IS NULL OR worker_identity = '')
+                  AND updated_at < ?
+                  AND session_id NOT IN (SELECT session_id FROM history)
+                """,
+                (owner, gc_cutoff),
+            )
+
             # Clean up old tombstones (>7 days)
             cutoff = now - (7 * 86400)
             db.execute("DELETE FROM tab_tombstones WHERE deleted_at < ? AND deleted_at > 0", (cutoff,))
