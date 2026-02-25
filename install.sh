@@ -103,6 +103,14 @@ fi
 echo "✓ Homebrew"
 
 # --- Check/install Python 3.11+ ---
+# Always check if brew Python exists and prepend it to PATH first,
+# because /usr/bin/python3 (Xcode CLT 3.9) wins by default even after
+# brew install. This handles both fresh installs AND re-runs.
+BREW_PY_PREFIX="$(brew --prefix python@3.13 2>/dev/null || true)"
+if [ -n "$BREW_PY_PREFIX" ] && [ -d "$BREW_PY_PREFIX/libexec/bin" ]; then
+  export PATH="$BREW_PY_PREFIX/libexec/bin:$PATH"
+fi
+
 NEED_PYTHON=false
 if ! command -v python3 &>/dev/null; then
   NEED_PYTHON=true
@@ -115,8 +123,7 @@ else
 fi
 if [ "$NEED_PYTHON" = true ]; then
   brew install python@3.13 </dev/null
-  # Homebrew Python doesn't always win over /usr/bin/python3 via PATH alone.
-  # Explicitly prepend the brew Python's libexec/bin to guarantee it's first.
+  # Re-check prefix after install
   BREW_PY_PREFIX="$(brew --prefix python@3.13 2>/dev/null)"
   if [ -n "$BREW_PY_PREFIX" ] && [ -d "$BREW_PY_PREFIX/libexec/bin" ]; then
     export PATH="$BREW_PY_PREFIX/libexec/bin:$PATH"
