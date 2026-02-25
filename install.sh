@@ -150,14 +150,23 @@ echo "✓ Root CA trusted"
 
 # --- Set up directories ---
 SRC_DIR="$KUKUIBOT_HOME/src"
+VENV_DIR="$KUKUIBOT_HOME/venv"
 REPO_URL="${KUKUIBOT_REPO:-https://github.com/ryanjw888/KukuiBot.git}"
-PYTHON_BIN=$(python3 -c 'import sys; print(sys.executable)')
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
-# Build PATH_ENV that includes the directory containing our resolved python3
-PYTHON_BIN_DIR="$(dirname "$PYTHON_BIN")"
-PATH_ENV="${PYTHON_BIN_DIR}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 mkdir -p "$KUKUIBOT_HOME" "$LAUNCH_AGENTS"
+
+# --- Create/update virtual environment ---
+# PEP 668 (Python 3.12+) blocks system-wide pip installs.
+# A venv avoids this and keeps deps isolated.
+if [ ! -d "$VENV_DIR" ]; then
+  echo "→ Creating virtual environment..."
+  python3 -m venv "$VENV_DIR"
+fi
+# Use the venv's python for everything from here on
+PYTHON_BIN="$VENV_DIR/bin/python3"
+PYTHON_BIN_DIR="$(dirname "$PYTHON_BIN")"
+PATH_ENV="${PYTHON_BIN_DIR}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 # --- Accept Xcode license (required before git works after fresh CLT install) ---
 sudo xcodebuild -license accept </dev/null 2>/dev/null || true
@@ -178,7 +187,7 @@ cd "$SRC_DIR"
 
 # --- Install Python deps ---
 echo "→ Installing Python dependencies..."
-python3 -m pip install -q -r requirements.txt </dev/null 2>/dev/null || pip3 install -q -r requirements.txt </dev/null
+"$PYTHON_BIN" -m pip install -q -r requirements.txt </dev/null
 
 # --- Generate HTTPS certs ---
 if [ ! -f certs/kukuibot.pem ]; then
