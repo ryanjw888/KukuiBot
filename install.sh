@@ -86,7 +86,7 @@ fi
 # --- Check/install Homebrew ---
 if ! command -v brew &>/dev/null; then
   echo "→ Installing Homebrew (this may take a few minutes)..."
-  NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" </dev/null
   # Add Homebrew to PATH for Apple Silicon Macs
   if [ -f /opt/homebrew/bin/brew ]; then
     eval "$(/opt/homebrew/bin/brew shellenv)"
@@ -105,7 +105,7 @@ echo "✓ Homebrew"
 # --- Check/install Python ---
 if ! command -v python3 &>/dev/null; then
   echo "→ Installing Python 3..."
-  brew install python3
+  brew install python3 </dev/null
 fi
 
 PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
@@ -116,13 +116,13 @@ for dep in mkcert ripgrep; do
   [ "$dep" = "ripgrep" ] && cmd="rg"
   if ! command -v "$cmd" &>/dev/null; then
     echo "→ Installing $dep..."
-    brew install "$dep"
+    brew install "$dep" </dev/null
   fi
   echo "✓ $dep"
 done
 
 # --- Install root CA (one-time) ---
-mkcert -install 2>/dev/null || true
+mkcert -install </dev/null 2>/dev/null || true
 echo "✓ Root CA trusted"
 
 # --- Set up directories ---
@@ -135,7 +135,7 @@ PATH_ENV="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 mkdir -p "$KUKUIBOT_HOME" "$LAUNCH_AGENTS"
 
 # --- Accept Xcode license (required before git works after fresh CLT install) ---
-sudo xcodebuild -license accept 2>/dev/null || true
+sudo xcodebuild -license accept </dev/null 2>/dev/null || true
 
 # --- Clone or update source ---
 if [ -d "$SRC_DIR/.git" ]; then
@@ -143,7 +143,7 @@ if [ -d "$SRC_DIR/.git" ]; then
   cd "$SRC_DIR" && git pull --ff-only 2>/dev/null || true
 else
   echo "→ Cloning KukuiBot to $SRC_DIR"
-  git clone "$REPO_URL" "$SRC_DIR" || {
+  git clone "$REPO_URL" "$SRC_DIR" </dev/null || {
     echo "❌ Git clone failed. Check your network connection and try again:"
     echo "   git clone $REPO_URL $SRC_DIR"
     exit 1
@@ -153,7 +153,7 @@ cd "$SRC_DIR"
 
 # --- Install Python deps ---
 echo "→ Installing Python dependencies..."
-pip3 install -q -r requirements.txt 2>/dev/null || pip install -q -r requirements.txt
+pip3 install -q -r requirements.txt </dev/null 2>/dev/null || pip install -q -r requirements.txt </dev/null
 
 # --- Generate HTTPS certs ---
 if [ ! -f certs/kukuibot.pem ]; then
