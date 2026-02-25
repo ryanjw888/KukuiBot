@@ -529,6 +529,7 @@
     let currentStep = 1;
     let oauthConnected = false;
     let oauthPollTimer = null;
+    let skippedAccount = false;
     const step1Data = {};
 
     // --- Step 0: Certificate trust detection ---
@@ -949,6 +950,29 @@
         return;
       }
 
+      // If user skipped account creation, send skip_account to mark setup complete
+      if (skippedAccount) {
+        try {
+          const res = await fetch('/auth/setup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ skip_account: true }),
+          });
+          const data = await res.json();
+          if (data.error) {
+            errEl.textContent = data.error;
+            errEl.style.display = 'block';
+            return;
+          }
+          successEl.style.display = 'block';
+          setTimeout(() => { window.location.href = '/'; }, 1000);
+        } catch (e) {
+          errEl.textContent = 'Connection error: ' + e.message;
+          errEl.style.display = 'block';
+        }
+        return;
+      }
+
       // Create the admin account (token already saved by OAuth or API key)
       const body = { ...step1Data };
 
@@ -972,27 +996,16 @@
       }
     }
 
-    // --- Skip everything (localhost-only mode) ---
-    async function skipEverything() {
-      try {
-        const res = await fetch('/auth/setup', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ skip_account: true }),
-        });
-        const data = await res.json();
-        if (data.error) {
-          const errEl = document.getElementById('step1-error');
-          errEl.textContent = data.error;
-          errEl.style.display = 'block';
-          return;
-        }
-        window.location.href = '/';
-      } catch (e) {
-        const errEl = document.getElementById('step1-error');
-        errEl.textContent = 'Connection error: ' + e.message;
-        errEl.style.display = 'block';
-      }
+    // --- Skip account creation (localhost-only mode) — advance to provider setup ---
+    function skipEverything() {
+      skippedAccount = true;
+      // Advance to step 2 (provider setup) instead of skipping everything
+      document.getElementById('step-1').classList.remove('visible');
+      document.getElementById('step-2').classList.add('visible');
+      document.getElementById('dot-0').className = 'step-dot done';
+      document.getElementById('dot-1').className = 'step-dot done';
+      document.getElementById('dot-2').className = 'step-dot active';
+      currentStep = 2;
     }
 
     // --- Skip provider setup (account created, configure providers later) ---
