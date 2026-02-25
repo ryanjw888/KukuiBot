@@ -189,6 +189,26 @@ cd "$SRC_DIR"
 echo "→ Installing Python dependencies..."
 "$PYTHON_BIN" -m pip install -q -r requirements.txt </dev/null
 
+# --- Seed default data files (only if missing — won't overwrite user customizations) ---
+echo "→ Seeding default configuration files..."
+for f in SOUL.md USER.md TOOLS.md MEMORY.md; do
+  if [ ! -f "$KUKUIBOT_HOME/$f" ] && [ -f "$SRC_DIR/agent/$f" ]; then
+    cp "$SRC_DIR/agent/$f" "$KUKUIBOT_HOME/$f"
+  fi
+done
+mkdir -p "$KUKUIBOT_HOME/workers" "$KUKUIBOT_HOME/models"
+for f in "$SRC_DIR/workers/"*.md; do
+  [ -f "$f" ] || continue
+  base="$(basename "$f")"
+  [ -f "$KUKUIBOT_HOME/workers/$base" ] || cp "$f" "$KUKUIBOT_HOME/workers/$base"
+done
+for f in "$SRC_DIR/models/"*.md; do
+  [ -f "$f" ] || continue
+  base="$(basename "$f")"
+  [ -f "$KUKUIBOT_HOME/models/$base" ] || cp "$f" "$KUKUIBOT_HOME/models/$base"
+done
+echo "✓ Configuration files ready"
+
 # --- Generate HTTPS certs ---
 if [ ! -f certs/kukuibot.pem ]; then
   echo "→ Generating HTTPS certificates..."
