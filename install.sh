@@ -36,6 +36,27 @@ echo "   Port: $PORT"
 echo "   Data: $KUKUIBOT_HOME"
 echo ""
 
+# --- Check Xcode Command Line Tools ---
+# On a fresh Mac, `python3` is a shim that triggers the Xcode CLT install dialog.
+# Detect this and guide the user instead of letting it hang.
+if ! xcode-select -p &>/dev/null; then
+  echo "❌ Xcode Command Line Tools not installed."
+  echo "   Run this first, then re-run the installer:"
+  echo ""
+  echo "   xcode-select --install"
+  echo ""
+  exit 1
+fi
+
+# --- Check Homebrew ---
+if ! command -v brew &>/dev/null; then
+  echo "❌ Homebrew not found. Install it first:"
+  echo "   /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+  echo ""
+  echo "   Then re-run this installer."
+  exit 1
+fi
+
 # --- Check Python ---
 if ! command -v python3 &>/dev/null; then
   echo "❌ Python 3 not found. Install it first:"
@@ -45,12 +66,6 @@ fi
 
 PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
 echo "✓ Python $PY_VER"
-
-# --- Check/install Homebrew deps ---
-if ! command -v brew &>/dev/null; then
-  echo "❌ Homebrew not found. Install it first: https://brew.sh"
-  exit 1
-fi
 
 for dep in mkcert ripgrep; do
   cmd="$dep"
