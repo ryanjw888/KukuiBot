@@ -134,14 +134,17 @@ PATH_ENV="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 mkdir -p "$KUKUIBOT_HOME" "$LAUNCH_AGENTS"
 
+# --- Accept Xcode license (required before git works after fresh CLT install) ---
+sudo xcodebuild -license accept 2>/dev/null || true
+
 # --- Clone or update source ---
 if [ -d "$SRC_DIR/.git" ]; then
   echo "→ Updating existing source at $SRC_DIR"
   cd "$SRC_DIR" && git pull --ff-only 2>/dev/null || true
 else
   echo "→ Cloning KukuiBot to $SRC_DIR"
-  git clone "$REPO_URL" "$SRC_DIR" 2>/dev/null || {
-    echo "❌ Git clone failed. Please clone the repo manually:"
+  git clone "$REPO_URL" "$SRC_DIR" || {
+    echo "❌ Git clone failed. Check your network connection and try again:"
     echo "   git clone $REPO_URL $SRC_DIR"
     exit 1
   }
@@ -330,8 +333,6 @@ echo "    Server logs:      tail -f /tmp/kukuibot-server.log"
 echo "═══════════════════════════════════════════════════"
 
 # Open in default browser
-if [ "$SERVER_OK" = true ]; then
-  echo ""
-  echo "→ Opening KukuiBot in your browser..."
-  open "https://localhost:${PORT}"
-fi
+echo ""
+echo "→ Opening KukuiBot in your browser..."
+open "https://localhost:${PORT}"
