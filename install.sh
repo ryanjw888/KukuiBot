@@ -36,16 +36,18 @@ echo "   Port: $PORT"
 echo "   Data: $KUKUIBOT_HOME"
 echo ""
 
-# --- Check Xcode Command Line Tools ---
+# --- Check/install Xcode Command Line Tools ---
 # On a fresh Mac, `python3` is a shim that triggers the Xcode CLT install dialog.
-# Detect this and guide the user instead of letting it hang.
+# Install CLT automatically and wait for it to finish.
 if ! xcode-select -p &>/dev/null; then
-  echo "❌ Xcode Command Line Tools not installed."
-  echo "   Run this first, then re-run the installer:"
-  echo ""
-  echo "   xcode-select --install"
-  echo ""
-  exit 1
+  echo "→ Installing Xcode Command Line Tools (required for Python, git, etc.)..."
+  echo "  A system dialog will appear — click 'Install' to continue."
+  xcode-select --install 2>/dev/null || true
+  # Wait for the install to complete (polls every 5s)
+  until xcode-select -p &>/dev/null; do
+    sleep 5
+  done
+  echo "✓ Xcode Command Line Tools installed"
 fi
 
 # --- Check Homebrew ---
