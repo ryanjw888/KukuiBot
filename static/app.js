@@ -1300,6 +1300,9 @@ async function syncTabsFromServerSessions(limit = 60, opts = {}) {
 
       let existing = tabs.find(t => t.sessionId === sid || t.id === tabId);
       if (!existing) {
+        // Only create new tabs from sync if the session has a worker identity or was
+        // explicitly created. Old orphaned sessions should not spawn phantom tabs.
+        if (!savedWorkerIdentity && !savedCreatedExplicitly) continue;
         existing = createTab(modelKey, {
           id: tabId,
           sessionId: sid,
