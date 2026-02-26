@@ -1052,41 +1052,45 @@
         </div>
       </div>
 
-      <!-- Credentials Card -->
+      <!-- Setup & Credentials Card -->
       <div class="card">
-        <h2>Credentials</h2>
-        <details style="margin-bottom:12px;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:rgba(0,0,0,0.12);font-size:12px;color:var(--muted);">
-          <summary style="cursor:pointer;font-weight:600;color:var(--text);font-size:13px;">Setup Guide — Getting an OAuth Token</summary>
-          <div style="margin-top:10px;line-height:1.6;">
-            <strong>Step 1:</strong> Install the Claude CLI<br>
-            <code style="display:block;margin:6px 0 4px;padding:6px 10px;border-radius:6px;background:rgba(0,0,0,0.25);color:var(--text);font-size:11px;">curl -fsSL https://claude.ai/install.sh | bash</code>
-            <span style="font-size:11px;">If the installer says <code>~/.local/bin</code> is not in your PATH, run:</span>
-            <code style="display:block;margin:4px 0 8px;padding:6px 10px;border-radius:6px;background:rgba(0,0,0,0.25);color:var(--text);font-size:11px;">echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc</code>
-            <strong>Step 2:</strong> Generate a token<br>
-            <code style="display:block;margin:6px 0 4px;padding:6px 10px;border-radius:6px;background:rgba(0,0,0,0.25);color:var(--text);font-size:11px;">claude setup-token</code>
-            <span style="font-size:11px;">Follow the prompts to authenticate with your Anthropic account. It will output a token.</span><br><br>
-            <strong>Step 3:</strong> Paste the token below and click Save.
+        <h2>Setup</h2>
+        <div style="font-size:13px;color:var(--text);line-height:1.7;">
+          <p style="margin-bottom:8px;"><strong>Step 1.</strong> Install the Claude CLI</p>
+          <pre style="background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:12px;color:#a8b2d1;margin:0 0 6px;overflow-x:auto;user-select:all;">curl -fsSL https://claude.ai/install.sh | bash</pre>
+          <p style="font-size:11px;color:var(--muted);margin-bottom:12px;">If the installer says <code>~/.local/bin</code> is not in your PATH, run:<br>
+          <code style="font-size:11px;">echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc</code></p>
+
+          <p style="margin-bottom:8px;"><strong>Step 2.</strong> Authenticate with Anthropic</p>
+          <pre style="background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:12px;color:#a8b2d1;margin:0 0 6px;overflow-x:auto;user-select:all;">claude setup-token</pre>
+          <p style="font-size:11px;color:var(--muted);margin-bottom:12px;">This opens a browser login flow and saves the token to <code>~/.claude/.credentials.json</code>.</p>
+
+          <p style="margin-bottom:8px;"><strong>Step 3.</strong> Import the token</p>
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
+            <button class="btn primary" onclick="importClaudeToken()" id="claude-import-btn" style="font-size:12px;padding:7px 16px;">Import Token from CLI</button>
+            <span id="claude-import-status" style="font-size:11px;color:var(--muted);"></span>
           </div>
-        </details>
-        <div class="auth-input-group">
-          <label>OAuth Token <span style="opacity:0.5;font-weight:normal;">(from <code>claude setup-token</code>)</span></label>
-          <div style="display:flex;gap:6px;align-items:flex-start;">
-            <textarea id="claude-oauth-token" rows="1" placeholder="Paste token here…" autocomplete="off"
-              style="flex:1;resize:vertical;min-height:36px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:rgba(0,0,0,0.25);color:var(--text);font-family:var(--mono);font-size:12px;"></textarea>
-            <button class="btn primary" onclick="saveClaudeToken()" style="font-size:11px;padding:6px 12px;white-space:nowrap;">Save</button>
-            <button class="btn" onclick="clearClaudeToken()" style="font-size:11px;padding:6px 10px;">Clear</button>
-          </div>
-          <div id="claude-token-loaded" style="display:none;margin-top:6px;padding:6px 10px;border-radius:8px;border:1px solid rgba(34,197,94,0.35);background:rgba(34,197,94,0.10);color:#bbf7d0;font-size:11px;">
-            ✅ Token loaded
-          </div>
+          <p style="font-size:11px;color:var(--muted);margin-bottom:0;">Reads the token from <code>~/.claude/.credentials.json</code> automatically. Must be run on the same machine as the server.</p>
         </div>
-        <div class="auth-input-group" style="margin-top:10px;">
-          <label>API Key <span style="opacity:0.5;font-weight:normal;">(alternative to OAuth)</span></label>
-          <div style="display:flex;gap:6px;align-items:center;">
-            <input type="password" id="claude-api-key" placeholder="sk-ant-..." autocomplete="off" style="flex:1;" />
-            <button class="btn primary" onclick="saveClaudeApiKey()" style="font-size:11px;padding:6px 12px;white-space:nowrap;">Save</button>
-            <button class="btn" onclick="clearClaudeApiKey()" style="font-size:11px;padding:6px 10px;">Clear</button>
-          </div>
+
+        <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);">
+          <details style="font-size:12px;color:var(--muted);">
+            <summary style="cursor:pointer;font-size:12px;color:var(--muted);">Manual token entry</summary>
+            <div style="margin-top:8px;">
+              <div class="auth-input-group">
+                <label>OAuth Token</label>
+                <div style="display:flex;gap:6px;align-items:flex-start;">
+                  <textarea id="claude-oauth-token" rows="1" placeholder="Paste token here…" autocomplete="off"
+                    style="flex:1;resize:vertical;min-height:36px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:rgba(0,0,0,0.25);color:var(--text);font-family:var(--mono);font-size:12px;"></textarea>
+                  <button class="btn primary" onclick="saveClaudeToken()" style="font-size:11px;padding:6px 12px;white-space:nowrap;">Save</button>
+                  <button class="btn" onclick="clearClaudeToken()" style="font-size:11px;padding:6px 10px;">Clear</button>
+                </div>
+              </div>
+            </div>
+          </details>
+        </div>
+        <div id="claude-token-loaded" style="display:none;margin-top:6px;padding:6px 10px;border-radius:8px;border:1px solid rgba(34,197,94,0.35);background:rgba(34,197,94,0.10);color:#bbf7d0;font-size:11px;">
+          ✅ Token loaded
         </div>
         <div id="claude-msg" style="font-size:11px;color:var(--muted);margin-top:8px;"></div>
       </div>
@@ -1095,14 +1099,6 @@
       <div class="card">
         <h2>Configuration</h2>
         <div style="display:flex;flex-wrap:wrap;gap:12px 24px;align-items:center;">
-          <div style="display:flex;align-items:center;gap:8px;">
-            <label style="font-size:12px;color:var(--muted);white-space:nowrap;">Auth Mode</label>
-            <select id="claude-auth-strategy" onchange="setClaudeAuthStrategy(this.value)"
-              style="padding:5px 8px;border-radius:8px;border:1px solid var(--border);background:rgba(0,0,0,0.25);color:var(--text);font-size:12px;">
-              <option value="configured">Configured (key/token)</option>
-              <option value="local">Local (CLI login)</option>
-            </select>
-          </div>
           <div style="display:flex;align-items:center;gap:8px;">
             <label style="font-size:12px;color:var(--muted);white-space:nowrap;">Auto Compact</label>
             <select id="claude-auto-compact-pct" onchange="setClaudeAutoCompactPct(this.value)"
@@ -1117,37 +1113,6 @@
         </div>
         <div style="font-size:11px;color:var(--muted);margin-top:8px;line-height:1.4;">
           Auto compact triggers smart-compact at the chosen % of the 1M context window. The CLI also auto-compacts at ~90%.
-        </div>
-      </div>
-
-      <!-- Setup Guide Card -->
-      <div class="card">
-        <h2>Setup Guide</h2>
-        <div style="font-size:13px;color:var(--text);line-height:1.7;">
-          <p style="font-size:12px;color:var(--muted);margin-bottom:10px;">Run these on any machine with a browser (your laptop, desktop, etc.):</p>
-
-          <p style="margin-bottom:8px;"><strong>1. Install Claude Code CLI</strong> (if not already installed)</p>
-          <pre style="background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:12px;color:#a8b2d1;margin:0 0 6px;overflow-x:auto;user-select:all;">curl -fsSL https://claude.ai/install.sh | bash</pre>
-          <p style="font-size:11px;color:var(--muted);margin-bottom:12px;">If the installer says <code>~/.local/bin</code> is not in your PATH, run:<br>
-          <code style="font-size:11px;">echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc</code></p>
-
-          <p style="margin-bottom:8px;"><strong>2. Generate a token</strong></p>
-          <pre style="background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:12px;color:#a8b2d1;margin:0 0 6px;overflow-x:auto;user-select:all;">claude setup-token</pre>
-          <p style="font-size:11px;color:var(--muted);margin-bottom:12px;">This opens a browser login flow and saves the token locally.</p>
-
-          <p style="margin-bottom:8px;"><strong>3. Copy the token</strong></p>
-          <pre style="background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:12px;color:#a8b2d1;margin:0 0 6px;overflow-x:auto;user-select:all;">cat ~/.claude/.credentials.json | python3 -c "import json,sys; print(json.load(sys.stdin)['claudeAiOauth']['accessToken'])"</pre>
-          <p style="font-size:11px;color:var(--muted);margin-bottom:12px;">Copy the <code>sk-ant-oat01-...</code> token that prints out.</p>
-
-          <p style="margin-bottom:8px;"><strong>4. Paste in KukuiBot</strong></p>
-          <p style="font-size:12px;color:var(--muted);margin-bottom:4px;">In the Credentials section above:</p>
-          <ul style="font-size:12px;color:var(--muted);margin:0 0 8px 16px;padding:0;">
-            <li>Paste the token into the <strong>OAuth Token</strong> field and click <strong>Save</strong></li>
-            <li>Set <strong>Auth Mode</strong> to <strong>Configured (key/token)</strong></li>
-          </ul>
-
-          <p style="margin-bottom:8px;"><strong>5. Test it</strong></p>
-          <p style="font-size:12px;color:var(--muted);margin:0;">Create a Claude Code worker tab and send a quick prompt to confirm it's connected.</p>
         </div>
       </div>
     </div>
@@ -1733,7 +1698,6 @@ function setClaudeLoaded(loaded) {
 
 async function loadClaudeToken() {
   const el = document.getElementById('claude-oauth-token');
-  const keyEl = document.getElementById('claude-api-key');
   const msg = document.getElementById('claude-msg');
   setClaudeLoaded(false);
   try {
@@ -1741,22 +1705,43 @@ async function loadClaudeToken() {
     const d = await r.json().catch(() => ({}));
     if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
     const tok = String(d.oauth_token || '');
-    const hasKey = !!d.has_api_key;
     if (el) el.value = tok;
-    if (keyEl) keyEl.value = ''; // never echo keys
     setClaudeLoaded(!!tok.trim());
     if (msg) {
       msg.style.color = 'var(--muted)';
-      if (tok.trim() && hasKey) msg.textContent = 'Token is saved on server. (API key also saved)';
-      else if (tok.trim()) msg.textContent = 'Token is saved on server.';
-      else if (hasKey) msg.textContent = 'API key is saved on server.';
-      else msg.textContent = 'No Claude credentials saved.';
+      msg.textContent = tok.trim() ? 'Token is saved on server.' : 'No Claude credentials saved.';
     }
   } catch (e) {
     if (msg) {
       msg.style.color = 'var(--red)';
       msg.textContent = '❌ ' + (e?.message || String(e));
     }
+  }
+}
+
+async function importClaudeToken() {
+  const btn = document.getElementById('claude-import-btn');
+  const status = document.getElementById('claude-import-status');
+  const msg = document.getElementById('claude-msg');
+  if (btn) { btn.disabled = true; btn.textContent = 'Importing…'; }
+  if (status) { status.style.color = 'var(--muted)'; status.textContent = ''; }
+  if (msg) msg.textContent = '';
+  try {
+    const r = await fetch(API + '/api/claude/import-token', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json', 'Accept': 'application/json'},
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
+    await loadClaudeToken();
+    setClaudeLoaded(true);
+    if (status) { status.style.color = 'var(--green)'; status.textContent = '✅ Token imported! Restart worker to apply.'; }
+    toast('✅ Claude token imported');
+  } catch (e) {
+    if (status) { status.style.color = 'var(--red)'; status.textContent = '❌ ' + (e?.message || String(e)); }
+    toast('❌ Import failed');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Import Token from CLI'; }
   }
 }
 

@@ -2025,6 +2025,34 @@ async def api_claude_config_set(req: Request):
     }
 
 
+@app.post("/api/claude/import-token")
+async def api_claude_import_token(req: Request):
+    """Auto-import OAuth token from local Claude CLI credentials file."""
+    if not _is_admin(req):
+        return JSONResponse({"ok": False, "error": "Admin only"}, status_code=403)
+    cred_path = Path.home() / ".claude" / ".credentials.json"
+    if not cred_path.exists():
+        return JSONResponse({"ok": False, "error": "Claude CLI not authenticated. Run 'claude setup-token' first."}, status_code=404)
+    try:
+        import json as _json
+        creds = _json.loads(cred_path.read_text())
+        token = creds.get("claudeAiOauth", {}).get("accessToken", "")
+        if not token:
+            return JSONResponse({"ok": False, "error": "No OAuth token found in credentials file. Run 'claude setup-token' first."}, status_code=404)
+        tok = _sanitize_bearer_token(token)
+        set_config("claude_code.oauth_token", tok)
+        strategy_raw = "configured"
+        set_config("claude_code.auth_strategy", strategy_raw)
+        pool = get_claude_pool()
+        if pool:
+            pool._auth_strategy = strategy_raw
+            for proc in pool._processes.values():
+                proc.set_auth_strategy(strategy_raw)
+        return {"ok": True, "saved": True, "length": len(tok), "auth_strategy": strategy_raw}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"Failed to read credentials: {e}"}, status_code=500)
+
+
 # --- Claude Persistent Process Management ---
 
 @app.get("/api/claude/status")
