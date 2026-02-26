@@ -5682,7 +5682,10 @@ async function boot() {
 async function pollClaudeBridgeHealth() {
   try {
     const r = await fetch('/claude/api-pool/status', { credentials: 'same-origin' });
-    _claudeBridgeUp = r.ok;
+    if (!r.ok) { _claudeBridgeUp = false; return; }
+    const d = await r.json();
+    // Only mark as up if there are actual active bridges or available workers
+    _claudeBridgeUp = (d.active_bridges && d.active_bridges.length > 0) || (d.available_workers && d.available_workers.length > 0);
   } catch { _claudeBridgeUp = false; }
 }
 pollClaudeBridgeHealth();
