@@ -4411,6 +4411,15 @@ function _toggleEditorSettingsDOM() {
       nav.className = 'sidebar-nav';
       nav.innerHTML = `
         <button class="sidebar-nav-item" onclick="setAppMode('chat')"><span class="sidebar-nav-icon">&#128172;</span>Chat</button>
+        <div class="sidebar-theme-wrap">
+          <button class="sidebar-nav-item" onclick="event.stopPropagation();this.nextElementSibling.classList.toggle('show')"><span class="sidebar-nav-icon">&#127912;</span>Theme &#9656;</button>
+          <div class="sidebar-submenu">
+            ${THEMES.map(t => {
+              const active = (localStorage.getItem(LS_THEME_KEY) || 'default') === t;
+              return `<button class="sidebar-theme-item${active ? ' active-theme' : ''}" onclick="applyTheme('${t}');_toggleEditorSettingsDOM();showSettings=false;">${active ? '\u25cf ' : '\u25cb '}${THEME_LABELS[t]}</button>`;
+            }).join('')}
+          </div>
+        </div>
         <button class="sidebar-nav-item" onclick="forceRefreshApp()"><span class="sidebar-nav-icon">&#128260;</span>Reload App</button>
         <a href="/settings-v2.html" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#9881;</span>Settings</a>
       `;
@@ -4429,6 +4438,15 @@ function _toggleEditorSettingsDOM() {
       nav.className = 'mobile-settings-nav';
       nav.innerHTML = `
         <button class="sidebar-nav-item" onclick="setAppMode('chat')"><span class="sidebar-nav-icon">&#128172;</span>Chat</button>
+        <div class="sidebar-theme-wrap">
+          <button class="sidebar-nav-item" onclick="event.stopPropagation();this.nextElementSibling.classList.toggle('show')"><span class="sidebar-nav-icon">&#127912;</span>Theme &#9656;</button>
+          <div class="sidebar-submenu">
+            ${THEMES.map(t => {
+              const active = (localStorage.getItem(LS_THEME_KEY) || 'default') === t;
+              return `<button class="sidebar-theme-item${active ? ' active-theme' : ''}" onclick="applyTheme('${t}');_toggleEditorSettingsDOM();showSettings=false;">${active ? '\u25cf ' : '\u25cb '}${THEME_LABELS[t]}</button>`;
+            }).join('')}
+          </div>
+        </div>
         <button class="sidebar-nav-item" onclick="forceRefreshApp()"><span class="sidebar-nav-icon">&#128260;</span>Reload App</button>
         <a href="/settings-v2.html" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#9881;</span>Settings</a>
       `;

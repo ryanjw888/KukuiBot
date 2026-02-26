@@ -66,6 +66,12 @@
 .sol-light .settings-menu .menu-section { border-bottom-color: rgba(0,0,0,0.06); }
 .sol-light .theme-submenu { border-color: rgba(0,0,0,0.1); box-shadow: 0 8px 32px rgba(0,0,0,0.12); }
 .sol-light .sidebar-submenu { border-color: rgba(0,0,0,0.1); box-shadow: 0 8px 32px rgba(0,0,0,0.12); }
+.sol-light .status-bar { background: rgba(238,232,213,0.85); }
+.sol-light .reasoning-picker button { background: rgba(238,232,213,0.8); }
+.sol-light .reasoning-picker button.active { background: rgba(38,139,210,0.2); color: #1a6da8; }
+.sol-light .reasoning-picker button.reason-none.active { background: rgba(181,137,0,0.2); color: #b58900; }
+.sol-light .btn-sm.active { background: rgba(133,153,0,0.2); color: #859900; }
+.sol-light .work-log-toggle:hover { background: rgba(0,0,0,.04); }
 
 /* Claude theme — dark blue base with terracotta/coral accents */
 .claude-theme {
