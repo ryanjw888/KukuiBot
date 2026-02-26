@@ -891,6 +891,12 @@ class PersistentClaudeProcess:
 
             logger.info(f"Claude process started (PID={self.proc.pid}, resume_status={self.resume_status}, slot={self.slot_id})")
 
+        except FileNotFoundError:
+            logger.error(f"Claude Code CLI not found at '{CLAUDE_BIN}'. Install with: npm install -g @anthropic-ai/claude-code")
+            raise RuntimeError(
+                f"Claude Code CLI not found ('{CLAUDE_BIN}'). "
+                f"Install it with: npm install -g @anthropic-ai/claude-code"
+            )
         except Exception as e:
             logger.error(f"Failed to spawn claude process: {e}")
             if resume_session:
