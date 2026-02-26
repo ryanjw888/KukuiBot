@@ -292,13 +292,6 @@ function connectClaudeEventsForTab(tab) {
         return;
       }
       if (evt.type === 'compaction') {
-        if (_localCompactInProgress) return;
-        const allFiles = [...(evt.loaded_files || []), ...(evt.active_docs || [])];
-        claudeTab.messages.push({
-          role: 'system', ts: Date.now(), text: 'Smart Compact — compacting…',
-          _card: { icon: '🗜', title: 'Smart Compact', files: allFiles, stats: ['Compacting…'] }
-        });
-        persistTabs(); requestRender({ forceStickBottom: autoStickBottom });
         return;
       }
       if (evt.type === 'compaction_done') {
