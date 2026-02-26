@@ -4411,7 +4411,7 @@ function _toggleEditorSettingsDOM() {
       nav.className = 'sidebar-nav';
       nav.innerHTML = `
         <button class="sidebar-nav-item" onclick="setAppMode('chat')"><span class="sidebar-nav-icon">&#128172;</span>Chat</button>
-        <div class="sidebar-theme-wrap">
+        <div class="sidebar-submenu-wrap">
           <button class="sidebar-nav-item" onclick="event.stopPropagation();this.nextElementSibling.classList.toggle('show')"><span class="sidebar-nav-icon">&#127912;</span>Theme &#9656;</button>
           <div class="sidebar-submenu">
             ${THEMES.map(t => {
@@ -4438,7 +4438,7 @@ function _toggleEditorSettingsDOM() {
       nav.className = 'mobile-settings-nav';
       nav.innerHTML = `
         <button class="sidebar-nav-item" onclick="setAppMode('chat')"><span class="sidebar-nav-icon">&#128172;</span>Chat</button>
-        <div class="sidebar-theme-wrap">
+        <div class="sidebar-submenu-wrap">
           <button class="sidebar-nav-item" onclick="event.stopPropagation();this.nextElementSibling.classList.toggle('show')"><span class="sidebar-nav-icon">&#127912;</span>Theme &#9656;</button>
           <div class="sidebar-submenu">
             ${THEMES.map(t => {
