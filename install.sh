@@ -201,6 +201,15 @@ PATH_ENV="${PYTHON_BIN_DIR}:${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:
 if [ -n "$CLAUDE_DIR" ] && ! echo "$PATH_ENV" | grep -qF "$CLAUDE_DIR"; then
   PATH_ENV="${CLAUDE_DIR}:${PATH_ENV}"
 fi
+# Set explicit CLAUDE_BIN env var for launchd if claude was found
+CLAUDE_BIN_PLIST_ENTRY=""
+if command -v claude &>/dev/null; then
+  CLAUDE_FULL_PATH="$(command -v claude)"
+  CLAUDE_BIN_PLIST_ENTRY="
+        <key>CLAUDE_BIN</key>
+        <string>${CLAUDE_FULL_PATH}</string>"
+  echo "  Claude binary: $CLAUDE_FULL_PATH"
+fi
 
 # --- Accept Xcode license (required before git works after fresh CLT install) ---
 sudo xcodebuild -license accept </dev/null 2>/dev/null || true
@@ -310,7 +319,7 @@ cat > "$LAUNCH_AGENTS/com.kukuibot.server.plist" << PLIST
         <key>KUKUIBOT_HOME</key>
         <string>${KUKUIBOT_HOME}</string>
         <key>KUKUIBOT_PORT</key>
-        <string>${PORT}</string>
+        <string>${PORT}</string>${CLAUDE_BIN_PLIST_ENTRY}
     </dict>
 </dict>
 </plist>
