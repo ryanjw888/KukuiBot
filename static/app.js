@@ -2123,9 +2123,9 @@ function renderSettingsMenu(modelKey = (activeTab()?.modelKey || 'codex')) {
 function renderRootWarning() {
   return `<div class="root-warning-overlay" onclick="if(event.target===this){showRootWarning=false;requestRender({ preserveScroll: true });}">
     <div class="root-warning">
-      <h3>⚠️ Enable Privileged Root Mode (30 min)</h3>
-      <p>This requests a 30-minute privileged session from the local helper. You will authenticate via a native macOS prompt. Password is not sent through chat/model context.</p>
-      <p><strong style="color:var(--red)">Only enable this if you trust the current task.</strong> Access is temporary and scoped to allowlisted commands.</p>
+      <h3>⚠️ Enable Root Mode (30 min)</h3>
+      <p>This grants passwordless sudo access for 30 minutes by adding a temporary sudoers rule. The rule is automatically removed when the timer expires or you revoke it.</p>
+      <p><strong style="color:var(--red)">Only enable this if you trust the current task.</strong></p>
       <div class="warn-actions">
         <button class="btn-cancel" onclick="showRootWarning=false;requestRender({ preserveScroll: true })">Cancel</button>
         <button class="btn-confirm" onclick="confirmRoot()">Enable Root Mode</button>
@@ -4460,7 +4460,7 @@ async function confirmRoot() {
     elevatedSession = { enabled: false, remaining_seconds: 0 };
   }
 
-  // Request OS-privileged helper elevation (native prompt).
+  // Request OS-privileged helper to write temporary sudoers rule.
   try {
     const pres = await fetch(API + '/api/privileged/elevate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -4469,12 +4469,14 @@ async function confirmRoot() {
     const pdata = await pres.json().catch(() => ({}));
     if (!pres.ok || !pdata.ok) {
       if (tab) {
-        tab.messages.push(_sysCard(`Privileged helper elevation failed: ${pdata.error || ('HTTP ' + pres.status)}. App root mode may still be active, but OS sudo actions are unavailable.`, '⚠️', 'Elevation'));
+        tab.messages.push(_sysCard(`Root elevation failed: ${pdata.error || ('HTTP ' + pres.status)}`, '⚠️', 'Root'));
       }
+    } else if (tab) {
+      tab.messages.push(_sysCard('Root mode enabled — passwordless sudo for 30 minutes.', '🔓', 'Root'));
     }
   } catch (e) {
     if (tab) {
-      tab.messages.push(_sysCard(`Privileged helper unavailable: ${e?.message || e}. App root mode may still be active, but OS sudo actions are unavailable.`, '⚠️', 'Elevation'));
+      tab.messages.push(_sysCard(`Privileged helper unavailable: ${e?.message || e}. Is the helper daemon running?`, '⚠️', 'Root'));
     }
   }
 

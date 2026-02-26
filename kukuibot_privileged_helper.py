@@ -2,8 +2,9 @@
 """KukuiBot privileged helper daemon.
 
 Run as root (launchd). Exposes a tiny allowlisted RPC API over a Unix socket.
-It can elevate a short-lived per-session capability by prompting for admin auth via
-AppleScript `display dialog` with hidden answer. Password is never sent to model/chat.
+Elevation writes a temporary sudoers drop-in file granting NOPASSWD to the
+requesting user for the TTL duration. A background reaper thread auto-removes
+expired sudoers files as a safety net.
 """
 
 from __future__ import annotations
@@ -16,13 +17,16 @@ import shlex
 import socket
 import stat
 import subprocess
+import threading
 import time
 from pathlib import Path
 
 SOCKET_PATH = os.environ.get("KUKUIBOT_PRIV_SOCKET", "/tmp/kukuibot-priv.sock")
 LOG_PATH = os.environ.get("KUKUIBOT_PRIV_LOG", "/tmp/kukuibot-privileged.log")
-DEFAULT_TTL = int(os.environ.get("KUKUIBOT_PRIV_DEFAULT_TTL", "600"))
-MAX_TTL = int(os.environ.get("KUKUIBOT_PRIV_MAX_TTL", "1800"))
+DEFAULT_TTL = int(os.environ.get("KUKUIBOT_PRIV_DEFAULT_TTL", "1800"))
+MAX_TTL = int(os.environ.get("KUKUIBOT_PRIV_MAX_TTL", "3600"))
+SUDOERS_DIR = Path("/etc/sudoers.d")
+SUDOERS_PREFIX = "kukuibot-root-"
 
 logger = logging.getLogger("kukuibot.privhelper")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
@@ -49,6 +53,7 @@ def _quote(s: str) -> str:
 class Helper:
     def __init__(self):
         self.elevated_until: dict[str, float] = {}
+        self.elevated_users: dict[str, str] = {}
 
     def _is_elevated(self, session_id: str) -> int:
         now = time.time()
@@ -56,6 +61,8 @@ class Helper:
         if until <= now:
             if session_id in self.elevated_until:
                 self.elevated_until.pop(session_id, None)
+                self.elevated_users.pop(session_id, None)
+                self._remove_sudoers(session_id)
             return 0
         return int(until - now)
 
@@ -63,54 +70,68 @@ class Helper:
         rem = self._is_elevated(session_id)
         return {"ok": True, "elevated": rem > 0, "remaining_seconds": rem}
 
-    def _elevate_with_prompt(self, session_id: str, ttl_seconds: int) -> dict:
-        # Prompt locally (GUI session) for password. Validate with sudo -S -k -v.
-        ttl = max(60, min(int(ttl_seconds or DEFAULT_TTL), MAX_TTL))
-
+    def _get_console_user(self) -> tuple[int, str]:
+        """Detect the currently logged-in console user (works regardless of who launched the helper)."""
         try:
             uid = os.stat('/dev/console').st_uid
-            user = pwd.getpwuid(uid).pw_name
+            return uid, pwd.getpwuid(uid).pw_name
         except Exception:
             uid = int(os.environ.get("SUDO_UID") or "501")
-            user = pwd.getpwuid(uid).pw_name if str(uid).isdigit() else os.getlogin()
+            return uid, pwd.getpwuid(uid).pw_name
 
-        osa_script = f'''
-set promptText to "KukuiBot needs admin approval for privileged actions.\\nPassword is validated locally and never sent to chat/model."
-set d to display dialog promptText default answer "" with hidden answer buttons {{"Cancel", "Approve"}} default button "Approve" with icon caution
-set pw to text returned of d
-if pw is "" then error number -128
-return pw
-'''.strip()
+    def _sudoers_path(self, session_id: str) -> Path:
+        # Sanitize session_id for filesystem use
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in session_id)
+        return SUDOERS_DIR / f"{SUDOERS_PREFIX}{safe}"
 
-        # Run AppleScript directly in loginwindow user context.
-        rc, out, err = _run([
-            "/bin/launchctl", "asuser", str(uid),
-            "/usr/bin/osascript", "-e", osa_script,
-        ], timeout=120)
+    def _write_sudoers(self, user: str, session_id: str) -> None:
+        """Write a temporary NOPASSWD sudoers rule for the given user."""
+        path = self._sudoers_path(session_id)
+        content = f"# KukuiBot temporary root elevation — auto-expires\n{user} ALL=(ALL) NOPASSWD: ALL\n"
+        path.write_text(content)
+        os.chmod(str(path), 0o440)
+        # Validate with visudo — if invalid, remove immediately
+        rc, _, err = _run(["/usr/sbin/visudo", "-cf", str(path)], timeout=5)
         if rc != 0:
-            _append_audit({"event": "elevate_denied", "session_id": session_id, "detail": err or out or "cancelled", "uid": uid, "user": user})
-            return {"ok": False, "error": "Authentication cancelled or unavailable"}
+            path.unlink(missing_ok=True)
+            raise RuntimeError(f"sudoers validation failed: {err}")
 
-        pw = out
-        # Validate password using sudo for target user (same GUI user context).
-        cmd = f"printf %s {shlex.quote(pw)} | /usr/bin/sudo -S -k -p '' -v"
-        rc2, out2, err2 = _run([
-            "/bin/launchctl", "asuser", str(uid),
-            "/usr/bin/sudo", "-u", user, "bash", "-lc", cmd
-        ], timeout=30)
-        pw = ""  # best effort clear
-        if rc2 != 0:
-            _append_audit({"event": "elevate_failed", "session_id": session_id, "detail": (err2 or out2 or "bad password")[:200], "uid": uid, "user": user})
-            return {"ok": False, "error": "Authentication failed"}
+    def _remove_sudoers(self, session_id: str) -> None:
+        """Remove the temporary sudoers file for a session."""
+        path = self._sudoers_path(session_id)
+        path.unlink(missing_ok=True)
+
+    def _elevate(self, session_id: str, ttl_seconds: int) -> dict:
+        ttl = max(60, min(int(ttl_seconds or DEFAULT_TTL), MAX_TTL))
+        uid, user = self._get_console_user()
+
+        try:
+            self._write_sudoers(user, session_id)
+        except Exception as e:
+            _append_audit({"event": "elevate_failed", "session_id": session_id, "detail": str(e), "uid": uid, "user": user})
+            return {"ok": False, "error": f"Failed to write sudoers rule: {e}"}
 
         self.elevated_until[session_id] = time.time() + ttl
+        self.elevated_users[session_id] = user
         _append_audit({"event": "elevate_ok", "session_id": session_id, "ttl": ttl, "uid": uid, "user": user})
         return {"ok": True, "elevated": True, "remaining_seconds": ttl}
 
     def _revoke(self, session_id: str) -> dict:
         self.elevated_until.pop(session_id, None)
+        self.elevated_users.pop(session_id, None)
+        self._remove_sudoers(session_id)
         _append_audit({"event": "revoke", "session_id": session_id})
         return {"ok": True, "elevated": False, "remaining_seconds": 0}
+
+    def _reap_expired(self) -> None:
+        """Remove sudoers files for expired sessions. Called periodically by the reaper thread."""
+        now = time.time()
+        expired = [sid for sid, until in list(self.elevated_until.items()) if until <= now]
+        for sid in expired:
+            self.elevated_until.pop(sid, None)
+            self.elevated_users.pop(sid, None)
+            self._remove_sudoers(sid)
+            _append_audit({"event": "expired", "session_id": sid})
 
     def _run_action(self, session_id: str, action: str, args: dict) -> dict:
         rem = self._is_elevated(session_id)
@@ -152,7 +173,7 @@ return pw
         if op == "status":
             return self._status(sid)
         if op == "elevate":
-            return self._elevate_with_prompt(sid, int(req.get("ttl_seconds") or DEFAULT_TTL))
+            return self._elevate(sid, int(req.get("ttl_seconds") or DEFAULT_TTL))
         if op == "revoke":
             return self._revoke(sid)
         if op == "run":
@@ -160,8 +181,33 @@ return pw
         return {"ok": False, "error": "Unknown op"}
 
 
+def _reaper_loop(helper: Helper):
+    """Background thread that removes expired sudoers files every 10 seconds."""
+    while True:
+        try:
+            helper._reap_expired()
+        except Exception as e:
+            logger.warning(f"reaper error: {e}")
+        time.sleep(10)
+
+
+def _cleanup_stale_sudoers():
+    """Remove any leftover kukuibot sudoers files from a previous run/crash."""
+    try:
+        for f in SUDOERS_DIR.glob(f"{SUDOERS_PREFIX}*"):
+            f.unlink(missing_ok=True)
+            logger.info(f"cleaned up stale sudoers file: {f}")
+    except Exception as e:
+        logger.warning(f"stale sudoers cleanup error: {e}")
+
+
 def serve_forever():
+    _cleanup_stale_sudoers()
     helper = Helper()
+
+    # Start background reaper thread for expired sudoers files
+    reaper = threading.Thread(target=_reaper_loop, args=(helper,), daemon=True)
+    reaper.start()
 
     p = Path(SOCKET_PATH)
     try:
