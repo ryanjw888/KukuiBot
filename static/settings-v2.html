@@ -1055,6 +1055,19 @@
       <!-- Credentials Card -->
       <div class="card">
         <h2>Credentials</h2>
+        <details style="margin-bottom:12px;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:rgba(0,0,0,0.12);font-size:12px;color:var(--muted);">
+          <summary style="cursor:pointer;font-weight:600;color:var(--text);font-size:13px;">Setup Guide — Getting an OAuth Token</summary>
+          <div style="margin-top:10px;line-height:1.6;">
+            <strong>Step 1:</strong> Install the Claude CLI<br>
+            <code style="display:block;margin:6px 0 4px;padding:6px 10px;border-radius:6px;background:rgba(0,0,0,0.25);color:var(--text);font-size:11px;">curl -fsSL https://claude.ai/install.sh | bash</code>
+            <span style="font-size:11px;">If the installer says <code>~/.local/bin</code> is not in your PATH, run:</span>
+            <code style="display:block;margin:4px 0 8px;padding:6px 10px;border-radius:6px;background:rgba(0,0,0,0.25);color:var(--text);font-size:11px;">echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc</code>
+            <strong>Step 2:</strong> Generate a token<br>
+            <code style="display:block;margin:6px 0 4px;padding:6px 10px;border-radius:6px;background:rgba(0,0,0,0.25);color:var(--text);font-size:11px;">claude setup-token</code>
+            <span style="font-size:11px;">Follow the prompts to authenticate with your Anthropic account. It will output a token.</span><br><br>
+            <strong>Step 3:</strong> Paste the token below and click Save.
+          </div>
+        </details>
         <div class="auth-input-group">
           <label>OAuth Token <span style="opacity:0.5;font-weight:normal;">(from <code>claude setup-token</code>)</span></label>
           <div style="display:flex;gap:6px;align-items:flex-start;">
@@ -1114,7 +1127,9 @@
           <p style="font-size:12px;color:var(--muted);margin-bottom:10px;">Run these on any machine with a browser (your laptop, desktop, etc.):</p>
 
           <p style="margin-bottom:8px;"><strong>1. Install Claude Code CLI</strong> (if not already installed)</p>
-          <pre style="background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:12px;color:#a8b2d1;margin:0 0 12px;overflow-x:auto;user-select:all;">curl -fsSL https://claude.ai/install.sh | bash</pre>
+          <pre style="background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:12px;color:#a8b2d1;margin:0 0 6px;overflow-x:auto;user-select:all;">curl -fsSL https://claude.ai/install.sh | bash</pre>
+          <p style="font-size:11px;color:var(--muted);margin-bottom:12px;">If the installer says <code>~/.local/bin</code> is not in your PATH, run:<br>
+          <code style="font-size:11px;">echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc</code></p>
 
           <p style="margin-bottom:8px;"><strong>2. Generate a token</strong></p>
           <pre style="background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:12px;color:#a8b2d1;margin:0 0 6px;overflow-x:auto;user-select:all;">claude setup-token</pre>
