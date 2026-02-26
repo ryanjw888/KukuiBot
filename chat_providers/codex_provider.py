@@ -117,7 +117,7 @@ async def process_chat_codex(
             if import_from_legacy():
                 token = get_token()
             if not token:
-                await _emit_event(session_id, queue, {"type": "error", "message": "No auth token. Visit /auth to login."}, run_id=run_id)
+                await _emit_event(session_id, queue, {"type": "error", "message": "No OpenAI API key configured. This tab uses Codex (OpenAI) — add an API key in Settings, or create a Claude tab instead."}, run_id=run_id)
                 return
 
         account_id = extract_account_id(token)
