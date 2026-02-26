@@ -3315,17 +3315,21 @@ async def api_backup_status():
     import subprocess
     repo_dir = os.path.join(os.path.dirname(__file__))
 
-    origin_url = ""
+    # Only consider backup "configured" if the user explicitly set a backup repo URL
+    origin_url = get_config("backup_repo_url", "") or ""
     branch = get_config("backup_branch", "") or ""
-    configured = False
+    configured = bool(origin_url)
 
-    try:
-        p = subprocess.run(["git", "-C", repo_dir, "remote", "get-url", "origin"], capture_output=True, text=True, timeout=5)
-        if p.returncode == 0:
-            origin_url = (p.stdout or "").strip()
-            configured = bool(origin_url)
-    except Exception:
-        configured = False
+    # If no explicit config, try to read the git remote (but don't treat the
+    # source-code clone origin as a configured backup — that's the install origin)
+    if not origin_url:
+        try:
+            p = subprocess.run(["git", "-C", repo_dir, "remote", "get-url", "origin"], capture_output=True, text=True, timeout=5)
+            if p.returncode == 0:
+                origin_url = (p.stdout or "").strip()
+                # Don't mark as configured — this is just the install clone origin
+        except Exception:
+            pass
 
     if not branch:
         try:
