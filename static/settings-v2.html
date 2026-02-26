@@ -1103,6 +1103,33 @@
           Auto compact triggers smart-compact at the chosen % of the 1M context window. The CLI also auto-compacts at ~90%.
         </div>
       </div>
+
+      <!-- Setup Guide Card -->
+      <div class="card">
+        <h2>Setup Guide</h2>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:12px;">Recommended: use <strong>Local CLI Auth</strong> — no tokens or keys to manage.</p>
+        <div style="font-size:13px;color:var(--text);line-height:1.7;">
+          <p style="margin-bottom:8px;"><strong>1. Install Claude Code CLI</strong></p>
+          <pre style="background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:12px;color:#a8b2d1;margin:0 0 6px;overflow-x:auto;user-select:all;">curl -fsSL https://claude.ai/install.sh | bash</pre>
+          <p style="font-size:11px;color:var(--muted);margin-bottom:12px;">Then restart your shell or open a new Terminal tab.</p>
+
+          <p style="margin-bottom:8px;"><strong>2. Verify installation</strong></p>
+          <pre style="background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:12px;color:#a8b2d1;margin:0 0 12px;overflow-x:auto;user-select:all;">claude --version</pre>
+
+          <p style="margin-bottom:8px;"><strong>3. Log in to Claude Code</strong></p>
+          <pre style="background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:12px;color:#a8b2d1;margin:0 0 6px;overflow-x:auto;user-select:all;">claude</pre>
+          <p style="font-size:11px;color:var(--muted);margin-bottom:12px;">On first run it opens a browser login flow. If the browser doesn't open, copy the login URL from the terminal.</p>
+
+          <p style="margin-bottom:8px;"><strong>4. Connect in KukuiBot</strong></p>
+          <p style="font-size:12px;color:var(--muted);margin-bottom:4px;">In the Configuration section above:</p>
+          <ul style="font-size:12px;color:var(--muted);margin:0 0 12px 16px;padding:0;">
+            <li>Set <strong>Auth Mode</strong> to <strong>Local (CLI login)</strong></li>
+          </ul>
+
+          <p style="margin-bottom:8px;"><strong>5. Test it</strong></p>
+          <p style="font-size:12px;color:var(--muted);margin:0;">Create a Claude Code worker tab and send a quick prompt to confirm it's connected.</p>
+        </div>
+      </div>
     </div>
 
     <!-- ===== OPENROUTER SECTION ===== -->
