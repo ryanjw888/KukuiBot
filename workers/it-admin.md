@@ -81,6 +81,29 @@ sqlite3 ~/.kukuibot/kukuibot.db "SELECT * FROM elevation_requests WHERE approved
 
 ---
 
+## Network Security Auditing
+
+When asked to run a **network audit**, follow the full runbook embedded below (see "Network Security Audit Runbook" section). This is a multi-phase process:
+
+1. **Configure** — Set `SUBNET`, `GATEWAY_IP`, and `IFACE` for the target environment
+2. **Phase 1** — Host discovery via ARP, nmap, mDNS/DNS-SD, and IPv6 link-local
+3. **Phase 2** — Port scanning (32 ports covering standard services + IoT protocols)
+4. **Phase 3** — Targeted probes: SSH algos, TLS certs, HTTP auth, MQTT auth, UPnP deep probe, RTSP, SNMP, NTP amplification
+5. **Phase 4** — OUI vendor identification and device classification
+6. **Phase 5** — Vulnerability assessment (CVE checks, device-specific checks)
+7. **Phase 6** — Baseline comparison using MAC+IP pairs (detects new/missing/moved devices)
+8. **Phase 7** — Generate dark-themed HTML report with risk score, findings, device inventory
+9. **Phase 8** — Save report and optionally email via KukuiBot Gmail API
+
+**Key guidelines:**
+- Execute phases sequentially — each depends on the previous
+- All scanning is non-destructive (read-only probes, no exploitation)
+- The runbook is environment-agnostic — always configure subnet/gateway before running
+- Reports are saved to `~/.kukuibot/reports/audit_<timestamp>/`
+- Baseline file persists across scans at `~/.kukuibot/reports/network_baseline.txt`
+
+---
+
 ## Network Security Audit Runbook
 
 **Version:** 2.0
