@@ -1052,26 +1052,29 @@
         </div>
       </div>
 
-      <!-- Setup & Credentials Card -->
+      <!-- Setup Card -->
       <div class="card">
         <h2>Setup</h2>
-        <div style="font-size:13px;color:var(--text);line-height:1.7;">
-          <p style="margin-bottom:8px;"><strong>Step 1.</strong> Install the Claude CLI</p>
-          <pre style="background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:12px;color:#a8b2d1;margin:0 0 6px;overflow-x:auto;user-select:all;">curl -fsSL https://claude.ai/install.sh | bash</pre>
-          <p style="font-size:11px;color:var(--muted);margin-bottom:12px;">If the installer says <code>~/.local/bin</code> is not in your PATH, run:<br>
-          <code style="font-size:11px;">echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc</code></p>
-
-          <p style="margin-bottom:8px;"><strong>Step 2.</strong> Authenticate with Anthropic</p>
-          <pre style="background:rgba(0,0,0,0.3);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:12px;color:#a8b2d1;margin:0 0 6px;overflow-x:auto;user-select:all;">claude setup-token</pre>
-          <p style="font-size:11px;color:var(--muted);margin-bottom:12px;">This opens a browser login flow and saves the token to <code>~/.claude/.credentials.json</code>.</p>
-
-          <p style="margin-bottom:8px;"><strong>Step 3.</strong> Import the token</p>
-          <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;">
-            <button class="btn primary" onclick="importClaudeToken()" id="claude-import-btn" style="font-size:12px;padding:7px 16px;">Import Token from CLI</button>
-            <span id="claude-import-status" style="font-size:11px;color:var(--muted);"></span>
-          </div>
-          <p style="font-size:11px;color:var(--muted);margin-bottom:0;">Reads the token from <code>~/.claude/.credentials.json</code> automatically. Must be run on the same machine as the server.</p>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:12px;">Installs the Claude CLI (if needed), opens a browser to authenticate, and imports the token automatically.</p>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">
+          <button class="btn primary" onclick="runClaudeSetup()" id="claude-setup-btn" style="font-size:13px;padding:9px 20px;">Setup Claude Code</button>
+          <button class="btn" onclick="importClaudeToken()" id="claude-import-btn" style="font-size:11px;padding:6px 12px;" title="Re-import token from ~/.claude/.credentials.json">Re-import Token</button>
         </div>
+        <div id="claude-setup-progress" style="display:none;margin-bottom:10px;">
+          <div id="claude-setup-step1" class="claude-setup-step" style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12px;color:var(--muted);">
+            <span class="claude-step-icon" style="width:18px;text-align:center;">○</span>
+            <span class="claude-step-label">Install Claude CLI</span>
+          </div>
+          <div id="claude-setup-step2" class="claude-setup-step" style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12px;color:var(--muted);">
+            <span class="claude-step-icon" style="width:18px;text-align:center;">○</span>
+            <span class="claude-step-label">Authenticate with Anthropic</span>
+          </div>
+          <div id="claude-setup-step3" class="claude-setup-step" style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12px;color:var(--muted);">
+            <span class="claude-step-icon" style="width:18px;text-align:center;">○</span>
+            <span class="claude-step-label">Import token</span>
+          </div>
+        </div>
+        <div id="claude-setup-status" style="font-size:12px;color:var(--muted);"></div>
 
         <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);">
           <details style="font-size:12px;color:var(--muted);">
@@ -1721,10 +1724,8 @@ async function loadClaudeToken() {
 
 async function importClaudeToken() {
   const btn = document.getElementById('claude-import-btn');
-  const status = document.getElementById('claude-import-status');
-  const msg = document.getElementById('claude-msg');
+  const msg = document.getElementById('claude-setup-status');
   if (btn) { btn.disabled = true; btn.textContent = 'Importing…'; }
-  if (status) { status.style.color = 'var(--muted)'; status.textContent = ''; }
   if (msg) msg.textContent = '';
   try {
     const r = await fetch(API + '/api/claude/import-token', {
@@ -1735,13 +1736,75 @@ async function importClaudeToken() {
     if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
     await loadClaudeToken();
     setClaudeLoaded(true);
-    if (status) { status.style.color = 'var(--green)'; status.textContent = '✅ Token imported! Restart worker to apply.'; }
+    if (msg) { msg.style.color = 'var(--green)'; msg.textContent = '✅ Token imported! Restart worker to apply.'; }
     toast('✅ Claude token imported');
   } catch (e) {
-    if (status) { status.style.color = 'var(--red)'; status.textContent = '❌ ' + (e?.message || String(e)); }
+    if (msg) { msg.style.color = 'var(--red)'; msg.textContent = '❌ ' + (e?.message || String(e)); }
     toast('❌ Import failed');
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Import Token from CLI'; }
+    if (btn) { btn.disabled = false; btn.textContent = 'Re-import Token'; }
+  }
+}
+
+function _setStepState(stepNum, state, message) {
+  const el = document.getElementById('claude-setup-step' + stepNum);
+  if (!el) return;
+  const icon = el.querySelector('.claude-step-icon');
+  const label = el.querySelector('.claude-step-label');
+  if (state === 'pending') { icon.textContent = '○'; el.style.color = 'var(--muted)'; }
+  else if (state === 'running') { icon.textContent = '◉'; el.style.color = 'var(--accent)'; }
+  else if (state === 'done') { icon.textContent = '✓'; el.style.color = 'var(--green)'; }
+  else if (state === 'error') { icon.textContent = '✗'; el.style.color = 'var(--red)'; }
+  if (message) label.textContent = message;
+}
+
+async function runClaudeSetup() {
+  const btn = document.getElementById('claude-setup-btn');
+  const progress = document.getElementById('claude-setup-progress');
+  const statusEl = document.getElementById('claude-setup-status');
+  if (btn) { btn.disabled = true; btn.textContent = 'Setting up…'; }
+  if (progress) progress.style.display = 'block';
+  if (statusEl) { statusEl.style.color = 'var(--muted)'; statusEl.textContent = ''; }
+  _setStepState(1, 'pending'); _setStepState(2, 'pending'); _setStepState(3, 'pending');
+
+  try {
+    const es = new EventSource(API + '/api/claude/setup');
+    await new Promise((resolve, reject) => {
+      es.addEventListener('step', (e) => {
+        const d = JSON.parse(e.data);
+        const st = d.status;
+        if (st === 'checking' || st === 'installing' || st === 'running' || st === 'importing') {
+          _setStepState(d.step, 'running', d.message);
+        } else if (st === 'done') {
+          _setStepState(d.step, 'done', d.message);
+        }
+        if (statusEl) { statusEl.style.color = 'var(--muted)'; statusEl.textContent = d.message; }
+      });
+      es.addEventListener('error_msg', (e) => {
+        const d = JSON.parse(e.data);
+        _setStepState(d.step, 'error', d.message);
+        if (statusEl) { statusEl.style.color = 'var(--red)'; statusEl.textContent = d.message; }
+        es.close();
+        reject(new Error(d.message));
+      });
+      es.addEventListener('complete', (e) => {
+        const d = JSON.parse(e.data);
+        if (statusEl) { statusEl.style.color = 'var(--green)'; statusEl.textContent = d.message; }
+        es.close();
+        resolve();
+      });
+      es.onerror = () => {
+        // EventSource fires onerror on stream close; check if we already resolved
+        es.close();
+      };
+    });
+    await loadClaudeToken();
+    setClaudeLoaded(true);
+    toast('✅ Claude Code setup complete!');
+  } catch (e) {
+    toast('❌ Setup failed: ' + (e?.message || String(e)));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Setup Claude Code'; }
   }
 }
 

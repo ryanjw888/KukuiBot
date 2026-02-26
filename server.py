@@ -2053,6 +2053,120 @@ async def api_claude_import_token(req: Request):
         return JSONResponse({"ok": False, "error": f"Failed to read credentials: {e}"}, status_code=500)
 
 
+def _find_claude_cli() -> str | None:
+    """Find the claude CLI binary, checking common install locations."""
+    import shutil
+    found = shutil.which("claude")
+    if found:
+        return found
+    for candidate in [
+        Path.home() / ".local" / "bin" / "claude",
+        Path.home() / ".claude" / "bin" / "claude",
+        Path("/usr/local/bin/claude"),
+    ]:
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+@app.get("/api/claude/setup")
+async def api_claude_setup(req: Request):
+    """One-click Claude Code setup: install CLI, run setup-token, import token. Streams SSE progress."""
+    if not _is_admin(req):
+        return JSONResponse({"ok": False, "error": "Admin only"}, status_code=403)
+
+    import json as _json
+
+    async def _stream():
+        def ev(event: str, data: dict):
+            return f"event: {event}\ndata: {_json.dumps(data)}\n\n"
+
+        # --- Step 1: Check / Install CLI ---
+        yield ev("step", {"step": 1, "status": "checking", "message": "Checking for Claude CLI…"})
+        cli_path = _find_claude_cli()
+
+        if cli_path:
+            yield ev("step", {"step": 1, "status": "done", "message": f"Claude CLI found at {cli_path}"})
+        else:
+            yield ev("step", {"step": 1, "status": "installing", "message": "Installing Claude CLI…"})
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash",
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                    env={**os.environ, "PATH": f"{Path.home() / '.local' / 'bin'}:{os.environ.get('PATH', '')}"},
+                )
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
+                output = stdout.decode(errors="replace") if stdout else ""
+                if proc.returncode != 0:
+                    yield ev("error_msg", {"step": 1, "message": f"Install failed (exit {proc.returncode}): {output[-500:]}"})
+                    return
+                cli_path = _find_claude_cli()
+                if not cli_path:
+                    yield ev("error_msg", {"step": 1, "message": "Install appeared to succeed but claude binary not found. Check PATH."})
+                    return
+                yield ev("step", {"step": 1, "status": "done", "message": f"Claude CLI installed at {cli_path}"})
+            except asyncio.TimeoutError:
+                yield ev("error_msg", {"step": 1, "message": "Install timed out after 120s"})
+                return
+            except Exception as e:
+                yield ev("error_msg", {"step": 1, "message": f"Install error: {e}"})
+                return
+
+        # --- Step 2: Run setup-token ---
+        yield ev("step", {"step": 2, "status": "running", "message": "Launching authentication… A browser window should open."})
+
+        # Record pre-existing credentials mtime so we know when auth completes
+        cred_path = Path.home() / ".claude" / ".credentials.json"
+        pre_mtime = cred_path.stat().st_mtime if cred_path.exists() else 0
+
+        try:
+            env = {**os.environ, "PATH": f"{Path(cli_path).parent}:{os.environ.get('PATH', '')}"}
+            proc = await asyncio.create_subprocess_exec(
+                cli_path, "setup-token",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                env=env,
+            )
+            # Wait up to 5 minutes for user to complete browser auth
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=300)
+            output = stdout.decode(errors="replace") if stdout else ""
+            if proc.returncode != 0:
+                yield ev("error_msg", {"step": 2, "message": f"setup-token failed (exit {proc.returncode}): {output[-500:]}"})
+                return
+            yield ev("step", {"step": 2, "status": "done", "message": "Authentication complete."})
+        except asyncio.TimeoutError:
+            yield ev("error_msg", {"step": 2, "message": "Authentication timed out after 5 minutes. Please try again."})
+            return
+        except Exception as e:
+            yield ev("error_msg", {"step": 2, "message": f"setup-token error: {e}"})
+            return
+
+        # --- Step 3: Import token ---
+        yield ev("step", {"step": 3, "status": "importing", "message": "Importing token…"})
+        if not cred_path.exists():
+            yield ev("error_msg", {"step": 3, "message": "Credentials file not found after auth. Something went wrong."})
+            return
+        try:
+            creds = _json.loads(cred_path.read_text())
+            token = creds.get("claudeAiOauth", {}).get("accessToken", "")
+            if not token:
+                yield ev("error_msg", {"step": 3, "message": "No OAuth token in credentials file."})
+                return
+            tok = _sanitize_bearer_token(token)
+            set_config("claude_code.oauth_token", tok)
+            set_config("claude_code.auth_strategy", "configured")
+            pool = get_claude_pool()
+            if pool:
+                pool._auth_strategy = "configured"
+                for p in pool._processes.values():
+                    p.set_auth_strategy("configured")
+            yield ev("step", {"step": 3, "status": "done", "message": "Token imported and saved!"})
+            yield ev("complete", {"ok": True, "message": "Claude Code is ready. Create a Claude worker tab to start."})
+        except Exception as e:
+            yield ev("error_msg", {"step": 3, "message": f"Import failed: {e}"})
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")
+
+
 # --- Claude Persistent Process Management ---
 
 @app.get("/api/claude/status")
