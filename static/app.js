@@ -50,10 +50,10 @@ let autoNamedSessions = new Set();
 const AUTO_NAME_INTERVAL_MS = 60 * 60 * 1000;
 
 // --- Theme ---
-const THEMES = ['default', 'blue', 'sol-dark', 'sol-light'];
-const THEME_LABELS = { 'default': 'Default', 'blue': 'Blue', 'sol-dark': 'Solarized Dark', 'sol-light': 'Solarized Light' };
+const THEMES = ['blue', 'claudia', 'sol-dark', 'sol-light'];
+const THEME_LABELS = { 'blue': 'Blue', 'claudia': 'Claudia', 'sol-dark': 'Solarized Dark', 'sol-light': 'Solarized Light' };
 const LS_THEME_KEY = 'kukuibot.theme';
-const THEME_CLASS = { 'default': 'claude-theme', 'blue': null, 'sol-dark': 'sol-dark', 'sol-light': 'sol-light' };
+const THEME_CLASS = { 'blue': null, 'claudia': 'claude-theme', 'sol-dark': 'sol-dark', 'sol-light': 'sol-light' };
 function applyTheme(theme) {
   document.body.classList.remove('sol-dark', 'sol-light', 'claude-theme');
   const cls = THEME_CLASS[theme];
@@ -65,7 +65,7 @@ function applyTheme(theme) {
   }
 }
 function cycleTheme() {
-  const current = localStorage.getItem(LS_THEME_KEY) || 'default';
+  const current = localStorage.getItem(LS_THEME_KEY) || 'blue';
   const idx = THEMES.indexOf(current);
   const next = THEMES[(idx + 1) % THEMES.length];
   applyTheme(next);
@@ -75,9 +75,9 @@ function cycleTheme() {
 // Migrate old theme keys
 (function() {
   const saved = localStorage.getItem(LS_THEME_KEY);
-  if (saved === 'claude') localStorage.setItem(LS_THEME_KEY, 'default');
+  if (saved === 'claude' || saved === 'default') localStorage.setItem(LS_THEME_KEY, 'claudia');
 })();
-applyTheme(localStorage.getItem(LS_THEME_KEY) || 'default');
+applyTheme(localStorage.getItem(LS_THEME_KEY) || 'blue');
 
 // --- App Mode (chat vs editor) ---
 let appMode = 'chat'; // 'chat' | 'editor'
@@ -1856,7 +1856,7 @@ function render(opts = {}) {
           <button class="sidebar-nav-item" onclick="event.stopPropagation();this.nextElementSibling.classList.toggle('show')"><span class="sidebar-nav-icon">🎨</span>Theme ▸</button>
           <div class="sidebar-submenu">
             ${THEMES.map(t => {
-              const active = (localStorage.getItem(LS_THEME_KEY) || 'default') === t;
+              const active = (localStorage.getItem(LS_THEME_KEY) || 'blue') === t;
               return `<button class="sidebar-theme-item${active ? ' active-theme' : ''}" onclick="applyTheme('${t}');updateSettingsUI();">${active ? '● ' : '○ '}${THEME_LABELS[t]}</button>`;
             }).join('\n            ')}
           </div>
@@ -1940,7 +1940,7 @@ function render(opts = {}) {
             <button class="sidebar-nav-item" onclick="event.stopPropagation();this.nextElementSibling.classList.toggle('show')"><span class="sidebar-nav-icon">🎨</span>Theme ▸</button>
             <div class="sidebar-submenu">
               ${THEMES.map(t => {
-                const active = (localStorage.getItem(LS_THEME_KEY) || 'default') === t;
+                const active = (localStorage.getItem(LS_THEME_KEY) || 'blue') === t;
                 return `<button class="sidebar-theme-item${active ? ' active-theme' : ''}" onclick="applyTheme('${t}');updateSettingsUI();">${active ? '● ' : '○ '}${THEME_LABELS[t]}</button>`;
               }).join('\n              ')}
             </div>
@@ -2083,7 +2083,7 @@ function renderSettingsMenu(modelKey = (activeTab()?.modelKey || 'codex')) {
         <button class="menu-item has-submenu" onclick="event.stopPropagation();this.nextElementSibling.classList.toggle('show')">🎨 Theme ▸</button>
         <div class="theme-submenu">
           ${THEMES.map(t => {
-            const active = (localStorage.getItem(LS_THEME_KEY) || 'default') === t;
+            const active = (localStorage.getItem(LS_THEME_KEY) || 'blue') === t;
             return `<button class="menu-item${active ? ' active-theme' : ''}" onclick="applyTheme('${t}');updateSettingsUI();">${active ? '● ' : '○ '}${THEME_LABELS[t]}</button>`;
           }).join('\n          ')}
         </div>
@@ -4415,7 +4415,7 @@ function _toggleEditorSettingsDOM() {
           <button class="sidebar-nav-item" onclick="event.stopPropagation();this.nextElementSibling.classList.toggle('show')"><span class="sidebar-nav-icon">&#127912;</span>Theme &#9656;</button>
           <div class="sidebar-submenu">
             ${THEMES.map(t => {
-              const active = (localStorage.getItem(LS_THEME_KEY) || 'default') === t;
+              const active = (localStorage.getItem(LS_THEME_KEY) || 'blue') === t;
               return `<button class="sidebar-theme-item${active ? ' active-theme' : ''}" onclick="applyTheme('${t}');_toggleEditorSettingsDOM();showSettings=false;">${active ? '\u25cf ' : '\u25cb '}${THEME_LABELS[t]}</button>`;
             }).join('')}
           </div>
@@ -4442,7 +4442,7 @@ function _toggleEditorSettingsDOM() {
           <button class="sidebar-nav-item" onclick="event.stopPropagation();this.nextElementSibling.classList.toggle('show')"><span class="sidebar-nav-icon">&#127912;</span>Theme &#9656;</button>
           <div class="sidebar-submenu">
             ${THEMES.map(t => {
-              const active = (localStorage.getItem(LS_THEME_KEY) || 'default') === t;
+              const active = (localStorage.getItem(LS_THEME_KEY) || 'blue') === t;
               return `<button class="sidebar-theme-item${active ? ' active-theme' : ''}" onclick="applyTheme('${t}');_toggleEditorSettingsDOM();showSettings=false;">${active ? '\u25cf ' : '\u25cb '}${THEME_LABELS[t]}</button>`;
             }).join('')}
           </div>

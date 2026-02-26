@@ -19,11 +19,10 @@ const EditorModule = (function () {
 
   // Ace theme mapping (matches KukuiBot themes)
   const ACE_THEMES = {
-    'default': 'ace/theme/cobalt',
     'blue': 'ace/theme/cobalt',
+    'claudia': 'ace/theme/one_dark',
     'sol-dark': 'ace/theme/tomorrow_night',
     'sol-light': 'ace/theme/tomorrow',
-    'claude-theme': 'ace/theme/one_dark',
   };
 
   // --- Initialization ---
@@ -88,12 +87,8 @@ const EditorModule = (function () {
 
   function syncTheme() {
     if (!aceEditor) return;
-    const theme = localStorage.getItem('kukuibot.theme') || 'default';
-    // Check for body class claude-theme
-    const bodyClasses = document.body.className;
-    let themeKey = theme;
-    if (bodyClasses.includes('claude-theme')) themeKey = 'claude-theme';
-    const aceTheme = ACE_THEMES[themeKey] || ACE_THEMES['default'];
+    const theme = localStorage.getItem('kukuibot.theme') || 'blue';
+    const aceTheme = ACE_THEMES[theme] || ACE_THEMES['blue'];
     aceEditor.setTheme(aceTheme);
   }
 
