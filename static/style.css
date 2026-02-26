@@ -72,6 +72,15 @@
 .sol-light .reasoning-picker button.reason-none.active { background: rgba(181,137,0,0.2); color: #b58900; }
 .sol-light .btn-sm.active { background: rgba(133,153,0,0.2); color: #859900; }
 .sol-light .work-log-toggle:hover { background: rgba(0,0,0,.04); }
+.sol-light .work-log { background: rgba(238,232,213,0.7); }
+.sol-light .deleg-bar { background: rgba(238,232,213,0.85); }
+.sol-light .deleg-bar + .deleg-bar { border-top-color: rgba(0,0,0,0.06); }
+.sol-light .deleg-bar.done { background: rgba(133,153,0,0.1); }
+.sol-light .sidebar-nav-item:hover { background: rgba(0,0,0,0.04); }
+.sol-light .editor-readonly-badge { background: rgba(0,0,0,0.06); }
+.sol-light .file-tree::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.12); }
+.sol-light .mfd-backdrop { background: rgba(0,0,0,0.15); }
+.sol-light .mfd-dropdown { box-shadow: 0 8px 24px rgba(0,0,0,0.15); }
 
 /* Claude theme — dark blue base with terracotta/coral accents */
 .claude-theme {
