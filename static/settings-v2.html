@@ -1879,7 +1879,10 @@ async function loadClaudeStatus() {
     } else if (procList.length > 0) {
       if (dotEl) dotEl.textContent = '🟡';
       if (labelEl) labelEl.textContent = 'Idle';
-      if (detailEl) detailEl.textContent = `${totalSlots} workers available · starts on first message`;
+      const authLabel = hasToken ? 'OAuth token' : hasKey ? 'API key' : '';
+      if (detailEl) detailEl.textContent = authLabel
+        ? `${authLabel} loaded · ${totalSlots} workers available · restarts on next message`
+        : `${totalSlots} workers available · starts on first message`;
     } else {
       const authOk = hasToken || hasKey;
       if (dotEl) dotEl.textContent = authOk ? '🟢' : '⚪';
