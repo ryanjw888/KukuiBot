@@ -2228,9 +2228,14 @@ async function _toggleSkillsPopup(ev) {
   skills.sort((a, b) => (_skillDisplayOrder[a.id] ?? 50) - (_skillDisplayOrder[b.id] ?? 50));
   const badge = document.getElementById('worker-name-badge');
   if (!badge) return;
+  const rect = badge.getBoundingClientRect();
   const popup = document.createElement('div');
   popup.id = 'skills-popup';
   popup.className = 'skills-popup';
+  // Position fixed relative to viewport so re-renders don't destroy it
+  popup.style.position = 'fixed';
+  popup.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
+  popup.style.right = (window.innerWidth - rect.right) + 'px';
   const title = document.createElement('div');
   title.className = 'skills-popup-title';
   title.textContent = 'Skills';
@@ -2238,7 +2243,7 @@ async function _toggleSkillsPopup(ev) {
   skills.forEach(s => {
     const row = document.createElement('div');
     row.className = 'skills-popup-item';
-    row.onclick = (e) => { e.stopPropagation(); _insertSkillPrompt(s); document.getElementById('skills-popup')?.remove(); };
+    row.onclick = (e) => { e.stopPropagation(); document.getElementById('skills-popup')?.remove(); _insertSkillPrompt(s); };
     const name = document.createElement('span');
     name.className = 'skills-popup-name';
     name.textContent = _skillDisplayNames[s.id] || s.id.replace(/-/g, ' ');
@@ -2249,13 +2254,14 @@ async function _toggleSkillsPopup(ev) {
     row.appendChild(desc);
     popup.appendChild(row);
   });
-  badge.appendChild(popup);
+  document.body.appendChild(popup);
 }
 
 // Dismiss skills popup on click-outside
 document.addEventListener('click', (e) => {
   const popup = document.getElementById('skills-popup');
   if (!popup) return;
+  if (popup.contains(e.target)) return;
   const badge = document.getElementById('worker-name-badge');
   if (badge && badge.contains(e.target)) return;
   popup.remove();

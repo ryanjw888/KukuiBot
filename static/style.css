@@ -1030,9 +1030,8 @@ body {
 }
 .worker-name-badge:hover { color: #a3d3ff; }
 
-/* Skills popup */
+/* Skills popup (appended to body, positioned via JS) */
 .skills-popup {
-  position: absolute; bottom: calc(100% + 8px); right: 0;
   min-width: 260px; max-width: 340px; max-height: 360px; overflow-y: auto;
   background: var(--surface, #1e1e38); border: 1px solid var(--border-light, #2a2a4a);
   border-radius: 8px; padding: 6px 0;
