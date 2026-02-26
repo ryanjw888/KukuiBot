@@ -42,6 +42,7 @@ async def process_chat_claude(
     t0 = time.time()
     full_text = ""
     got_result = False
+    _stream_exception = None
     proc = None
 
     # Prepend attachment content as text (Claude CLI is text-only)
@@ -219,6 +220,7 @@ async def process_chat_claude(
                 }, run_id=run_id)
 
     except Exception as e:
+        _stream_exception = e
         logger.error(f"Claude persistent stream error: {e}", exc_info=True)
         await _emit_event(session_id, queue, {"type": "error", "message": str(e) or type(e).__name__}, run_id=run_id)
     finally:
@@ -228,6 +230,8 @@ async def process_chat_claude(
             _proc_auth_err = getattr(proc, '_last_auth_error', None) if proc else None
             if _proc_auth_err:
                 error_text = f"⚠️ Authentication failed: {_proc_auth_err}"
+            elif _stream_exception:
+                error_text = f"⚠️ {_stream_exception}"
             else:
                 error_text = full_text or "⚠️ No response from Claude process (timed out or process died)."
             logger.warning(f"Claude stream ended without result: session={session_id}, full_text_len={len(full_text)}, duration={duration_ms}ms")

@@ -849,6 +849,7 @@ class PersistentClaudeProcess:
             # Clear stale state from previous process
             self._wake_message = None
             self._last_auth_error = None
+            self._recent_stderr = []  # Ring buffer of last stderr lines
 
             if resume_session:
                 # --- Session Resume Path ---
@@ -1066,7 +1067,13 @@ class PersistentClaudeProcess:
                 self._broadcast({"type": "result", "result": f"Authentication failed: {auth_err}", "subtype": "auth_error"})
                 self._last_auth_error = None  # Clear after surfacing
             else:
-                self._broadcast({"type": "result", "result": "", "subtype": "process_died"})
+                rc = self.proc.returncode if self.proc else None
+                stderr_tail = "; ".join(self._recent_stderr[-3:]) if self._recent_stderr else ""
+                die_msg = f"Claude process exited (rc={rc})"
+                if stderr_tail:
+                    die_msg += f": {stderr_tail}"
+                logger.error(die_msg)
+                self._broadcast({"type": "result", "result": die_msg, "subtype": "process_died"})
             if self.proc:
                 try:
                     self.proc.kill()
@@ -1085,6 +1092,10 @@ class PersistentClaudeProcess:
                 text = line.decode().strip()
                 if not text:
                     continue
+                # Keep last 10 stderr lines for diagnostics on crash
+                self._recent_stderr.append(text)
+                if len(self._recent_stderr) > 10:
+                    self._recent_stderr.pop(0)
                 low = text.lower()
                 # Detect auth failures and surface them to the user
                 if any(kw in low for kw in _AUTH_ERROR_KEYWORDS):
@@ -1227,6 +1238,11 @@ class PersistentClaudeProcess:
                         try:
                             ack_evt = await asyncio.wait_for(ack_queue.get(), timeout=60)
                             if ack_evt.get("type") == "result":
+                                ack_subtype = ack_evt.get("subtype", "")
+                                if ack_subtype in ("process_died", "auth_error"):
+                                    err_msg = ack_evt.get("result", "") or f"Claude process failed during startup ({ack_subtype})"
+                                    logger.error(f"Process died during context injection: {err_msg}")
+                                    raise RuntimeError(err_msg)
                                 logger.info("Context ack result consumed (not forwarded to client)")
                                 break
                         except asyncio.TimeoutError:
