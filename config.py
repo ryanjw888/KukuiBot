@@ -63,6 +63,10 @@ KUKUIBOT_HOME.mkdir(parents=True, exist_ok=True)
 (KUKUIBOT_HOME / "memory").mkdir(exist_ok=True)
 (KUKUIBOT_HOME / "config").mkdir(exist_ok=True)
 (KUKUIBOT_HOME / "logs").mkdir(exist_ok=True)
+(KUKUIBOT_HOME / "skills").mkdir(exist_ok=True)
+
+# Skills directory path
+SKILLS_DIR = KUKUIBOT_HOME / "skills"
 
 # --- Seed agent files from bundled templates on first run ---
 _AGENT_TEMPLATES = APP_ROOT / "agent"

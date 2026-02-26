@@ -43,10 +43,12 @@ from config import (
     COMPACTION_LOG_FILE,
     COMPACTION_LOG_MAX_LINES,
     MAX_CLAUDE_PROCESSES,
+    SKILLS_DIR,
     WORKSPACE,
 )
 from auth import db_connection
 from log_store import log_query, log_write
+from skill_loader import load_skills_for_worker
 
 logger = logging.getLogger("kukuibot.claude_bridge")
 
@@ -442,6 +444,19 @@ def build_system_prompt(worker_identity: str = "", include_chat_log: bool = True
         if worker_content:
             sections.append(f"# Worker Role\n{worker_content}")
             loaded_files.append(str(worker_file))
+
+    # Load skills for this worker
+    if worker_identity:
+        skill_sections = load_skills_for_worker(worker_identity, SKILLS_DIR)
+        if skill_sections:
+            skills_header = (
+                "# Skills (Mandatory Operating Rules)\n"
+                "The following skills are binding operational constraints. "
+                "If a skill applies with >=1% probability, invoke it BEFORE acting. "
+                "Rationalization thoughts are compliance triggers, not exemptions."
+            )
+            sections.append(skills_header + "\n\n" + "\n\n".join(skill_sections))
+            loaded_files.append(f"skills ({len(skill_sections)} loaded)")
 
     # Project report (shared, concise context for all workers)
     project_report_path = WORKSPACE / "PROJECT-REPORT.md"

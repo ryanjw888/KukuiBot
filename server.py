@@ -48,6 +48,7 @@ from config import (
     WORKER_PORT,
     WORKSPACE,
     KUKUIBOT_HOME,
+    SKILLS_DIR,
     SESSION_EVENT_RING_MAX_EVENTS,
     SESSION_EVENT_RING_MAX_BYTES,
     SESSION_EVENT_DB_MAX_EVENTS_PER_SESSION,
@@ -56,6 +57,7 @@ from config import (
 )
 from tools import TOOL_DEFINITIONS, execute_tool
 from subagent import run_subagent
+from skill_loader import load_skills_for_worker
 from security import (
     approve_elevation,
     clear_session_security,
@@ -639,6 +641,16 @@ def _get_system_prompt(model_key: str = "", worker_identity: str = "") -> str:
                 parts.append(f"## Worker Role\n{content}\n")
         except Exception:
             pass
+
+    # Load skills for this worker
+    if worker_identity:
+        skill_sections = load_skills_for_worker(worker_identity, SKILLS_DIR)
+        if skill_sections:
+            parts.append("## Skills (Mandatory Operating Rules)\n"
+                         "The following skills are binding operational constraints. "
+                         "If a skill applies with >=1% probability, invoke it BEFORE acting. "
+                         "Rationalization thoughts are compliance triggers, not exemptions.\n")
+            parts.extend(skill_sections)
 
     # Load project report (shared context for all workers)
     project_report = _load_project_report_content(max_chars=6000)

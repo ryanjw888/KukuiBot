@@ -17,9 +17,11 @@ from config import (
     COMPACTION_LOG_MAX_LINES,
     KUKUIBOT_HOME,
     RECENT_MESSAGES_TO_KEEP,
+    SKILLS_DIR,
     WORKSPACE,
 )
 from log_store import log_query
+from skill_loader import load_skills_for_worker
 
 logger = logging.getLogger("kukuibot.compact")
 
@@ -189,6 +191,18 @@ def compact_messages(
         content = _load_context_file(worker_file)
         if content:
             sections.append(f"# Worker Role\n{content}")
+
+    # Load skills for this worker (survives compaction)
+    if worker_identity:
+        skill_sections = load_skills_for_worker(worker_identity, SKILLS_DIR)
+        if skill_sections:
+            skills_header = (
+                "# Skills (Mandatory Operating Rules)\n"
+                "The following skills are binding operational constraints. "
+                "If a skill applies with >=1% probability, invoke it BEFORE acting. "
+                "Rationalization thoughts are compliance triggers, not exemptions."
+            )
+            sections.append(skills_header + "\n\n" + "\n\n".join(skill_sections))
 
     project_report = _load_project_report(WORKSPACE / "PROJECT-REPORT.md")
     if project_report:
