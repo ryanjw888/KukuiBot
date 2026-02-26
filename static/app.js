@@ -2261,7 +2261,7 @@ document.addEventListener('click', (e) => {
   popup.remove();
 });
 
-function _insertSkillPrompt(skill) {
+async function _insertSkillPrompt(skill) {
   const input = document.getElementById('input');
   if (!input) return;
   const starters = {
@@ -2289,6 +2289,8 @@ function _insertSkillPrompt(skill) {
     'evidence-anchoring': 'Provide evidence-anchored analysis of: ',
   };
   const starter = starters[skill.id] || `Use the ${skill.id.replace(/-/g, ' ')} skill for: `;
+  // Compact first so the model starts fresh with skills loaded in context
+  await doCompact();
   input.value = starter;
   input.focus();
   input.setSelectionRange(starter.length, starter.length);
