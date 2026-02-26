@@ -2267,8 +2267,6 @@ document.addEventListener('click', (e) => {
 });
 
 async function _insertSkillPrompt(skill) {
-  const input = document.getElementById('input');
-  if (!input) return;
   const starters = {
     'using-skills': 'Check which skills apply to this task: ',
     'verification-before-completion': 'Verify the following is actually complete with evidence: ',
@@ -2296,6 +2294,9 @@ async function _insertSkillPrompt(skill) {
   const starter = starters[skill.id] || `Use the ${skill.id.replace(/-/g, ' ')} skill for: `;
   // Compact first so the model starts fresh with skills loaded in context
   await doCompact();
+  // Re-query input after compact since renders rebuild the DOM
+  const input = document.getElementById('input');
+  if (!input) return;
   input.value = starter;
   input.focus();
   input.setSelectionRange(starter.length, starter.length);
