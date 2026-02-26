@@ -84,8 +84,8 @@ let appMode = 'chat'; // 'chat' | 'editor'
 let editorInitialized = false;
 let _editorModeSwitch = false; // true during the render that switches modes
 
-function setAppMode(mode) {
-  if (mode === appMode) return;
+function setAppMode(mode, initialPath) {
+  if (mode === appMode && !initialPath) return;
   // Guard dirty editor state when leaving editor
   if (appMode === 'editor' && typeof EditorModule !== 'undefined' && EditorModule.getDirty()) {
     if (!confirm('You have unsaved changes in the editor. Switch anyway?')) return;
@@ -108,8 +108,14 @@ function setAppMode(mode) {
           editorInitialized = true;
         } else {
           EditorModule.syncTheme();
+        }
+        // If a specific path was requested, scope the tree to it
+        if (initialPath) {
+          EditorModule.setRoot(initialPath);
+        } else if (editorInitialized) {
           EditorModule.loadTree();
         }
+        editorInitialized = true;
       }
     }, 50);
   }
@@ -5675,6 +5681,15 @@ async function boot() {
     requestRender();
     // Defer non-critical metadata (usage stats, token counts) until after UI is rendered
     refreshMeta();
+
+    // Check for ?editor= query param (e.g. from settings "Open in File Editor" button)
+    const urlParams = new URLSearchParams(window.location.search);
+    const editorPath = urlParams.get('editor');
+    if (editorPath) {
+      // Clean the URL so a refresh doesn't re-trigger editor mode
+      history.replaceState(null, '', '/');
+      setAppMode('editor', editorPath);
+    }
   } catch { requestRender({ preserveScroll: true }); }
 }
 

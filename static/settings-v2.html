@@ -1521,25 +1521,11 @@
       <div class="card">
         <h2>Worker Identities</h2>
         <p style="font-size:12px;color:var(--muted);margin-bottom:12px;">
-          Each worker type has an identity file that defines its role and behavior.
-          Select a worker to view or edit its identity.
+          Each worker type has an identity file (.md) that defines its role and behavior.
+          Use the file editor to view, edit, or create worker identities.
         </p>
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;">
-          <select id="worker-select" onchange="loadWorkerContent()" style="flex:1;">
-            <option value="">Loading workers...</option>
-          </select>
-          <button class="btn" onclick="promptNewWorkerIdentity()">+ New</button>
-          <button class="btn danger" id="worker-delete-btn" onclick="deleteWorkerIdentity()" style="display:none;">Delete</button>
-        </div>
-        <textarea id="worker-content" rows="20" spellcheck="false"
-          style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);
-          padding:12px;border-radius:8px;font-size:13px;font-family:'SF Mono',Menlo,monospace;
-          line-height:1.5;resize:vertical;tab-size:2;min-height:200px;"
-          placeholder="Select a worker to view its identity file..."></textarea>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;">
-          <span id="worker-msg" style="font-size:12px;color:var(--muted);"></span>
-          <button class="btn primary" onclick="saveWorkerContent()">Save</button>
-        </div>
+        <div id="worker-file-list" style="margin-bottom:14px;"></div>
+        <button class="btn primary" onclick="openWorkersInEditor()">Open in File Editor</button>
       </div>
     </div>
 
@@ -3434,122 +3420,43 @@ async function disconnectUnifi() {
 
 // ---- Workers ----
 let _workerList = [];
+let _workersDir = '';
 
 async function loadWorkerList() {
-  const sel = document.getElementById('worker-select');
   try {
     const r = await fetch(API + '/api/workers');
     const d = await r.json();
     _workerList = d.workers || [];
-    sel.innerHTML = '<option value="">— Select a worker —</option>' +
-      _workerList.map(w => `<option value="${w.key}">${w.name}</option>`).join('');
+    _workersDir = d.workers_dir || '';
+    const el = document.getElementById('worker-file-list');
+    if (el) {
+      if (!_workerList.length) {
+        el.innerHTML = '<p style="font-size:12px;color:var(--muted);">No worker files found.</p>';
+      } else {
+        el.innerHTML = _workerList.map(w =>
+          `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);">
+            <span style="font-size:13px;color:var(--text);">${_escHtml(w.name)}</span>
+            <span style="font-size:11px;color:var(--muted);font-family:var(--mono);">${_escHtml(w.key)}.md</span>
+          </div>`
+        ).join('');
+      }
+    }
   } catch {
-    sel.innerHTML = '<option value="">Failed to load</option>';
-  }
-  document.getElementById('worker-content').value = '';
-  document.getElementById('worker-msg').textContent = '';
-  document.getElementById('worker-delete-btn').style.display = 'none';
-}
-
-async function loadWorkerContent() {
-  const sel = document.getElementById('worker-select');
-  const ta = document.getElementById('worker-content');
-  const msg = document.getElementById('worker-msg');
-  const delBtn = document.getElementById('worker-delete-btn');
-  const key = sel.value;
-  if (!key) { ta.value = ''; msg.textContent = ''; delBtn.style.display = 'none'; return; }
-  try {
-    const r = await fetch(API + '/api/workers/' + encodeURIComponent(key));
-    const d = await r.json();
-    if (!d.ok) throw new Error(d.error || 'Failed');
-    ta.value = d.content || '';
-    msg.textContent = '';
-    delBtn.style.display = 'inline-flex';
-  } catch (e) {
-    ta.value = '';
-    msg.style.color = 'var(--red)';
-    msg.textContent = e.message || 'Failed to load';
-    delBtn.style.display = 'none';
+    const el = document.getElementById('worker-file-list');
+    if (el) el.innerHTML = '<p style="font-size:12px;color:var(--red);">Failed to load workers</p>';
   }
 }
 
-async function saveWorkerContent() {
-  const sel = document.getElementById('worker-select');
-  const ta = document.getElementById('worker-content');
-  const msg = document.getElementById('worker-msg');
-  const key = sel.value;
-  if (!key) { msg.style.color = 'var(--red)'; msg.textContent = 'Select a worker first'; return; }
-  const content = ta.value.trim();
-  if (!content) { msg.style.color = 'var(--red)'; msg.textContent = 'Content cannot be empty'; return; }
-  try {
-    const r = await fetch(API + '/api/workers/' + encodeURIComponent(key), {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
-    });
-    const d = await r.json();
-    if (!d.ok) throw new Error(d.error || 'Failed');
-    msg.style.color = 'var(--green)';
-    msg.textContent = 'Saved';
-    toast('Worker identity saved');
-    // Refresh list in case the name in the header changed
-    const prevKey = key;
-    await loadWorkerList();
-    sel.value = prevKey;
-  } catch (e) {
-    msg.style.color = 'var(--red)';
-    msg.textContent = e.message || 'Save failed';
-  }
-}
-
-function promptNewWorkerIdentity() {
-  const name = prompt('New worker name (e.g. "Designer"):');
-  if (!name || !name.trim()) return;
-  const key = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  if (!key) { toast('Invalid name'); return; }
-  // Check if already exists
-  if (_workerList.find(w => w.key === key)) { toast('Worker "' + key + '" already exists'); return; }
-  const content = `# Worker Identity — ${name.trim()}\n\nYou are a **${name.trim()}** worker.\n\n## Primary Responsibilities\n- (define responsibilities here)\n\n## Approach\n- (define approach here)\n`;
-  const ta = document.getElementById('worker-content');
-  const sel = document.getElementById('worker-select');
-  const msg = document.getElementById('worker-msg');
-  // Save immediately
-  fetch(API + '/api/workers/' + encodeURIComponent(key), {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
-  }).then(r => r.json()).then(async d => {
-    if (!d.ok) throw new Error(d.error || 'Failed');
-    await loadWorkerList();
-    sel.value = key;
-    ta.value = content;
-    msg.style.color = 'var(--green)';
-    msg.textContent = 'Created — edit and save';
-    document.getElementById('worker-delete-btn').style.display = 'inline-flex';
-    toast('Worker "' + name.trim() + '" created');
-  }).catch(e => {
-    msg.style.color = 'var(--red)';
-    msg.textContent = e.message || 'Create failed';
-  });
-}
-
-async function deleteWorkerIdentity() {
-  const sel = document.getElementById('worker-select');
-  const key = sel.value;
-  if (!key) return;
-  const w = _workerList.find(x => x.key === key);
-  const label = w ? w.name : key;
-  if (!confirm('Delete worker "' + label + '"? This cannot be undone.')) return;
-  const msg = document.getElementById('worker-msg');
-  try {
-    const r = await fetch(API + '/api/workers/' + encodeURIComponent(key), { method: 'DELETE' });
-    const d = await r.json();
-    if (!d.ok) throw new Error(d.error || 'Failed');
-    toast('Worker "' + label + '" deleted');
-    await loadWorkerList();
-  } catch (e) {
-    msg.style.color = 'var(--red)';
-    msg.textContent = e.message || 'Delete failed';
+function openWorkersInEditor() {
+  if (!_workersDir) { toast('Workers directory not found'); return; }
+  // Navigate to the main app and open the file editor scoped to the workers folder
+  window.opener ? window.opener.postMessage({ action: 'openEditor', path: _workersDir }, '*') : null;
+  // If settings is the same page, use the app's setAppMode directly
+  if (typeof window.parent !== 'undefined' && window.parent !== window) {
+    window.parent.postMessage({ action: 'openEditor', path: _workersDir }, '*');
+  } else {
+    // Same-origin navigation: redirect to main app with editor param
+    window.location.href = '/?editor=' + encodeURIComponent(_workersDir);
   }
 }
 

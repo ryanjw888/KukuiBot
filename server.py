@@ -2110,7 +2110,7 @@ async def api_workers(req: Request):
     elapsed_ms = (_time_profile.time() - start_time) * 1000
     logger.info(f"[PROFILE] /api/workers took {elapsed_ms:.1f}ms (found {len(workers)} workers)")
     
-    return {"workers": workers}
+    return {"workers": workers, "workers_dir": str(workers_dir)}
 
 
 @app.get("/api/workers/{key}")
