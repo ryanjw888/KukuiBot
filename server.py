@@ -2028,7 +2028,7 @@ async def api_claude_config_set(req: Request):
 # ---------------------------------------------------------------------------
 #  Claude OAuth (direct PKCE flow — no CLI required)
 # ---------------------------------------------------------------------------
-_claude_oauth_pending: dict = {}  # state -> {code_verifier, created_at}
+_claude_oauth_pending: dict = {}  # state -> {code_verifier, created_at, ...}
 
 _CLAUDE_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 _CLAUDE_OAUTH_AUTHORIZE_URL = "https://claude.ai/oauth/authorize"
@@ -2036,39 +2036,168 @@ _CLAUDE_OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 _CLAUDE_OAUTH_SCOPES = "user:inference user:profile user:sessions:claude_code user:mcp_servers"
 
 
+def _start_oauth_callback_server(state: str, code_verifier: str, settings_url_base: str) -> int:
+    """Spin up a temporary plain-HTTP server on localhost (random port) to catch
+    the OAuth callback — exactly like the Claude CLI does.  Returns the port."""
+    import http.server
+    import socketserver
+    import threading
+    from urllib.parse import urlparse, parse_qs, quote
+
+    result = {"port": 0}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):
+            logger.debug(f"[OAUTH-CB] {fmt % args}")
+
+        def do_GET(self):
+            parsed = urlparse(self.path)
+            if parsed.path != "/callback":
+                self.send_response(404)
+                self.end_headers()
+                return
+
+            params = parse_qs(parsed.query)
+            code = (params.get("code") or [""])[0]
+            cb_state = (params.get("state") or [""])[0]
+            error = (params.get("error") or [""])[0]
+
+            if error:
+                self._redirect(f"{settings_url_base}?claude_oauth=error&claude_oauth_msg={quote(error)}#claude")
+                self._shutdown()
+                return
+
+            if cb_state != state:
+                self._redirect(f"{settings_url_base}?claude_oauth=error&claude_oauth_msg={quote('State mismatch')}#claude")
+                self._shutdown()
+                return
+
+            if not code:
+                self._redirect(f"{settings_url_base}?claude_oauth=error&claude_oauth_msg={quote('No code received')}#claude")
+                self._shutdown()
+                return
+
+            # Exchange code for token
+            port = result["port"]
+            redirect_uri = f"http://localhost:{port}/callback"
+            payload = {
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": redirect_uri,
+                "client_id": _CLAUDE_OAUTH_CLIENT_ID,
+                "code_verifier": code_verifier,
+                "state": state,
+                "expires_in": 31536000,
+            }
+            try:
+                import httpx as _hx
+                resp = _hx.post(_CLAUDE_OAUTH_TOKEN_URL, json=payload,
+                                headers={"Content-Type": "application/json"}, timeout=30)
+                if resp.status_code != 200:
+                    msg = f"Token exchange failed (HTTP {resp.status_code})"
+                    logger.error(f"[OAUTH-CB] {msg}: {resp.text[:500]}")
+                    self._redirect(f"{settings_url_base}?claude_oauth=error&claude_oauth_msg={quote(msg)}#claude")
+                    self._shutdown()
+                    return
+                token_data = resp.json()
+            except Exception as exc:
+                msg = str(exc)[:200]
+                logger.error(f"[OAUTH-CB] Token exchange error: {msg}")
+                self._redirect(f"{settings_url_base}?claude_oauth=error&claude_oauth_msg={quote(msg)}#claude")
+                self._shutdown()
+                return
+
+            access_token = token_data.get("access_token", "")
+            if not access_token:
+                self._redirect(f"{settings_url_base}?claude_oauth=error&claude_oauth_msg={quote('No access token')}#claude")
+                self._shutdown()
+                return
+
+            # Save the token
+            tok = _sanitize_bearer_token(access_token)
+            set_config("claude_code.oauth_token", tok)
+            set_config("claude_code.auth_strategy", "configured")
+            pool = get_claude_pool()
+            if pool:
+                pool._auth_strategy = "configured"
+                for p in pool._processes.values():
+                    p.set_auth_strategy("configured")
+            logger.info("[OAUTH-CB] Token saved successfully")
+
+            self._redirect(f"{settings_url_base}?claude_oauth=success#claude")
+            self._shutdown()
+
+        def _redirect(self, url):
+            self.send_response(302)
+            self.send_header("Location", url)
+            self.end_headers()
+
+        def _shutdown(self):
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+
+    server = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+    result["port"] = server.server_address[1]
+
+    def serve():
+        logger.info(f"[OAUTH-CB] Temp callback server listening on port {result['port']}")
+        server.serve_forever()
+        server.server_close()
+        logger.info("[OAUTH-CB] Temp callback server shut down")
+
+    t = threading.Thread(target=serve, daemon=True)
+    t.start()
+
+    # Auto-shutdown after 5 minutes if no callback received
+    def auto_shutdown():
+        import time as _t
+        _t.sleep(300)
+        try:
+            server.shutdown()
+        except Exception:
+            pass
+    threading.Thread(target=auto_shutdown, daemon=True).start()
+
+    return result["port"]
+
+
 @app.get("/api/claude/oauth/start")
 async def api_claude_oauth_start(req: Request):
-    """Generate PKCE challenge and return the authorization URL for the user's browser."""
+    """Start OAuth flow: spin up a temp localhost callback server (like the CLI),
+    generate PKCE challenge, return the authorization URL."""
     if not _is_admin(req):
         return JSONResponse({"ok": False, "error": "Admin only"}, status_code=403)
 
-    import hashlib, base64, secrets
+    logger.info("[OAUTH] /api/claude/oauth/start hit")
+    import hashlib, base64, secrets, time
+    from urllib.parse import urlencode
 
-    # PKCE: generate code_verifier and code_challenge (S256)
+    # PKCE
     code_verifier = secrets.token_urlsafe(64)
     digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
     code_challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
     state = secrets.token_urlsafe(32)
 
-    # Build callback URL from the request's own origin so it works locally and remotely
+    # Build settings URL base so the callback server can redirect back
     scheme = req.headers.get("x-forwarded-proto", req.url.scheme)
     host = req.headers.get("host", req.url.netloc)
-    callback_url = f"{scheme}://{host}/api/claude/oauth/callback"
+    settings_url_base = f"{scheme}://{host}/settings-v2.html"
 
-    # Store pending state
-    import time
+    # Start temporary localhost HTTP server for callback
+    port = _start_oauth_callback_server(state, code_verifier, settings_url_base)
+    callback_url = f"http://localhost:{port}/callback"
+
+    # Store pending state (for diagnostics / cleanup)
     _claude_oauth_pending[state] = {
         "code_verifier": code_verifier,
         "redirect_uri": callback_url,
+        "port": port,
         "created_at": time.time(),
     }
-    # Clean up old pending states (>10 min)
     cutoff = time.time() - 600
     for k in list(_claude_oauth_pending):
         if _claude_oauth_pending[k]["created_at"] < cutoff:
             del _claude_oauth_pending[k]
 
-    from urllib.parse import urlencode
     params = {
         "response_type": "code",
         "client_id": _CLAUDE_OAUTH_CLIENT_ID,
@@ -2084,76 +2213,11 @@ async def api_claude_oauth_start(req: Request):
 
 @app.get("/api/claude/oauth/callback")
 async def api_claude_oauth_callback(req: Request):
-    """Handle the OAuth callback — exchange the code for a token and save it."""
-    import json as _json
-    from urllib.parse import quote
-    from starlette.responses import RedirectResponse
-
-    code = req.query_params.get("code", "")
-    state = req.query_params.get("state", "")
-    error = req.query_params.get("error", "")
-
+    """Legacy callback — no longer used (temp server handles it). Redirect to settings."""
     scheme = req.headers.get("x-forwarded-proto", req.url.scheme)
     host = req.headers.get("host", req.url.netloc)
-
-    if error:
-        settings_url = f"{scheme}://{host}/settings-v2.html?claude_oauth=error&claude_oauth_msg={quote(error)}#claude"
-        return RedirectResponse(url=settings_url)
-
-    if not state or state not in _claude_oauth_pending:
-        settings_url = f"{scheme}://{host}/settings-v2.html?claude_oauth=error&claude_oauth_msg={quote('OAuth state mismatch. Please try again.')}#claude"
-        return RedirectResponse(url=settings_url)
-
-    if not code:
-        settings_url = f"{scheme}://{host}/settings-v2.html?claude_oauth=error&claude_oauth_msg={quote('No authorization code received.')}#claude"
-        return RedirectResponse(url=settings_url)
-
-    pending = _claude_oauth_pending.pop(state)
-    code_verifier = pending["code_verifier"]
-    redirect_uri = pending["redirect_uri"]
-
-    # Exchange code for token
-    try:
-        payload = {
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": redirect_uri,
-            "client_id": _CLAUDE_OAUTH_CLIENT_ID,
-            "code_verifier": code_verifier,
-            "state": state,
-            "expires_in": 31536000,  # 1 year, same as setup-token
-        }
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(_CLAUDE_OAUTH_TOKEN_URL, json=payload,
-                                     headers={"Content-Type": "application/json"})
-            if resp.status_code != 200:
-                msg = f"Token exchange failed (HTTP {resp.status_code})"
-                settings_url = f"{scheme}://{host}/settings-v2.html?claude_oauth=error&claude_oauth_msg={quote(msg)}#claude"
-                return RedirectResponse(url=settings_url)
-            token_data = resp.json()
-
-        access_token = token_data.get("access_token", "")
-        if not access_token:
-            settings_url = f"{scheme}://{host}/settings-v2.html?claude_oauth=error&claude_oauth_msg={quote('No access token in response.')}#claude"
-            return RedirectResponse(url=settings_url)
-
-        # Save the token
-        tok = _sanitize_bearer_token(access_token)
-        set_config("claude_code.oauth_token", tok)
-        set_config("claude_code.auth_strategy", "configured")
-        pool = get_claude_pool()
-        if pool:
-            pool._auth_strategy = "configured"
-            for p in pool._processes.values():
-                p.set_auth_strategy("configured")
-
-        settings_url = f"{scheme}://{host}/settings-v2.html?claude_oauth=success#claude"
-        return RedirectResponse(url=settings_url)
-
-    except Exception as e:
-        msg = str(e)[:200]
-        settings_url = f"{scheme}://{host}/settings-v2.html?claude_oauth=error&claude_oauth_msg={quote(msg)}#claude"
-        return RedirectResponse(url=settings_url)
+    from starlette.responses import RedirectResponse
+    return RedirectResponse(url=f"{scheme}://{host}/settings-v2.html#claude")
 
 
 # --- Claude Persistent Process Management ---
