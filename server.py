@@ -2087,16 +2087,16 @@ def _start_oauth_callback_server(state: str, code_verifier: str, settings_url_ba
                 "client_id": _CLAUDE_OAUTH_CLIENT_ID,
                 "code_verifier": code_verifier,
                 "state": state,
-                "expires_in": 31536000,
             }
             try:
                 import httpx as _hx
-                resp = _hx.post(_CLAUDE_OAUTH_TOKEN_URL, json=payload,
-                                headers={"Content-Type": "application/json"}, timeout=30)
+                logger.info(f"[OAUTH-CB] Exchanging code at {_CLAUDE_OAUTH_TOKEN_URL} with redirect_uri={redirect_uri}")
+                resp = _hx.post(_CLAUDE_OAUTH_TOKEN_URL, json=payload, timeout=30)
                 if resp.status_code != 200:
+                    body = resp.text[:500]
                     msg = f"Token exchange failed (HTTP {resp.status_code})"
-                    logger.error(f"[OAUTH-CB] {msg}: {resp.text[:500]}")
-                    self._redirect(f"{settings_url_base}?claude_oauth=error&claude_oauth_msg={quote(msg)}#claude")
+                    logger.error(f"[OAUTH-CB] {msg} — body: {body}")
+                    self._redirect(f"{settings_url_base}?claude_oauth=error&claude_oauth_msg={quote(msg + ': ' + body[:150])}#claude")
                     self._shutdown()
                     return
                 token_data = resp.json()
