@@ -144,6 +144,23 @@ for dep in mkcert ripgrep; do
   echo "✓ $dep"
 done
 
+# --- Check/install Node.js + Claude Code CLI ---
+if ! command -v node &>/dev/null; then
+  echo "→ Installing Node.js (required for Claude Code)..."
+  brew install node </dev/null
+fi
+echo "✓ Node.js $(node --version 2>/dev/null || echo '(pending)')"
+
+if ! command -v claude &>/dev/null; then
+  echo "→ Installing Claude Code CLI..."
+  npm install -g @anthropic-ai/claude-code </dev/null 2>&1 | tail -1
+fi
+if command -v claude &>/dev/null; then
+  echo "✓ Claude Code CLI $(claude --version 2>/dev/null | head -1)"
+else
+  echo "⚠️  Claude Code CLI install failed — install manually: npm install -g @anthropic-ai/claude-code"
+fi
+
 # --- Install root CA (one-time) ---
 mkcert -install </dev/null 2>/dev/null || true
 echo "✓ Root CA trusted"
