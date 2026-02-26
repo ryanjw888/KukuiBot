@@ -52,7 +52,104 @@ from skill_loader import load_skills_for_worker
 
 logger = logging.getLogger("kukuibot.claude_bridge")
 
-CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
+
+def _find_claude_binary() -> str:
+    """Find the claude binary, searching common install locations.
+
+    Priority:
+      1. CLAUDE_BIN env var (explicit override)
+      2. 'claude' on current PATH (subprocess exec will find it)
+      3. Common install locations: ~/.local/bin, npm global prefix, homebrew, /usr/local/bin
+      4. Broad search via 'find' in home directory bin paths
+    """
+    import shutil
+    import subprocess as _sp
+
+    # 1. Explicit env var
+    env_bin = os.environ.get("CLAUDE_BIN", "").strip()
+    if env_bin:
+        if os.path.isfile(env_bin) and os.access(env_bin, os.X_OK):
+            logger.info(f"Claude binary from CLAUDE_BIN env: {env_bin}")
+            return env_bin
+        # If env var is set but file doesn't exist, log warning and continue searching
+        logger.warning(f"CLAUDE_BIN={env_bin} not found or not executable, searching...")
+
+    # 2. Already on PATH
+    found = shutil.which("claude")
+    if found:
+        logger.info(f"Claude binary on PATH: {found}")
+        return found
+
+    # 3. Check common locations
+    home = Path.home()
+    common_paths = [
+        home / ".local" / "bin" / "claude",
+        Path("/opt/homebrew/bin/claude"),
+        Path("/usr/local/bin/claude"),
+        home / ".npm-global" / "bin" / "claude",
+        home / ".nvm" / "current" / "bin" / "claude",
+    ]
+
+    # Also check npm global prefix if npm is available
+    try:
+        result = _sp.run(["npm", "prefix", "-g"], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            npm_prefix = result.stdout.strip()
+            if npm_prefix:
+                common_paths.insert(0, Path(npm_prefix) / "bin" / "claude")
+    except Exception:
+        pass
+
+    # Also check any nvm-managed node versions
+    nvm_dir = home / ".nvm" / "versions" / "node"
+    if nvm_dir.is_dir():
+        try:
+            for node_ver in sorted(nvm_dir.iterdir(), reverse=True):
+                candidate = node_ver / "bin" / "claude"
+                if candidate.is_file():
+                    common_paths.insert(0, candidate)
+                    break
+        except Exception:
+            pass
+
+    for p in common_paths:
+        if p.is_file() and os.access(p, os.X_OK):
+            logger.info(f"Claude binary found at: {p}")
+            return str(p)
+
+    # 4. Last resort: search home directory bin-like paths
+    search_dirs = [
+        str(home / ".local"),
+        str(home / ".npm-global"),
+        str(home / ".nvm"),
+        "/opt/homebrew",
+        "/usr/local",
+    ]
+    for search_dir in search_dirs:
+        if not os.path.isdir(search_dir):
+            continue
+        try:
+            for root, dirs, files in os.walk(search_dir):
+                if "claude" in files:
+                    candidate = os.path.join(root, "claude")
+                    if os.access(candidate, os.X_OK):
+                        logger.info(f"Claude binary discovered via walk: {candidate}")
+                        return candidate
+                # Don't descend into node_modules or deep trees
+                if root.count(os.sep) - search_dir.count(os.sep) > 5:
+                    dirs.clear()
+                # Skip node_modules
+                if "node_modules" in dirs:
+                    dirs.remove("node_modules")
+        except Exception:
+            pass
+
+    # Not found anywhere — return "claude" and let it fail with a clear error at spawn time
+    logger.warning("Claude binary not found in any searched location — will fail at spawn time")
+    return "claude"
+
+
+CLAUDE_BIN = _find_claude_binary()
 
 # Context window: Claude Code CLI uses 1M context
 CONTEXT_WINDOW = 1_000_000
@@ -101,18 +198,17 @@ class ClaudeHealth:
 
 async def claude_health() -> ClaudeHealth:
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "which", "claude",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        out, err = await proc.communicate()
-        path = (out.decode(errors="ignore").strip() if out else "")
-        if proc.returncode != 0 or not path:
-            return ClaudeHealth(False, "", "", (err.decode(errors="ignore") if err else "claude not found"))
+        path = CLAUDE_BIN
+        if not os.path.isabs(path):
+            import shutil
+            found = shutil.which(path)
+            path = found or path
+
+        if not os.path.isfile(path):
+            return ClaudeHealth(False, path, "", f"claude not found at {path}")
 
         vproc = await asyncio.create_subprocess_exec(
-            "claude", "--version",
+            path, "--version",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

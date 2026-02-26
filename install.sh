@@ -145,8 +145,56 @@ for dep in mkcert ripgrep; do
 done
 
 # --- Check/install Node.js + Claude Code CLI ---
-# npm may install to ~/.local/bin — ensure it's on PATH for detection
-export PATH="$HOME/.local/bin:$PATH"
+
+# find_claude: search everywhere for the claude binary
+find_claude() {
+  # 1. Already on PATH
+  command -v claude 2>/dev/null && return 0
+
+  # 2. Common locations
+  local candidates=(
+    "$HOME/.local/bin/claude"
+    "/opt/homebrew/bin/claude"
+    "/usr/local/bin/claude"
+    "$HOME/.npm-global/bin/claude"
+  )
+
+  # 3. npm global prefix (if npm is available)
+  local npm_prefix
+  npm_prefix="$(npm prefix -g 2>/dev/null)" && [ -n "$npm_prefix" ] && \
+    candidates=("$npm_prefix/bin/claude" "${candidates[@]}")
+
+  # 4. nvm-managed node versions (newest first)
+  if [ -d "$HOME/.nvm/versions/node" ]; then
+    for ndir in $(ls -1dr "$HOME/.nvm/versions/node/"* 2>/dev/null); do
+      candidates+=("$ndir/bin/claude")
+    done
+  fi
+
+  # 5. Check each candidate
+  for c in "${candidates[@]}"; do
+    if [ -x "$c" ]; then
+      echo "$c"
+      return 0
+    fi
+  done
+
+  # 6. Last resort: find in common trees (fast — max depth 6)
+  for search_dir in "$HOME/.local" "$HOME/.npm-global" "$HOME/.nvm" /opt/homebrew /usr/local; do
+    [ -d "$search_dir" ] || continue
+    local found
+    found="$(find "$search_dir" -maxdepth 6 -name claude -type f -perm +111 2>/dev/null | head -1)"
+    if [ -n "$found" ]; then
+      echo "$found"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+# Prepend common npm bin dirs to PATH so both node and claude are findable
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:$PATH"
 
 if ! command -v node &>/dev/null; then
   echo "→ Installing Node.js (required for Claude Code)..."
@@ -154,19 +202,22 @@ if ! command -v node &>/dev/null; then
 fi
 echo "✓ Node.js $(node --version 2>/dev/null || echo '(pending)')"
 
-if ! command -v claude &>/dev/null; then
+CLAUDE_BIN_PATH=""
+CLAUDE_BIN_PATH="$(find_claude)" || true
+
+if [ -z "$CLAUDE_BIN_PATH" ]; then
   echo "→ Installing Claude Code CLI..."
   npm install -g @anthropic-ai/claude-code </dev/null 2>&1 | tail -1
-  # npm may have installed to ~/.local/bin — re-check PATH
-  if [ -f "$HOME/.local/bin/claude" ]; then
-    export PATH="$HOME/.local/bin:$PATH"
-  fi
+  # Re-search after install
+  CLAUDE_BIN_PATH="$(find_claude)" || true
 fi
-if command -v claude &>/dev/null; then
-  CLAUDE_BIN_PATH="$(command -v claude)"
-  echo "✓ Claude Code CLI $(claude --version 2>/dev/null | head -1) ($CLAUDE_BIN_PATH)"
+
+if [ -n "$CLAUDE_BIN_PATH" ]; then
+  # Add its directory to PATH for the rest of the install
+  export PATH="$(dirname "$CLAUDE_BIN_PATH"):$PATH"
+  echo "✓ Claude Code CLI $("$CLAUDE_BIN_PATH" --version 2>/dev/null | head -1) ($CLAUDE_BIN_PATH)"
 else
-  echo "⚠️  Claude Code CLI install failed — install manually: npm install -g @anthropic-ai/claude-code"
+  echo "⚠️  Claude Code CLI not found — install manually: npm install -g @anthropic-ai/claude-code"
 fi
 
 # --- Install root CA (one-time) ---
@@ -192,23 +243,22 @@ fi
 PYTHON_BIN="$VENV_DIR/bin/python3"
 PYTHON_BIN_DIR="$(dirname "$PYTHON_BIN")"
 # Build PATH for launchd — include the directory where claude was found
-CLAUDE_DIR=""
-if command -v claude &>/dev/null; then
-  CLAUDE_DIR="$(dirname "$(command -v claude)")"
-fi
 PATH_ENV="${PYTHON_BIN_DIR}:${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-# Add claude's directory if it's not already in the PATH
-if [ -n "$CLAUDE_DIR" ] && ! echo "$PATH_ENV" | grep -qF "$CLAUDE_DIR"; then
-  PATH_ENV="${CLAUDE_DIR}:${PATH_ENV}"
+# Add claude's directory if it's not already covered
+if [ -n "$CLAUDE_BIN_PATH" ]; then
+  CLAUDE_DIR="$(dirname "$CLAUDE_BIN_PATH")"
+  if ! echo "$PATH_ENV" | grep -qF "$CLAUDE_DIR"; then
+    PATH_ENV="${CLAUDE_DIR}:${PATH_ENV}"
+  fi
 fi
-# Set explicit CLAUDE_BIN env var for launchd if claude was found
+# Set explicit CLAUDE_BIN env var for launchd — absolute path so it works
+# even if launchd's PATH doesn't include the right directory
 CLAUDE_BIN_PLIST_ENTRY=""
-if command -v claude &>/dev/null; then
-  CLAUDE_FULL_PATH="$(command -v claude)"
+if [ -n "$CLAUDE_BIN_PATH" ]; then
   CLAUDE_BIN_PLIST_ENTRY="
         <key>CLAUDE_BIN</key>
-        <string>${CLAUDE_FULL_PATH}</string>"
-  echo "  Claude binary: $CLAUDE_FULL_PATH"
+        <string>${CLAUDE_BIN_PATH}</string>"
+  echo "  Claude binary: $CLAUDE_BIN_PATH"
 fi
 
 # --- Accept Xcode license (required before git works after fresh CLT install) ---
