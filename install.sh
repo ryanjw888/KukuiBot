@@ -183,7 +183,7 @@ fi
 # Use the venv's python for everything from here on
 PYTHON_BIN="$VENV_DIR/bin/python3"
 PYTHON_BIN_DIR="$(dirname "$PYTHON_BIN")"
-PATH_ENV="${PYTHON_BIN_DIR}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+PATH_ENV="${PYTHON_BIN_DIR}:${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 # --- Accept Xcode license (required before git works after fresh CLT install) ---
 sudo xcodebuild -license accept </dev/null 2>/dev/null || true
