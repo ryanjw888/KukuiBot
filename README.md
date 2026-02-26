@@ -54,14 +54,15 @@ Or with custom options:
 curl -fsSL https://github.com/ryanjw888/KukuiBot/raw/main/install.sh | bash -s -- --port 8443 --dir ~/my-kukuibot
 ```
 
-The installer handles dependencies (mkcert, ripgrep), HTTPS certs, launchd services, and cron jobs.
+The installer handles all dependencies (Python 3.11+, mkcert, ripgrep, Node.js, Claude Code CLI), HTTPS certs, launchd services, and cron jobs.
 
 ### Manual Setup
 
 ```bash
 # Install native dependencies
-brew install mkcert ripgrep
+brew install mkcert ripgrep node
 mkcert -install
+npm install -g @anthropic-ai/claude-code
 
 # Clone and install Python deps
 git clone https://github.com/ryanjw888/KukuiBot.git && cd kukuibot
@@ -171,12 +172,12 @@ Requires HTTPS (which KukuiBot provides by default).
 ## Uninstalling
 
 ```bash
-bash uninstall.sh
+bash ~/.kukuibot/src/uninstall.sh
 # Or if installed to a custom directory:
-bash uninstall.sh --dir ~/my-kukuibot
+bash ~/my-kukuibot/src/uninstall.sh --dir ~/my-kukuibot
 ```
 
-Removes services, cron jobs, sudoers rules, data, and logs. Does not remove Homebrew packages or the mkcert root CA.
+Removes services, cron jobs, sudoers rules, data, and logs. Does not remove Homebrew packages, Node.js, Claude Code CLI, or the mkcert root CA.
 
 ## Docs
 
