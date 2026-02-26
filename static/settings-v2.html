@@ -1773,7 +1773,7 @@ async function runClaudeSetup() {
       es.addEventListener('step', (e) => {
         const d = JSON.parse(e.data);
         const st = d.status;
-        if (st === 'checking' || st === 'installing' || st === 'running' || st === 'importing') {
+        if (st === 'checking' || st === 'installing' || st === 'running' || st === 'importing' || st === 'waiting') {
           _setStepState(d.step, 'running', d.message);
         } else if (st === 'done') {
           _setStepState(d.step, 'done', d.message);
