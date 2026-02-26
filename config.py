@@ -68,6 +68,17 @@ KUKUIBOT_HOME.mkdir(parents=True, exist_ok=True)
 # Skills directory path
 SKILLS_DIR = KUKUIBOT_HOME / "skills"
 
+# --- Seed skills from bundled repo on startup (add new, don't overwrite existing) ---
+_BUNDLED_SKILLS = APP_ROOT / "skills"
+if _BUNDLED_SKILLS.is_dir():
+    for src in _BUNDLED_SKILLS.rglob("*"):
+        if src.is_file():
+            rel = src.relative_to(_BUNDLED_SKILLS)
+            dest = SKILLS_DIR / rel
+            if not dest.exists():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dest)
+
 # --- Seed agent files from bundled templates on first run ---
 _AGENT_TEMPLATES = APP_ROOT / "agent"
 if _AGENT_TEMPLATES.is_dir():
