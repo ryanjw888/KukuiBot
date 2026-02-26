@@ -2112,66 +2112,67 @@ async def api_claude_setup(req: Request):
                 yield ev("error_msg", {"step": 1, "message": f"Install error: {e}"})
                 return
 
-        # --- Step 2: Launch setup-token and poll for credentials ---
+        # --- Step 2: Check existing token or launch setup-token and poll ---
         cred_path = Path.home() / ".claude" / ".credentials.json"
-        pre_mtime = cred_path.stat().st_mtime if cred_path.exists() else 0
-        pre_token = ""
+        existing_token = ""
         if cred_path.exists():
             try:
-                pre_token = _json.loads(cred_path.read_text()).get("claudeAiOauth", {}).get("accessToken", "")
+                existing_token = _json.loads(cred_path.read_text()).get("claudeAiOauth", {}).get("accessToken", "")
             except Exception:
                 pass
 
-        yield ev("step", {"step": 2, "status": "running", "message": "Launching authentication… A browser window should open."})
-
-        # Fire-and-forget: launch setup-token (it needs a TTY-like interaction,
-        # but we just let it run and poll for the credentials file to change)
-        try:
-            env = {**os.environ, "PATH": f"{Path(cli_path).parent}:{os.environ.get('PATH', '')}"}
-            _setup_proc = await asyncio.create_subprocess_exec(
-                cli_path, "setup-token",
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-                env=env,
-            )
-        except Exception as e:
-            yield ev("error_msg", {"step": 2, "message": f"Failed to launch setup-token: {e}"})
-            return
-
-        # Poll every 3 seconds for up to 5 minutes for a new/changed token
-        yield ev("step", {"step": 2, "status": "waiting", "message": "Waiting for authentication… Complete the login in your browser."})
         token_found = ""
-        for i in range(100):  # 100 * 3s = 5 minutes
-            await asyncio.sleep(3)
-            if not cred_path.exists():
-                continue
+        if existing_token:
+            # Token already exists — skip auth, use it directly
+            yield ev("step", {"step": 2, "status": "done", "message": "Already authenticated — existing token found."})
+            token_found = existing_token
+        else:
+            # No token yet — launch setup-token and poll
+            pre_mtime = cred_path.stat().st_mtime if cred_path.exists() else 0
+            yield ev("step", {"step": 2, "status": "running", "message": "Launching authentication… A browser window should open."})
+
             try:
-                cur_mtime = cred_path.stat().st_mtime
-                if cur_mtime <= pre_mtime:
+                env = {**os.environ, "PATH": f"{Path(cli_path).parent}:{os.environ.get('PATH', '')}"}
+                _setup_proc = await asyncio.create_subprocess_exec(
+                    cli_path, "setup-token",
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                    env=env,
+                )
+            except Exception as e:
+                yield ev("error_msg", {"step": 2, "message": f"Failed to launch setup-token: {e}"})
+                return
+
+            yield ev("step", {"step": 2, "status": "waiting", "message": "Waiting for authentication… Complete the login in your browser."})
+            for i in range(100):  # 100 * 3s = 5 minutes
+                await asyncio.sleep(3)
+                if not cred_path.exists():
                     continue
-                creds = _json.loads(cred_path.read_text())
-                cur_token = creds.get("claudeAiOauth", {}).get("accessToken", "")
-                if cur_token and cur_token != pre_token:
-                    token_found = cur_token
-                    break
+                try:
+                    cur_mtime = cred_path.stat().st_mtime
+                    if cur_mtime <= pre_mtime:
+                        continue
+                    creds = _json.loads(cred_path.read_text())
+                    cur_token = creds.get("claudeAiOauth", {}).get("accessToken", "")
+                    if cur_token:
+                        token_found = cur_token
+                        break
+                except Exception:
+                    continue
+                if i % 10 == 9:
+                    yield ev("step", {"step": 2, "status": "waiting", "message": f"Still waiting… ({(i+1)*3}s elapsed)"})
+
+            try:
+                _setup_proc.terminate()
             except Exception:
-                continue
-            # Send a keepalive so the connection doesn't drop
-            if i % 10 == 9:
-                yield ev("step", {"step": 2, "status": "waiting", "message": f"Still waiting… ({(i+1)*3}s elapsed)"})
+                pass
 
-        # Clean up the subprocess
-        try:
-            _setup_proc.terminate()
-        except Exception:
-            pass
+            if not token_found:
+                yield ev("error_msg", {"step": 2, "message": "Authentication timed out after 5 minutes. Please try again."})
+                return
 
-        if not token_found:
-            yield ev("error_msg", {"step": 2, "message": "Authentication timed out after 5 minutes. Please try again."})
-            return
-
-        yield ev("step", {"step": 2, "status": "done", "message": "Authentication complete!"})
+            yield ev("step", {"step": 2, "status": "done", "message": "Authentication complete!"})
 
         # --- Step 3: Import token ---
         yield ev("step", {"step": 3, "status": "importing", "message": "Importing token…"})
