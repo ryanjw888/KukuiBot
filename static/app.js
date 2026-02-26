@@ -93,6 +93,8 @@ function setAppMode(mode, initialPath) {
   // Close mobile file dropdown if leaving editor
   if (appMode === 'editor' && typeof EditorModule !== 'undefined') {
     EditorModule.closeMobileDropdown();
+    EditorModule.destroy();
+    editorInitialized = false;
   }
   appMode = mode;
   showSettings = false;
@@ -1408,10 +1410,10 @@ function requestRender(opts = {}) {
     // render() does root.innerHTML=... which destroys the Ace editor instance.
     // Only allow the mode-switch render through (when _editorModeSwitch is set).
     if (appMode === 'editor' && !_editorModeSwitch) return;
-    if (_editorModeSwitch) _editorModeSwitch = false;
     const inputEl = document.getElementById('input');
     const inputFocused = inputEl && document.activeElement === inputEl;
-    if (inputFocused && !o.forceStickBottom && o.preserveScroll) return;
+    if (inputFocused && !o.forceStickBottom && o.preserveScroll && !_editorModeSwitch) return;
+    if (_editorModeSwitch) _editorModeSwitch = false;
     render(o);
   });
 }

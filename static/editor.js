@@ -270,8 +270,12 @@ const EditorModule = (function () {
       originalContent = data.content;
       isDirty = false;
 
-      // If aceEditor lost or never initialized, retry init
-      if (!aceEditor) {
+      // If aceEditor lost, disconnected, or never initialized, retry init
+      if (!aceEditor || (aceEditor.container && !aceEditor.container.isConnected)) {
+        if (aceEditor) {
+          try { aceEditor.destroy(); } catch (_) {}
+        }
+        aceEditor = null;
         editorReady = false;
         init();
       }
