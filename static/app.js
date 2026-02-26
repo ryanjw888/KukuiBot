@@ -100,7 +100,7 @@ function setAppMode(mode, initialPath) {
   requestRender({});
   // Init editor after render if switching to editor mode
   if (mode === 'editor') {
-    setTimeout(() => {
+    _waitForEditorDOM(() => {
       if (typeof EditorModule !== 'undefined') {
         EditorModule.init();
         if (!editorInitialized) {
@@ -117,8 +117,26 @@ function setAppMode(mode, initialPath) {
         }
         editorInitialized = true;
       }
-    }, 50);
+    });
   }
+}
+
+// Poll for #ace-editor container to appear in DOM before calling callback.
+// Replaces the fragile setTimeout(50) which sometimes fires before the DOM is ready.
+function _waitForEditorDOM(cb) {
+  let attempts = 0;
+  const maxAttempts = 40; // 40 × 50ms = 2s max wait
+  function check() {
+    if (document.getElementById('ace-editor')) {
+      cb();
+    } else if (++attempts < maxAttempts) {
+      requestAnimationFrame(check);
+    } else {
+      console.error('Editor container #ace-editor not found after polling');
+    }
+  }
+  // First attempt on next animation frame (after render flush)
+  requestAnimationFrame(check);
 }
 
 // Dirty guard — warn before closing with unsaved editor changes

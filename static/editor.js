@@ -270,6 +270,12 @@ const EditorModule = (function () {
       originalContent = data.content;
       isDirty = false;
 
+      // If aceEditor lost or never initialized, retry init
+      if (!aceEditor) {
+        editorReady = false;
+        init();
+      }
+
       if (aceEditor) {
         aceEditor.session.setValue(data.content);
         aceEditor.session.setMode('ace/mode/' + (data.language || 'text'));
@@ -637,6 +643,16 @@ const EditorModule = (function () {
     return currentFile ? currentFile.path : '';
   }
 
+  // --- Refresh current file ---
+
+  function refresh() {
+    if (currentFile) {
+      const path = currentFile.path;
+      isDirty = false; // discard dirty state so openFile doesn't prompt
+      openFile(path);
+    }
+  }
+
   // --- Render the editor panel HTML (called from app.js) ---
 
   function renderEditorPanel() {
@@ -649,6 +665,7 @@ const EditorModule = (function () {
           <span id="editor-save-indicator" class="editor-save-indicator"></span>
         </div>
         <div class="editor-toolbar-right">
+          <button class="editor-btn editor-refresh-btn" onclick="EditorModule.refresh()" title="Refresh file">&#x21bb;</button>
           <button id="editor-save-btn" class="editor-btn" onclick="EditorModule.save()" disabled title="Save (Cmd+S)">Save</button>
           <button id="editor-revert-btn" class="editor-btn" onclick="EditorModule.revert()" disabled title="Revert to saved">Revert</button>
         </div>
@@ -688,6 +705,7 @@ const EditorModule = (function () {
     openFile,
     save,
     revert,
+    refresh,
     toggleDir,
     navigateUp,
     breadcrumbNavigate,
