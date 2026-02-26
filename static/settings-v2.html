@@ -4713,7 +4713,12 @@ async function loadConnectionsOverview() {
     } else if (procs.length > 0) {
       dot.style.color = 'var(--yellow)'; st.textContent = 'Idle';
     } else if (s.ok) {
-      dot.style.color = 'var(--muted)'; st.textContent = 'Ready';
+      const hasAuth = !!(c.oauth_token || '').trim() || !!c.has_api_key;
+      if (hasAuth) {
+        dot.style.color = 'var(--green)'; st.textContent = 'Ready';
+      } else {
+        dot.style.color = 'var(--muted)'; st.textContent = 'Not connected';
+      }
     } else {
       dot.style.color = 'var(--muted)'; st.textContent = 'Not initialized';
     }
