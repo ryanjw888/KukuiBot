@@ -5851,8 +5851,9 @@ async function pollClaudeBridgeHealth() {
     const r = await fetch('/claude/api-pool/status', { credentials: 'same-origin' });
     if (!r.ok) { _claudeBridgeUp = false; return; }
     const d = await r.json();
-    // Only mark as up if there are actual running bridge processes
-    _claudeBridgeUp = d.active_bridges && d.active_bridges.some(b => b.running);
+    // Mark as up if bridges are running OR Claude auth is configured (bridges spawn on demand)
+    const bridgesRunning = d.active_bridges && d.active_bridges.some(b => b.running);
+    _claudeBridgeUp = bridgesRunning || !!d.configured;
   } catch { _claudeBridgeUp = false; }
 }
 pollClaudeBridgeHealth();

@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from starlette.responses import StreamingResponse
 
 from config import KUKUIBOT_HOME
+from auth import get_config
 
 logger = logging.getLogger("kukuibot.bridge")
 
@@ -273,10 +274,16 @@ async def claude_pool_status():
     """Return status of all active bridge workers."""
     bridges = _active_bridges()
     workers = _discover_workers()
+    # Check if Claude auth is configured (OAuth token or API key)
+    has_oauth = bool((get_config("claude_code.oauth_token", "") or "").strip())
+    has_api_key = bool((get_config("claude_code.api_key", "") or "").strip())
+    has_env_key = bool((os.environ.get("ANTHROPIC_API_KEY") or "").strip())
+    configured = has_oauth or has_api_key or has_env_key
     return JSONResponse({
         "active_bridges": bridges,
         "available_workers": workers,
         "worker_ports": _BRIDGE_WORKER_PORTS,
+        "configured": configured,
     })
 
 

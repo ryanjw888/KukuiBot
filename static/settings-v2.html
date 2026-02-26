@@ -1881,14 +1881,21 @@ async function loadClaudeStatus() {
       if (labelEl) labelEl.textContent = 'Idle';
       if (detailEl) detailEl.textContent = `${totalSlots} workers available · starts on first message`;
     } else {
-      if (dotEl) dotEl.textContent = '⚪';
-      if (labelEl) labelEl.textContent = 'Ready';
-      if (detailEl) detailEl.textContent = 'No active sessions';
+      const authOk = hasToken || hasKey;
+      if (dotEl) dotEl.textContent = authOk ? '🟢' : '⚪';
+      if (labelEl) labelEl.textContent = authOk ? 'Ready' : 'Not Configured';
+      const authLabel = hasToken ? 'OAuth token' : hasKey ? 'API key' : '';
+      if (detailEl) detailEl.textContent = authOk
+        ? `${authLabel} loaded · workers start on first message`
+        : 'No active sessions';
     }
 
     // Build process table
     if (procList.length === 0) {
-      panel.innerHTML = '<div style="color:var(--muted);">No worker sessions yet. Send a message in a Claude tab to start one.</div>';
+      const authOk = hasToken || hasKey;
+      panel.innerHTML = authOk
+        ? '<div style="color:var(--muted);">Ready — workers launch automatically when you send a message.</div>'
+        : '<div style="color:var(--muted);">No worker sessions yet. Configure authentication above to get started.</div>';
       return;
     }
 
