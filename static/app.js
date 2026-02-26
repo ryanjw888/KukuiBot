@@ -4606,13 +4606,15 @@ async function confirmNewWorkerModal() {
   const t = createTab(newWorkerModelKey, { label: name, explicit: true, workerIdentity: newWorkerIdentityKey });
   if (t?.id) switchTab(t.id);
 
-  // Save worker identity to server
+  // Save worker identity to server (await to ensure tab_meta row exists before first chat)
   if (t?.sessionId && newWorkerIdentityKey) {
-    fetch(API + '/api/tab/worker-identity', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: t.sessionId, worker_identity: newWorkerIdentityKey }),
-    }).catch(() => {});
+    try {
+      await fetch(API + '/api/tab/worker-identity', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: t.sessionId, worker_identity: newWorkerIdentityKey }),
+      });
+    } catch {}
   }
 
   // Per-worker OpenRouter model pinning (for specialized OpenRouter worker types).

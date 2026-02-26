@@ -2169,11 +2169,16 @@ async def api_set_worker_identity(req: Request):
     if not owner:
         return JSONResponse({"ok": False, "error": "Unable to resolve user"}, status_code=400)
     try:
+        now = int(time.time())
         with db_connection() as db:
             _ensure_tab_meta_schema(db)
             db.execute(
-                "UPDATE tab_meta SET worker_identity = ? WHERE owner = ? AND session_id = ?",
-                (worker_identity, owner, session_id),
+                """INSERT INTO tab_meta (owner, session_id, worker_identity, updated_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(owner, session_id) DO UPDATE SET
+                       worker_identity = excluded.worker_identity,
+                       updated_at = excluded.updated_at""",
+                (owner, session_id, worker_identity, now),
             )
             db.commit()
             return {"ok": True, "session_id": session_id, "worker_identity": worker_identity}
