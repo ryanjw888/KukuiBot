@@ -2169,6 +2169,33 @@ async def api_worker_delete(key: str):
     return {"ok": True, "key": key}
 
 
+@app.get("/api/skills/{worker_key}")
+async def api_skills_for_worker(worker_key: str):
+    """Return skills applicable to a given worker identity."""
+    import re as _re
+    if not _re.fullmatch(r"[a-z0-9*-]+", worker_key):
+        return JSONResponse({"ok": False, "error": "Invalid worker key"}, status_code=400)
+    from config import SKILLS_DIR
+    meta_file = SKILLS_DIR / "_meta.json"
+    if not meta_file.is_file():
+        return {"ok": True, "skills": []}
+    try:
+        import json as _json
+        meta = _json.loads(meta_file.read_text(encoding="utf-8"))
+        all_skills = meta.get("skills", [])
+        matched = [
+            {"id": s["id"], "description": s.get("description", ""), "file": s.get("file", "")}
+            for s in all_skills
+            if "*" in s.get("workers", []) or worker_key in s.get("workers", [])
+        ]
+        matched.sort(key=lambda s: next(
+            (sk.get("priority", 99) for sk in all_skills if sk["id"] == s["id"]), 99
+        ))
+        return {"ok": True, "skills": matched}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
 @app.post("/api/tab/worker-identity")
 async def api_set_worker_identity(req: Request):
     """Set the worker identity for a tab."""

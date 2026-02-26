@@ -2005,7 +2005,7 @@ function render(opts = {}) {
             <span class="reasoning-label">Reasoning:</span>
             <div class="reasoning-picker" id="reasoning-picker-host">${renderReasoningPickerButtons()}</div>
           </div>
-          <span class="worker-name-badge" id="worker-name-badge">${_getWorkerDisplayName(tab)}</span>
+          <span class="worker-name-badge" id="worker-name-badge" onclick="_toggleSkillsPopup(event)" onmouseenter="_showSkillsPopup(event)" onmouseleave="_scheduleHideSkillsPopup()">${_getWorkerDisplayName(tab)}</span>
         </div>
       </div>
 
@@ -2188,6 +2188,135 @@ function _getWorkerDisplayNameByKey(key) {
 
 function _getWorkerDisplayName(tab) {
   return _getWorkerDisplayNameByKey(tab?.workerIdentity);
+}
+
+// --- Skills popup on worker badge ---
+const _skillsCache = {};  // workerKey -> {skills:[], ts:number}
+let _skillsPopupTimer = null;
+let _skillsHideTimer = null;
+let _skillsPopupPinned = false;  // true when opened via click (stays until dismissed)
+
+async function _fetchSkillsForWorker(workerKey) {
+  const cached = _skillsCache[workerKey];
+  if (cached && Date.now() - cached.ts < 60000) return cached.skills;
+  try {
+    const res = await fetch(API + '/api/skills/' + encodeURIComponent(workerKey));
+    const data = await res.json();
+    const skills = data.skills || [];
+    _skillsCache[workerKey] = { skills, ts: Date.now() };
+    return skills;
+  } catch { return []; }
+}
+
+async function _renderSkillsPopup(pinned) {
+  const tab = tabs.find(t => t.id === activeTabId);
+  const workerKey = tab?.workerIdentity;
+  if (!workerKey) return;
+  const skills = await _fetchSkillsForWorker(workerKey);
+  if (!skills.length) return;
+  _removeSkillsPopup();
+  const badge = document.getElementById('worker-name-badge');
+  if (!badge) return;
+  const popup = document.createElement('div');
+  popup.id = 'skills-popup';
+  popup.className = 'skills-popup';
+  popup.onmouseenter = () => clearTimeout(_skillsHideTimer);
+  popup.onmouseleave = () => { if (!_skillsPopupPinned) _scheduleHideSkillsPopup(); };
+  const title = document.createElement('div');
+  title.className = 'skills-popup-title';
+  title.textContent = 'Skills';
+  popup.appendChild(title);
+  skills.forEach(s => {
+    const row = document.createElement('div');
+    row.className = 'skills-popup-item';
+    row.onclick = (e) => { e.stopPropagation(); _insertSkillPrompt(s); _removeSkillsPopup(); _skillsPopupPinned = false; };
+    const name = document.createElement('span');
+    name.className = 'skills-popup-name';
+    name.textContent = s.id.replace(/-/g, ' ');
+    const desc = document.createElement('span');
+    desc.className = 'skills-popup-desc';
+    desc.textContent = s.description;
+    row.appendChild(name);
+    row.appendChild(desc);
+    popup.appendChild(row);
+  });
+  badge.style.position = 'relative';
+  badge.appendChild(popup);
+}
+
+function _toggleSkillsPopup(ev) {
+  ev.stopPropagation();
+  const existing = document.getElementById('skills-popup');
+  if (existing) {
+    _removeSkillsPopup();
+    _skillsPopupPinned = false;
+    return;
+  }
+  clearTimeout(_skillsPopupTimer);
+  clearTimeout(_skillsHideTimer);
+  _skillsPopupPinned = true;
+  _renderSkillsPopup(true);
+}
+
+function _showSkillsPopup(ev) {
+  if (_skillsPopupPinned) return;  // Don't override click-pinned popup
+  clearTimeout(_skillsHideTimer);
+  _skillsPopupTimer = setTimeout(() => _renderSkillsPopup(false), 200);
+}
+
+function _scheduleHideSkillsPopup() {
+  if (_skillsPopupPinned) return;  // Don't auto-hide click-pinned popup
+  clearTimeout(_skillsPopupTimer);
+  _skillsHideTimer = setTimeout(_removeSkillsPopup, 300);
+}
+
+function _removeSkillsPopup() {
+  const el = document.getElementById('skills-popup');
+  if (el) el.remove();
+}
+
+// Dismiss pinned skills popup on click-outside
+document.addEventListener('click', (e) => {
+  if (!_skillsPopupPinned) return;
+  const badge = document.getElementById('worker-name-badge');
+  if (badge && badge.contains(e.target)) return;  // click on badge handled by _toggleSkillsPopup
+  _removeSkillsPopup();
+  _skillsPopupPinned = false;
+});
+
+function _insertSkillPrompt(skill) {
+  const input = document.getElementById('input');
+  if (!input) return;
+  const starters = {
+    'using-skills': 'Check which skills apply to this task: ',
+    'verification-before-completion': 'Verify the following is actually complete with evidence: ',
+    'scope-assessment': 'Assess the scope and complexity of this project: ',
+    'delegation-dispatch': 'Delegate this task with a thorough prompt: ',
+    'quality-gating': 'Run a quality gate on the current phase output: ',
+    'agent-output-consolidation': 'Consolidate the following agent outputs and resolve conflicts: ',
+    'multi-phase-orchestration': 'Plan and orchestrate a multi-phase pipeline for: ',
+    'brainstorming': 'Let\'s brainstorm the design before implementing: ',
+    'network-audit-execution': 'Run a comprehensive network audit on: ',
+    'diagnose-before-fix': 'Diagnose the root cause before making changes: ',
+    'audit-phase-discipline': 'Execute the next audit phase with proper gates: ',
+    'finding-documentation': 'Document all findings with structured FINDING_CARDs: ',
+    'non-destructive-operations': 'Plan this change with backup and rollback steps: ',
+    'post-change-verification': 'Verify all services are healthy after the change: ',
+    'read-before-modify': 'Read and trace the code before making changes to: ',
+    'test-after-change': 'Run tests to verify the change works correctly: ',
+    'phase-discipline': 'Plan this as a phased project with verification at each step: ',
+    'small-focused-changes': 'Make small, focused changes — one concern at a time: ',
+    'read-before-opine': 'Analyze the code thoroughly before recommending: ',
+    'plan-specificity': 'Create a specific plan with file paths and line numbers: ',
+    'tradeoff-analysis': 'Analyze the tradeoffs between approaches for: ',
+    'evidence-anchoring': 'Provide evidence-anchored analysis of: ',
+  };
+  const starter = starters[skill.id] || `Use the ${skill.id.replace(/-/g, ' ')} skill for: `;
+  input.value = starter;
+  input.focus();
+  input.setSelectionRange(starter.length, starter.length);
+  autoResize(input);
+  updateInputBtn();
 }
 
 function _getModelLogoForKey(modelKey) {
