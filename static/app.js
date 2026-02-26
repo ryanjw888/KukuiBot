@@ -2005,7 +2005,7 @@ function render(opts = {}) {
             <span class="reasoning-label">Reasoning:</span>
             <div class="reasoning-picker" id="reasoning-picker-host">${renderReasoningPickerButtons()}</div>
           </div>
-          <span class="worker-name-badge" id="worker-name-badge" onclick="_toggleSkillsPopup(event)" onmouseenter="_showSkillsPopup(event)" onmouseleave="_scheduleHideSkillsPopup()">${_getWorkerDisplayName(tab)}</span>
+          <span class="worker-name-badge" id="worker-name-badge" onclick="_toggleSkillsPopup(event)">${_getWorkerDisplayName(tab)}</span>
         </div>
       </div>
 
@@ -2190,11 +2190,18 @@ function _getWorkerDisplayName(tab) {
   return _getWorkerDisplayNameByKey(tab?.workerIdentity);
 }
 
-// --- Skills popup on worker badge ---
+// --- Skills popup on worker badge (click-only) ---
 const _skillsCache = {};  // workerKey -> {skills:[], ts:number}
-let _skillsPopupTimer = null;
-let _skillsHideTimer = null;
-let _skillsPopupPinned = false;  // true when opened via click (stays until dismissed)
+
+// Display overrides for skills in the popup menu
+const _skillDisplayNames = {
+  'network-audit-execution': 'Network Audit',
+};
+// Display order override (lower = higher in list). Skills not listed keep their API order.
+const _skillDisplayOrder = {
+  'using-skills': 0,
+  'network-audit-execution': 1,
+};
 
 async function _fetchSkillsForWorker(workerKey) {
   const cached = _skillsCache[workerKey];
@@ -2208,20 +2215,22 @@ async function _fetchSkillsForWorker(workerKey) {
   } catch { return []; }
 }
 
-async function _renderSkillsPopup(pinned) {
+async function _toggleSkillsPopup(ev) {
+  ev.stopPropagation();
+  const existing = document.getElementById('skills-popup');
+  if (existing) { existing.remove(); return; }
   const tab = tabs.find(t => t.id === activeTabId);
   const workerKey = tab?.workerIdentity;
   if (!workerKey) return;
   const skills = await _fetchSkillsForWorker(workerKey);
   if (!skills.length) return;
-  _removeSkillsPopup();
+  // Apply display order overrides (skills not in map keep original position)
+  skills.sort((a, b) => (_skillDisplayOrder[a.id] ?? 50) - (_skillDisplayOrder[b.id] ?? 50));
   const badge = document.getElementById('worker-name-badge');
   if (!badge) return;
   const popup = document.createElement('div');
   popup.id = 'skills-popup';
   popup.className = 'skills-popup';
-  popup.onmouseenter = () => clearTimeout(_skillsHideTimer);
-  popup.onmouseleave = () => { if (!_skillsPopupPinned) _scheduleHideSkillsPopup(); };
   const title = document.createElement('div');
   title.className = 'skills-popup-title';
   title.textContent = 'Skills';
@@ -2229,10 +2238,10 @@ async function _renderSkillsPopup(pinned) {
   skills.forEach(s => {
     const row = document.createElement('div');
     row.className = 'skills-popup-item';
-    row.onclick = (e) => { e.stopPropagation(); _insertSkillPrompt(s); _removeSkillsPopup(); _skillsPopupPinned = false; };
+    row.onclick = (e) => { e.stopPropagation(); _insertSkillPrompt(s); document.getElementById('skills-popup')?.remove(); };
     const name = document.createElement('span');
     name.className = 'skills-popup-name';
-    name.textContent = s.id.replace(/-/g, ' ');
+    name.textContent = _skillDisplayNames[s.id] || s.id.replace(/-/g, ' ');
     const desc = document.createElement('span');
     desc.className = 'skills-popup-desc';
     desc.textContent = s.description;
@@ -2240,48 +2249,16 @@ async function _renderSkillsPopup(pinned) {
     row.appendChild(desc);
     popup.appendChild(row);
   });
-  badge.style.position = 'relative';
   badge.appendChild(popup);
 }
 
-function _toggleSkillsPopup(ev) {
-  ev.stopPropagation();
-  const existing = document.getElementById('skills-popup');
-  if (existing) {
-    _removeSkillsPopup();
-    _skillsPopupPinned = false;
-    return;
-  }
-  clearTimeout(_skillsPopupTimer);
-  clearTimeout(_skillsHideTimer);
-  _skillsPopupPinned = true;
-  _renderSkillsPopup(true);
-}
-
-function _showSkillsPopup(ev) {
-  if (_skillsPopupPinned) return;  // Don't override click-pinned popup
-  clearTimeout(_skillsHideTimer);
-  _skillsPopupTimer = setTimeout(() => _renderSkillsPopup(false), 200);
-}
-
-function _scheduleHideSkillsPopup() {
-  if (_skillsPopupPinned) return;  // Don't auto-hide click-pinned popup
-  clearTimeout(_skillsPopupTimer);
-  _skillsHideTimer = setTimeout(_removeSkillsPopup, 300);
-}
-
-function _removeSkillsPopup() {
-  const el = document.getElementById('skills-popup');
-  if (el) el.remove();
-}
-
-// Dismiss pinned skills popup on click-outside
+// Dismiss skills popup on click-outside
 document.addEventListener('click', (e) => {
-  if (!_skillsPopupPinned) return;
+  const popup = document.getElementById('skills-popup');
+  if (!popup) return;
   const badge = document.getElementById('worker-name-badge');
-  if (badge && badge.contains(e.target)) return;  // click on badge handled by _toggleSkillsPopup
-  _removeSkillsPopup();
-  _skillsPopupPinned = false;
+  if (badge && badge.contains(e.target)) return;
+  popup.remove();
 });
 
 function _insertSkillPrompt(skill) {
@@ -2296,7 +2273,7 @@ function _insertSkillPrompt(skill) {
     'agent-output-consolidation': 'Consolidate the following agent outputs and resolve conflicts: ',
     'multi-phase-orchestration': 'Plan and orchestrate a multi-phase pipeline for: ',
     'brainstorming': 'Let\'s brainstorm the design before implementing: ',
-    'network-audit-execution': 'Run a comprehensive network audit on: ',
+    'network-audit-execution': 'Run a comprehensive network audit on the current connected network',
     'diagnose-before-fix': 'Diagnose the root cause before making changes: ',
     'audit-phase-discipline': 'Execute the next audit phase with proper gates: ',
     'finding-documentation': 'Document all findings with structured FINDING_CARDs: ',
