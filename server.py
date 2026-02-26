@@ -2075,6 +2075,7 @@ async def api_claude_setup(req: Request):
     if not _is_admin(req):
         return JSONResponse({"ok": False, "error": "Admin only"}, status_code=403)
 
+    force_reauth = req.query_params.get("force", "").lower() in ("1", "true", "yes")
     import json as _json
 
     async def _stream():
@@ -2115,7 +2116,7 @@ async def api_claude_setup(req: Request):
         # --- Step 2: Check existing token or launch setup-token and poll ---
         cred_path = Path.home() / ".claude" / ".credentials.json"
         existing_token = ""
-        if cred_path.exists():
+        if not force_reauth and cred_path.exists():
             try:
                 existing_token = _json.loads(cred_path.read_text()).get("claudeAiOauth", {}).get("accessToken", "")
             except Exception:
@@ -2127,6 +2128,12 @@ async def api_claude_setup(req: Request):
             yield ev("step", {"step": 2, "status": "done", "message": "Already authenticated — existing token found."})
             token_found = existing_token
         else:
+            # Force re-auth: remove old credentials so setup-token generates fresh ones
+            if force_reauth and cred_path.exists():
+                try:
+                    cred_path.unlink()
+                except Exception:
+                    pass
             # No token yet — launch setup-token and poll
             pre_mtime = cred_path.stat().st_mtime if cred_path.exists() else 0
             yield ev("step", {"step": 2, "status": "running", "message": "Launching authentication… A browser window should open."})

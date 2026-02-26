@@ -1058,7 +1058,7 @@
         <p style="font-size:12px;color:var(--muted);margin-bottom:12px;">Installs the Claude CLI (if needed), opens a browser to authenticate, and imports the token automatically.</p>
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">
           <button class="btn primary" onclick="runClaudeSetup()" id="claude-setup-btn" style="font-size:13px;padding:9px 20px;">Setup Claude Code</button>
-          <button class="btn" onclick="importClaudeToken()" id="claude-import-btn" style="font-size:11px;padding:6px 12px;" title="Re-import token from ~/.claude/.credentials.json">Re-import Token</button>
+          <button class="btn" onclick="runClaudeSetup(true)" id="claude-reauth-btn" style="font-size:11px;padding:6px 12px;" title="Delete existing token and re-authenticate via browser">Re-authenticate</button>
         </div>
         <div id="claude-setup-progress" style="display:none;margin-bottom:10px;">
           <div id="claude-setup-step1" class="claude-setup-step" style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12px;color:var(--muted);">
@@ -1758,17 +1758,20 @@ function _setStepState(stepNum, state, message) {
   if (message) label.textContent = message;
 }
 
-async function runClaudeSetup() {
+async function runClaudeSetup(force) {
   const btn = document.getElementById('claude-setup-btn');
+  const reauthBtn = document.getElementById('claude-reauth-btn');
   const progress = document.getElementById('claude-setup-progress');
   const statusEl = document.getElementById('claude-setup-status');
   if (btn) { btn.disabled = true; btn.textContent = 'Setting up…'; }
+  if (reauthBtn) reauthBtn.disabled = true;
   if (progress) progress.style.display = 'block';
   if (statusEl) { statusEl.style.color = 'var(--muted)'; statusEl.textContent = ''; }
   _setStepState(1, 'pending'); _setStepState(2, 'pending'); _setStepState(3, 'pending');
 
   try {
-    const es = new EventSource(API + '/api/claude/setup');
+    const url = API + '/api/claude/setup' + (force ? '?force=1' : '');
+    const es = new EventSource(url);
     await new Promise((resolve, reject) => {
       es.addEventListener('step', (e) => {
         const d = JSON.parse(e.data);
@@ -1805,6 +1808,7 @@ async function runClaudeSetup() {
     toast('❌ Setup failed: ' + (e?.message || String(e)));
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Setup Claude Code'; }
+    if (reauthBtn) { reauthBtn.disabled = false; }
   }
 }
 
