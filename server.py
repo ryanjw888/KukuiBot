@@ -2134,10 +2134,11 @@ async def api_claude_setup(req: Request):
                     cred_path.unlink()
                 except Exception:
                     pass
-            # No token yet — launch setup-token and poll
-            pre_mtime = cred_path.stat().st_mtime if cred_path.exists() else 0
-            yield ev("step", {"step": 2, "status": "running", "message": "Launching authentication… A browser window should open."})
 
+            pre_mtime = cred_path.stat().st_mtime if cred_path.exists() else 0
+
+            # Try to launch setup-token (opens browser on local machine)
+            _setup_proc = None
             try:
                 env = {**os.environ, "PATH": f"{Path(cli_path).parent}:{os.environ.get('PATH', '')}"}
                 _setup_proc = await asyncio.create_subprocess_exec(
@@ -2147,39 +2148,45 @@ async def api_claude_setup(req: Request):
                     stderr=asyncio.subprocess.DEVNULL,
                     env=env,
                 )
-            except Exception as e:
-                yield ev("error_msg", {"step": 2, "message": f"Failed to launch setup-token: {e}"})
-                return
-
-            yield ev("step", {"step": 2, "status": "waiting", "message": "Waiting for authentication… Complete the login in your browser."})
-            for i in range(100):  # 100 * 3s = 5 minutes
-                await asyncio.sleep(3)
-                if not cred_path.exists():
-                    continue
-                try:
-                    cur_mtime = cred_path.stat().st_mtime
-                    if cur_mtime <= pre_mtime:
-                        continue
-                    creds = _json.loads(cred_path.read_text())
-                    cur_token = creds.get("claudeAiOauth", {}).get("accessToken", "")
-                    if cur_token:
-                        token_found = cur_token
-                        break
-                except Exception:
-                    continue
-                if i % 10 == 9:
-                    yield ev("step", {"step": 2, "status": "waiting", "message": f"Still waiting… ({(i+1)*3}s elapsed)"})
-
-            try:
-                _setup_proc.terminate()
             except Exception:
                 pass
 
+            yield ev("step", {"step": 2, "status": "waiting",
+                "message": "Run 'claude setup-token' in a terminal on the server, then complete the browser login. Polling for token…"})
+
+            for i in range(100):  # 100 * 3s = 5 minutes
+                await asyncio.sleep(3)
+                # Check credentials file
+                if cred_path.exists():
+                    try:
+                        cur_mtime = cred_path.stat().st_mtime
+                        if cur_mtime > pre_mtime:
+                            creds = _json.loads(cred_path.read_text())
+                            cur_token = creds.get("claudeAiOauth", {}).get("accessToken", "")
+                            if cur_token:
+                                token_found = cur_token
+                                break
+                    except Exception:
+                        pass
+                # Also check if token was manually saved via paste while we poll
+                saved_tok = (get_config("claude_code.oauth_token", "") or "").strip()
+                if saved_tok:
+                    token_found = saved_tok
+                    break
+                if i % 10 == 9:
+                    yield ev("step", {"step": 2, "status": "waiting", "message": f"Still waiting for token… ({(i+1)*3}s elapsed)"})
+
+            if _setup_proc:
+                try:
+                    _setup_proc.terminate()
+                except Exception:
+                    pass
+
             if not token_found:
-                yield ev("error_msg", {"step": 2, "message": "Authentication timed out after 5 minutes. Please try again."})
+                yield ev("error_msg", {"step": 2, "message": "Timed out after 5 minutes. Run 'claude setup-token' in a terminal or paste the token manually below."})
                 return
 
-            yield ev("step", {"step": 2, "status": "done", "message": "Authentication complete!"})
+            yield ev("step", {"step": 2, "status": "done", "message": "Token found!"})
 
         # --- Step 3: Import token ---
         yield ev("step", {"step": 3, "status": "importing", "message": "Importing token…"})
