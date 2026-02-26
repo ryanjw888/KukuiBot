@@ -634,8 +634,8 @@ def _get_system_prompt(model_key: str = "", worker_identity: str = "") -> str:
         try:
             if worker_file.exists():
                 content = worker_file.read_text()
-                if len(content) > 10000:
-                    content = content[:10000] + "\n... (truncated)"
+                if len(content) > 40000:
+                    content = content[:40000] + "\n... (truncated)"
                 parts.append(f"## Worker Role\n{content}\n")
         except Exception:
             pass
