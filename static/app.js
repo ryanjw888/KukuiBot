@@ -2000,6 +2000,7 @@ function render(opts = {}) {
           Context:${ctxStr ? ` <span style="color:${ctxColor}">${ctxStr}</span>` : ' --'}${tpsStr}
         </span>
         <div class="controls">
+          <button class="btn-sm ${elevatedSession.enabled ? 'root-active' : 'inactive'}" onclick="promptRoot()" title="${elevatedSession.enabled ? `Root active — ${elevMin}m remaining. Click to revoke.` : 'Enable 30-min privileged root mode'}">${elevatedSession.enabled ? `🔓 Root ${elevMin}m` : '🔐 Root'}</button>
           ${tabApproveAllVisible(tab) ? `<button class="btn-sm ${tabApproveAll(tab) ? 'active' : 'inactive'}" onclick="toggleApproveAll()" title="${tabApproveAll(tab) ? 'Auto Allow is ON — click to turn off' : 'Auto Allow is OFF — click to turn on'}">⚡ Auto Allow${tabApproveAll(tab) ? ' ✓' : ''}</button>` : ''}
           ${_isClaudeModel(tab.modelKey) ? '' : `<div class="reasoning-wrap">
             <span class="reasoning-label">Reasoning:</span>
@@ -2122,8 +2123,8 @@ function renderSettingsMenu(modelKey = (activeTab()?.modelKey || 'codex')) {
 function renderRootWarning() {
   return `<div class="root-warning-overlay" onclick="if(event.target===this){showRootWarning=false;requestRender({ preserveScroll: true });}">
     <div class="root-warning">
-      <h3>⚠️ Enable Privileged Root Mode</h3>
-      <p>This requests a short-lived privileged session from the local helper. You will authenticate via a native macOS prompt. Password is not sent through chat/model context.</p>
+      <h3>⚠️ Enable Privileged Root Mode (30 min)</h3>
+      <p>This requests a 30-minute privileged session from the local helper. You will authenticate via a native macOS prompt. Password is not sent through chat/model context.</p>
       <p><strong style="color:var(--red)">Only enable this if you trust the current task.</strong> Access is temporary and scoped to allowlisted commands.</p>
       <div class="warn-actions">
         <button class="btn-cancel" onclick="showRootWarning=false;requestRender({ preserveScroll: true })">Cancel</button>
@@ -4451,7 +4452,7 @@ async function confirmRoot() {
   try {
     const res = await fetch(API + '/api/elevated-session', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sid, enabled: true, ttl_seconds: 600 })
+      body: JSON.stringify({ session_id: sid, enabled: true, ttl_seconds: 1800 })
     });
     const data = await res.json();
     elevatedSession = { enabled: Boolean(data.enabled), remaining_seconds: Number(data.remaining_seconds || 0) };
@@ -4463,7 +4464,7 @@ async function confirmRoot() {
   try {
     const pres = await fetch(API + '/api/privileged/elevate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sid, ttl_seconds: 600 })
+      body: JSON.stringify({ session_id: sid, ttl_seconds: 1800 })
     });
     const pdata = await pres.json().catch(() => ({}));
     if (!pres.ok || !pdata.ok) {
