@@ -19,9 +19,9 @@ const EditorModule = (function () {
 
   // Ace theme mapping (matches KukuiBot themes)
   const ACE_THEMES = {
-    'blue': 'ace/theme/cobalt',
-    'claudia': 'ace/theme/one_dark',
-    'sol-dark': 'ace/theme/tomorrow_night',
+    'blue': 'ace/theme/solarized_dark',
+    'claudia': 'ace/theme/solarized_dark',
+    'sol-dark': 'ace/theme/solarized_dark',
     'sol-light': 'ace/theme/tomorrow',
   };
 
