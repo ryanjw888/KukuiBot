@@ -662,9 +662,13 @@
         // Show success and finish
         document.getElementById('method-picker').style.display = 'none';
         document.getElementById('claude-oauth-waiting').style.display = 'none';
+        document.getElementById('step-1').style.display = 'none';
         document.getElementById('claude-success').style.display = 'block';
-        // Make step 2 visible if not already
         document.getElementById('step-2').classList.add('visible');
+        const dots = document.querySelector('.steps');
+        if (dots) dots.style.display = 'none';
+        // User navigated away during setup — step 1 was skipped
+        skippedAccount = true;
         setTimeout(() => finishSetup(), 800);
       } else if (params.get('claude_oauth') === 'error') {
         const msg = params.get('claude_oauth_msg') || 'Authentication failed';
