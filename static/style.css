@@ -77,6 +77,8 @@
 .sol-light .deleg-bar + .deleg-bar { border-top-color: rgba(0,0,0,0.06); }
 .sol-light .deleg-bar.done { background: rgba(133,153,0,0.1); }
 .sol-light .sidebar-nav-item:hover { background: rgba(0,0,0,0.04); }
+.sol-light .sidebar-editor-btn { background: rgba(0,0,0,0.02); border-color: rgba(0,0,0,0.08); }
+.sol-light .sidebar-editor-btn:hover { background: rgba(0,0,0,0.06); }
 .sol-light .editor-readonly-badge { background: rgba(0,0,0,0.06); }
 .sol-light .file-tree::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.12); }
 .sol-light .mfd-backdrop { background: rgba(0,0,0,0.15); }
@@ -154,6 +156,18 @@ body {
   font-size: 11px; color: var(--muted); text-transform: uppercase;
   letter-spacing: 0.5px; font-weight: 600;
 }
+/* Permanent File Editor / Chat toggle button above workers */
+.sidebar-editor-btn {
+  display: flex; align-items: center; gap: 8px;
+  width: calc(100% - 16px); margin: 4px 8px;
+  padding: 7px 10px; border-radius: 10px;
+  border: 1px solid var(--border-light); background: rgba(255,255,255,0.03);
+  color: var(--muted); cursor: pointer; text-align: left;
+  font-size: 13px; font-family: inherit;
+  transition: all 0.15s; flex-shrink: 0;
+}
+.sidebar-editor-btn:hover { background: rgba(255,255,255,0.07); border-color: var(--accent); color: var(--text); }
+
 .sidebar-section { flex: 1; overflow-y: auto; padding: 0 6px; }
 .sidebar-section::-webkit-scrollbar { width: 3px; }
 .sidebar-section::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
@@ -1704,7 +1718,7 @@ body {
   flex-shrink: 0;
 }
 .ft-filter {
-  width: 100%; padding: 5px 8px; border-radius: 4px;
+  width: 100%; padding: 8px 8px; border-radius: 4px;
   border: 1px solid var(--border-light); background: var(--bg);
   color: var(--text); font-size: 12px; outline: none;
 }

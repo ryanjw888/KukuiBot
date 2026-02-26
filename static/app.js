@@ -1882,7 +1882,6 @@ function render(opts = {}) {
             }).join('\n            ')}
           </div>
         </div>
-        <button class="sidebar-nav-item" onclick="setAppMode(appMode === 'editor' ? 'chat' : 'editor')"><span class="sidebar-nav-icon">${appMode === 'editor' ? '&#128172;' : '&#128194;'}</span>${appMode === 'editor' ? 'Chat' : 'File Editor'}</button>
         <button class="sidebar-nav-item" onclick="forceRefreshApp()"><span class="sidebar-nav-icon">&#128260;</span>Reload App</button>
         <a href="/settings-v2.html" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#9881;</span>Settings</a>
         <div class="sidebar-nav-item auto-name-nav ${autoNaming ? 'busy' : ''}" title="Click to rename tabs. Toggle enables auto-naming.">
@@ -1896,6 +1895,7 @@ function render(opts = {}) {
         </div>
         <button class="sidebar-nav-item" onclick="doLogout()"><span class="sidebar-nav-icon">&#128682;</span>Logout</button>
       </div>` : ''}
+      <button class="sidebar-editor-btn" onclick="setAppMode(appMode === 'editor' ? 'chat' : 'editor')"><span class="sidebar-nav-icon">${appMode === 'editor' ? '&#128172;' : '&#128194;'}</span>${appMode === 'editor' ? 'Chat' : 'File Editor'}</button>
       ${appMode === 'editor' ? `
       <div class="sidebar-section editor-sidebar-section">
         ${typeof EditorModule !== 'undefined' ? EditorModule.renderFileTreeSidebar() : '<div class="ft-loading">Loading...</div>'}
@@ -1966,7 +1966,6 @@ function render(opts = {}) {
               }).join('\n              ')}
             </div>
           </div>
-          <button class="sidebar-nav-item" onclick="setAppMode(appMode === 'editor' ? 'chat' : 'editor')"><span class="sidebar-nav-icon">${appMode === 'editor' ? '&#128172;' : '&#128194;'}</span>${appMode === 'editor' ? 'Chat' : 'File Editor'}</button>
           <button class="sidebar-nav-item" onclick="forceRefreshApp()"><span class="sidebar-nav-icon">&#128260;</span>Reload App</button>
           <a href="/settings-v2.html" class="sidebar-nav-item"><span class="sidebar-nav-icon">&#9881;</span>Settings</a>
             <div class="sidebar-nav-item auto-name-nav ${autoNaming ? 'busy' : ''}">
@@ -4545,7 +4544,6 @@ function _toggleEditorSettingsDOM() {
       const nav = document.createElement('div');
       nav.className = 'sidebar-nav';
       nav.innerHTML = `
-        <button class="sidebar-nav-item" onclick="setAppMode('chat')"><span class="sidebar-nav-icon">&#128172;</span>Chat</button>
         <div class="sidebar-submenu-wrap">
           <button class="sidebar-nav-item" onclick="event.stopPropagation();this.nextElementSibling.classList.toggle('show')"><span class="sidebar-nav-icon">&#127912;</span>Theme &#9656;</button>
           <div class="sidebar-submenu">
@@ -4572,7 +4570,6 @@ function _toggleEditorSettingsDOM() {
       const nav = document.createElement('div');
       nav.className = 'mobile-settings-nav';
       nav.innerHTML = `
-        <button class="sidebar-nav-item" onclick="setAppMode('chat')"><span class="sidebar-nav-icon">&#128172;</span>Chat</button>
         <div class="sidebar-submenu-wrap">
           <button class="sidebar-nav-item" onclick="event.stopPropagation();this.nextElementSibling.classList.toggle('show')"><span class="sidebar-nav-icon">&#127912;</span>Theme &#9656;</button>
           <div class="sidebar-submenu">
