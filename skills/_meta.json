@@ -1,0 +1,182 @@
+{
+  "version": 2,
+  "description": "Skill registry — maps skills to workers with load priority",
+  "skills": [
+    {
+      "id": "using-skills",
+      "file": "core/using-skills.md",
+      "workers": ["*"],
+      "priority": 1,
+      "max_chars": 2000,
+      "description": "Meta-skill: check for applicable skills before every action"
+    },
+    {
+      "id": "verification-before-completion",
+      "file": "core/verification-before-completion.md",
+      "workers": ["*"],
+      "priority": 2,
+      "max_chars": 2500,
+      "description": "No completion claims without fresh verification evidence"
+    },
+    {
+      "id": "scope-assessment",
+      "file": "planner/scope-assessment.md",
+      "workers": ["planner"],
+      "priority": 3,
+      "max_chars": 2500,
+      "description": "Assess complexity and determine agent count before Phase 1"
+    },
+    {
+      "id": "delegation-dispatch",
+      "file": "planner/delegation-dispatch.md",
+      "workers": ["planner", "dev-manager"],
+      "priority": 4,
+      "max_chars": 3000,
+      "description": "Enforce prompt quality, pool awareness, deliverable checklists"
+    },
+    {
+      "id": "quality-gating",
+      "file": "planner/quality-gating.md",
+      "workers": ["planner", "dev-manager"],
+      "priority": 5,
+      "max_chars": 3000,
+      "description": "Evidence-based pass/fail at every phase boundary"
+    },
+    {
+      "id": "agent-output-consolidation",
+      "file": "planner/agent-output-consolidation.md",
+      "workers": ["planner", "dev-manager"],
+      "priority": 6,
+      "max_chars": 2500,
+      "description": "Merge parallel agent outputs with conflict resolution"
+    },
+    {
+      "id": "multi-phase-orchestration",
+      "file": "planner/multi-phase-orchestration.md",
+      "workers": ["planner"],
+      "priority": 7,
+      "max_chars": 2500,
+      "description": "Pipeline state machine, compaction strategy, phase tracking"
+    },
+    {
+      "id": "brainstorming",
+      "file": "shared/brainstorming.md",
+      "workers": ["planner", "dev-manager"],
+      "priority": 8,
+      "max_chars": 2500,
+      "description": "Socratic design refinement before any implementation dispatch"
+    },
+    {
+      "id": "network-audit-execution",
+      "file": "it-admin/network-audit-execution.md",
+      "workers": ["it-admin"],
+      "priority": 3,
+      "max_chars": 5500,
+      "description": "Complete 8-phase network audit protocol with per-phase output requirements and completeness gates"
+    },
+    {
+      "id": "diagnose-before-fix",
+      "file": "it-admin/diagnose-before-fix.md",
+      "workers": ["it-admin"],
+      "priority": 4,
+      "max_chars": 2500,
+      "description": "Root cause diagnosis with evidence before any infrastructure change"
+    },
+    {
+      "id": "audit-phase-discipline",
+      "file": "it-admin/audit-phase-discipline.md",
+      "workers": ["it-admin"],
+      "priority": 5,
+      "max_chars": 3000,
+      "description": "Sequential phase execution with PHASE_COMPLETE gates for audits"
+    },
+    {
+      "id": "finding-documentation",
+      "file": "it-admin/finding-documentation.md",
+      "workers": ["it-admin"],
+      "priority": 6,
+      "max_chars": 3000,
+      "description": "Structured FINDING_CARD for every vulnerability with severity classification"
+    },
+    {
+      "id": "non-destructive-operations",
+      "file": "it-admin/non-destructive-operations.md",
+      "workers": ["it-admin"],
+      "priority": 7,
+      "max_chars": 2500,
+      "description": "Backup-first policy, read-only probes, CHANGE_PLAN with rollback"
+    },
+    {
+      "id": "post-change-verification",
+      "file": "it-admin/post-change-verification.md",
+      "workers": ["it-admin"],
+      "priority": 8,
+      "max_chars": 2500,
+      "description": "Connectivity and service health verification after every change"
+    },
+    {
+      "id": "read-before-modify",
+      "file": "developer/read-before-modify.md",
+      "workers": ["developer"],
+      "priority": 3,
+      "max_chars": 2000,
+      "description": "Read target file and trace call chain before any code edit"
+    },
+    {
+      "id": "test-after-change",
+      "file": "developer/test-after-change.md",
+      "workers": ["developer"],
+      "priority": 4,
+      "max_chars": 2000,
+      "description": "Run verification after every code change before declaring done"
+    },
+    {
+      "id": "phase-discipline",
+      "file": "developer/phase-discipline.md",
+      "workers": ["developer"],
+      "priority": 5,
+      "max_chars": 2000,
+      "description": "Plan-approve-execute-verify-compact cycle for multi-phase projects"
+    },
+    {
+      "id": "small-focused-changes",
+      "file": "developer/small-focused-changes.md",
+      "workers": ["developer"],
+      "priority": 6,
+      "max_chars": 2000,
+      "description": "One concern per edit, one concern per commit"
+    },
+    {
+      "id": "read-before-opine",
+      "file": "analyst/read-before-opine.md",
+      "workers": ["code-analyst"],
+      "priority": 3,
+      "max_chars": 2500,
+      "description": "Full call chain traced with ANALYSIS_BASIS before any recommendation"
+    },
+    {
+      "id": "plan-specificity",
+      "file": "analyst/plan-specificity.md",
+      "workers": ["code-analyst"],
+      "priority": 4,
+      "max_chars": 2500,
+      "description": "File paths, line numbers, function names required in every plan"
+    },
+    {
+      "id": "tradeoff-analysis",
+      "file": "analyst/tradeoff-analysis.md",
+      "workers": ["code-analyst"],
+      "priority": 5,
+      "max_chars": 2500,
+      "description": "TRADEOFF_ANALYSIS block with 2+ options for every architectural decision"
+    },
+    {
+      "id": "evidence-anchoring",
+      "file": "analyst/evidence-anchoring.md",
+      "workers": ["code-analyst"],
+      "priority": 6,
+      "max_chars": 2500,
+      "description": "Every claim anchored to specific file:line code references"
+    }
+  ]
+}
