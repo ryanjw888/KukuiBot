@@ -1712,69 +1712,26 @@ async function startClaudeOAuth() {
   const btn = document.getElementById('claude-oauth-btn');
   const reauthBtn = document.getElementById('claude-reauth-btn');
   const statusEl = document.getElementById('claude-setup-status');
-  if (btn) { btn.disabled = true; btn.textContent = 'Opening…'; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Redirecting…'; }
   if (reauthBtn) reauthBtn.disabled = true;
   if (statusEl) { statusEl.style.color = 'var(--muted)'; statusEl.textContent = ''; }
 
   try {
-    // Snapshot the current token so the poll can detect when it changes
-    let prevToken = '';
-    try {
-      const pr = await fetch(API + '/api/claude/config', { headers: { 'Accept': 'application/json' } });
-      const pd = await pr.json();
-      prevToken = (pd.oauth_token || '').trim();
-    } catch {}
-
     const r = await fetch(API + '/api/claude/oauth/start', { headers: { 'Accept': 'application/json' } });
+    if (!r.ok) {
+      const txt = await r.text();
+      throw new Error('HTTP ' + r.status + ': ' + txt.substring(0, 200));
+    }
+    const ct = (r.headers.get('content-type') || '');
+    if (!ct.includes('application/json')) {
+      throw new Error('Server returned non-JSON response. You may need to log in again.');
+    }
     const d = await r.json();
-    if (!r.ok || !d.ok) throw new Error(d.error || 'Failed to start OAuth');
+    if (!d.ok) throw new Error(d.error || 'Failed to start OAuth');
 
-    // Open the authorize URL in a new tab/popup
-    const popup = window.open(d.authorize_url, '_blank', 'width=600,height=700');
-    if (statusEl) { statusEl.style.color = 'var(--accent)'; statusEl.textContent = 'Waiting for login…'; }
-
-    let resolved = false;
-    const finish = () => {
-      if (resolved) return;
-      resolved = true;
-      clearInterval(pollTimer);
-      window.removeEventListener('message', onDone);
-      if (statusEl) { statusEl.style.color = 'var(--green)'; statusEl.textContent = 'Connected!'; }
-      loadClaudeToken();
-      setClaudeLoaded(true);
-      loadClaudeStatus();
-      toast('Claude Code connected!');
-      if (btn) { btn.disabled = false; btn.textContent = 'Login with Claude'; }
-      if (reauthBtn) reauthBtn.disabled = false;
-    };
-
-    // Listen for the callback page's postMessage
-    const onDone = (ev) => {
-      if (ev.data && ev.data.type === 'claude-oauth-done') finish();
-    };
-    window.addEventListener('message', onDone);
-
-    // Also poll the config in case postMessage doesn't fire (popup blocked, different origin, etc.)
-    let attempts = 0;
-    const pollTimer = setInterval(async () => {
-      if (resolved) return;
-      attempts++;
-      try {
-        const cr = await fetch(API + '/api/claude/config', { headers: { 'Accept': 'application/json' } });
-        const cd = await cr.json();
-        const curToken = (cd.oauth_token || '').trim();
-        // Only trigger if a NEW token appeared (different from what was there before)
-        if (curToken && curToken !== prevToken) finish();
-      } catch {}
-      if (attempts >= 120) { // 2 minutes
-        clearInterval(pollTimer);
-        window.removeEventListener('message', onDone);
-        if (statusEl) { statusEl.style.color = 'var(--muted)'; statusEl.textContent = 'Login timed out. Try again.'; }
-        if (btn) { btn.disabled = false; btn.textContent = 'Login with Claude'; }
-        if (reauthBtn) reauthBtn.disabled = false;
-      }
-    }, 1000);
-
+    // Navigate in the same tab — avoids popup blockers.
+    // The OAuth callback redirects back to settings with ?claude_oauth=success
+    window.location.href = d.authorize_url;
   } catch (e) {
     if (statusEl) { statusEl.style.color = 'var(--red)'; statusEl.textContent = e?.message || String(e); }
     toast('OAuth failed: ' + (e?.message || String(e)));
@@ -4786,6 +4743,31 @@ loadUsage();
 loadAuth();
 loadBackup();
 loadClaudeToken();
+
+// Detect OAuth callback redirect (same-tab flow)
+(function checkOAuthReturn() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('claude_oauth') === 'success') {
+    const url = new URL(window.location);
+    url.searchParams.delete('claude_oauth');
+    history.replaceState(null, '', url.pathname + url.hash);
+    const statusEl = document.getElementById('claude-setup-status');
+    if (statusEl) { statusEl.style.color = 'var(--green)'; statusEl.textContent = 'Connected!'; }
+    setClaudeLoaded(true);
+    loadClaudeToken();
+    toast('Claude Code connected!');
+  } else if (params.get('claude_oauth') === 'error') {
+    const msg = params.get('claude_oauth_msg') || 'Authentication failed';
+    const url = new URL(window.location);
+    url.searchParams.delete('claude_oauth');
+    url.searchParams.delete('claude_oauth_msg');
+    history.replaceState(null, '', url.pathname + url.hash);
+    const statusEl = document.getElementById('claude-setup-status');
+    if (statusEl) { statusEl.style.color = 'var(--red)'; statusEl.textContent = msg; }
+    toast('OAuth failed: ' + msg);
+  }
+})();
+
 startClaudeStatusPolling();
 loadClaudeAutoCompactPct();
 loadOpenRouterConfig();

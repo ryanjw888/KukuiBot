@@ -2033,7 +2033,7 @@ _claude_oauth_pending: dict = {}  # state -> {code_verifier, created_at}
 _CLAUDE_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 _CLAUDE_OAUTH_AUTHORIZE_URL = "https://claude.ai/oauth/authorize"
 _CLAUDE_OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
-_CLAUDE_OAUTH_SCOPES = "user:inference user:profile user:email user:sessions:claude_code"
+_CLAUDE_OAUTH_SCOPES = "user:inference user:profile user:sessions:claude_code user:mcp_servers"
 
 
 @app.get("/api/claude/oauth/start")
@@ -2086,21 +2086,27 @@ async def api_claude_oauth_start(req: Request):
 async def api_claude_oauth_callback(req: Request):
     """Handle the OAuth callback — exchange the code for a token and save it."""
     import json as _json
+    from urllib.parse import quote
+    from starlette.responses import RedirectResponse
+
     code = req.query_params.get("code", "")
     state = req.query_params.get("state", "")
     error = req.query_params.get("error", "")
 
+    scheme = req.headers.get("x-forwarded-proto", req.url.scheme)
+    host = req.headers.get("host", req.url.netloc)
+
     if error:
-        return HTMLResponse(f"""<html><body style="background:#1a1a2e;color:#e0e0e0;font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;">
-            <div style="text-align:center;"><h2 style="color:#ef4444;">Authentication Failed</h2><p>{error}</p><p style="color:#888;">You can close this tab.</p></div></body></html>""")
+        settings_url = f"{scheme}://{host}/settings-v2.html?claude_oauth=error&claude_oauth_msg={quote(error)}#claude"
+        return RedirectResponse(url=settings_url)
 
     if not state or state not in _claude_oauth_pending:
-        return HTMLResponse("""<html><body style="background:#1a1a2e;color:#e0e0e0;font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;">
-            <div style="text-align:center;"><h2 style="color:#ef4444;">Invalid State</h2><p>OAuth state mismatch. Please try again from the settings page.</p></div></body></html>""")
+        settings_url = f"{scheme}://{host}/settings-v2.html?claude_oauth=error&claude_oauth_msg={quote('OAuth state mismatch. Please try again.')}#claude"
+        return RedirectResponse(url=settings_url)
 
     if not code:
-        return HTMLResponse("""<html><body style="background:#1a1a2e;color:#e0e0e0;font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;">
-            <div style="text-align:center;"><h2 style="color:#ef4444;">Missing Code</h2><p>No authorization code received. Please try again.</p></div></body></html>""")
+        settings_url = f"{scheme}://{host}/settings-v2.html?claude_oauth=error&claude_oauth_msg={quote('No authorization code received.')}#claude"
+        return RedirectResponse(url=settings_url)
 
     pending = _claude_oauth_pending.pop(state)
     code_verifier = pending["code_verifier"]
@@ -2121,15 +2127,15 @@ async def api_claude_oauth_callback(req: Request):
             resp = await client.post(_CLAUDE_OAUTH_TOKEN_URL, json=payload,
                                      headers={"Content-Type": "application/json"})
             if resp.status_code != 200:
-                body = resp.text
-                return HTMLResponse(f"""<html><body style="background:#1a1a2e;color:#e0e0e0;font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;">
-                    <div style="text-align:center;max-width:500px;"><h2 style="color:#ef4444;">Token Exchange Failed</h2><p>Status {resp.status_code}</p><pre style="text-align:left;background:#111;padding:12px;border-radius:8px;font-size:12px;overflow:auto;max-height:200px;">{body[:1000]}</pre><p style="color:#888;">You can close this tab and try again.</p></div></body></html>""")
+                msg = f"Token exchange failed (HTTP {resp.status_code})"
+                settings_url = f"{scheme}://{host}/settings-v2.html?claude_oauth=error&claude_oauth_msg={quote(msg)}#claude"
+                return RedirectResponse(url=settings_url)
             token_data = resp.json()
 
         access_token = token_data.get("access_token", "")
         if not access_token:
-            return HTMLResponse("""<html><body style="background:#1a1a2e;color:#e0e0e0;font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;">
-                <div style="text-align:center;"><h2 style="color:#ef4444;">No Token</h2><p>Token exchange succeeded but no access_token in response.</p></div></body></html>""")
+            settings_url = f"{scheme}://{host}/settings-v2.html?claude_oauth=error&claude_oauth_msg={quote('No access token in response.')}#claude"
+            return RedirectResponse(url=settings_url)
 
         # Save the token
         tok = _sanitize_bearer_token(access_token)
@@ -2141,17 +2147,13 @@ async def api_claude_oauth_callback(req: Request):
             for p in pool._processes.values():
                 p.set_auth_strategy("configured")
 
-        return HTMLResponse("""<html><body style="background:#1a1a2e;color:#e0e0e0;font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;">
-            <div style="text-align:center;">
-                <div style="font-size:48px;margin-bottom:16px;">&#10003;</div>
-                <h2 style="color:#22c55e;">Claude Code Connected!</h2>
-                <p style="color:#888;">Token saved. You can close this tab.</p>
-                <script>window.opener && window.opener.postMessage({type:'claude-oauth-done'},'*');</script>
-            </div></body></html>""")
+        settings_url = f"{scheme}://{host}/settings-v2.html?claude_oauth=success#claude"
+        return RedirectResponse(url=settings_url)
 
     except Exception as e:
-        return HTMLResponse(f"""<html><body style="background:#1a1a2e;color:#e0e0e0;font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;">
-            <div style="text-align:center;"><h2 style="color:#ef4444;">Error</h2><p>{e}</p><p style="color:#888;">You can close this tab and try again.</p></div></body></html>""")
+        msg = str(e)[:200]
+        settings_url = f"{scheme}://{host}/settings-v2.html?claude_oauth=error&claude_oauth_msg={quote(msg)}#claude"
+        return RedirectResponse(url=settings_url)
 
 
 # --- Claude Persistent Process Management ---
