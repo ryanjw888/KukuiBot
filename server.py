@@ -2025,186 +2025,133 @@ async def api_claude_config_set(req: Request):
     }
 
 
-@app.post("/api/claude/import-token")
-async def api_claude_import_token(req: Request):
-    """Auto-import OAuth token from local Claude CLI credentials file."""
+# ---------------------------------------------------------------------------
+#  Claude OAuth (direct PKCE flow — no CLI required)
+# ---------------------------------------------------------------------------
+_claude_oauth_pending: dict = {}  # state -> {code_verifier, created_at}
+
+_CLAUDE_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+_CLAUDE_OAUTH_AUTHORIZE_URL = "https://claude.ai/oauth/authorize"
+_CLAUDE_OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
+_CLAUDE_OAUTH_SCOPES = "user:inference user:profile user:email user:sessions:claude_code"
+
+
+@app.get("/api/claude/oauth/start")
+async def api_claude_oauth_start(req: Request):
+    """Generate PKCE challenge and return the authorization URL for the user's browser."""
     if not _is_admin(req):
         return JSONResponse({"ok": False, "error": "Admin only"}, status_code=403)
-    cred_path = Path.home() / ".claude" / ".credentials.json"
-    if not cred_path.exists():
-        return JSONResponse({"ok": False, "error": "Claude CLI not authenticated. Run 'claude setup-token' first."}, status_code=404)
+
+    import hashlib, base64, secrets
+
+    # PKCE: generate code_verifier and code_challenge (S256)
+    code_verifier = secrets.token_urlsafe(64)
+    digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
+    code_challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+    state = secrets.token_urlsafe(32)
+
+    # Build callback URL from the request's own origin so it works locally and remotely
+    scheme = req.headers.get("x-forwarded-proto", req.url.scheme)
+    host = req.headers.get("host", req.url.netloc)
+    callback_url = f"{scheme}://{host}/api/claude/oauth/callback"
+
+    # Store pending state
+    import time
+    _claude_oauth_pending[state] = {
+        "code_verifier": code_verifier,
+        "redirect_uri": callback_url,
+        "created_at": time.time(),
+    }
+    # Clean up old pending states (>10 min)
+    cutoff = time.time() - 600
+    for k in list(_claude_oauth_pending):
+        if _claude_oauth_pending[k]["created_at"] < cutoff:
+            del _claude_oauth_pending[k]
+
+    from urllib.parse import urlencode
+    params = {
+        "response_type": "code",
+        "client_id": _CLAUDE_OAUTH_CLIENT_ID,
+        "redirect_uri": callback_url,
+        "scope": _CLAUDE_OAUTH_SCOPES,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+        "state": state,
+    }
+    authorize_url = f"{_CLAUDE_OAUTH_AUTHORIZE_URL}?{urlencode(params)}"
+    return {"ok": True, "authorize_url": authorize_url}
+
+
+@app.get("/api/claude/oauth/callback")
+async def api_claude_oauth_callback(req: Request):
+    """Handle the OAuth callback — exchange the code for a token and save it."""
+    import json as _json
+    code = req.query_params.get("code", "")
+    state = req.query_params.get("state", "")
+    error = req.query_params.get("error", "")
+
+    if error:
+        return HTMLResponse(f"""<html><body style="background:#1a1a2e;color:#e0e0e0;font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;">
+            <div style="text-align:center;"><h2 style="color:#ef4444;">Authentication Failed</h2><p>{error}</p><p style="color:#888;">You can close this tab.</p></div></body></html>""")
+
+    if not state or state not in _claude_oauth_pending:
+        return HTMLResponse("""<html><body style="background:#1a1a2e;color:#e0e0e0;font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;">
+            <div style="text-align:center;"><h2 style="color:#ef4444;">Invalid State</h2><p>OAuth state mismatch. Please try again from the settings page.</p></div></body></html>""")
+
+    if not code:
+        return HTMLResponse("""<html><body style="background:#1a1a2e;color:#e0e0e0;font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;">
+            <div style="text-align:center;"><h2 style="color:#ef4444;">Missing Code</h2><p>No authorization code received. Please try again.</p></div></body></html>""")
+
+    pending = _claude_oauth_pending.pop(state)
+    code_verifier = pending["code_verifier"]
+    redirect_uri = pending["redirect_uri"]
+
+    # Exchange code for token
     try:
-        import json as _json
-        creds = _json.loads(cred_path.read_text())
-        token = creds.get("claudeAiOauth", {}).get("accessToken", "")
-        if not token:
-            return JSONResponse({"ok": False, "error": "No OAuth token found in credentials file. Run 'claude setup-token' first."}, status_code=404)
-        tok = _sanitize_bearer_token(token)
+        payload = {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "client_id": _CLAUDE_OAUTH_CLIENT_ID,
+            "code_verifier": code_verifier,
+            "state": state,
+            "expires_in": 31536000,  # 1 year, same as setup-token
+        }
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(_CLAUDE_OAUTH_TOKEN_URL, json=payload,
+                                     headers={"Content-Type": "application/json"})
+            if resp.status_code != 200:
+                body = resp.text
+                return HTMLResponse(f"""<html><body style="background:#1a1a2e;color:#e0e0e0;font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;">
+                    <div style="text-align:center;max-width:500px;"><h2 style="color:#ef4444;">Token Exchange Failed</h2><p>Status {resp.status_code}</p><pre style="text-align:left;background:#111;padding:12px;border-radius:8px;font-size:12px;overflow:auto;max-height:200px;">{body[:1000]}</pre><p style="color:#888;">You can close this tab and try again.</p></div></body></html>""")
+            token_data = resp.json()
+
+        access_token = token_data.get("access_token", "")
+        if not access_token:
+            return HTMLResponse("""<html><body style="background:#1a1a2e;color:#e0e0e0;font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;">
+                <div style="text-align:center;"><h2 style="color:#ef4444;">No Token</h2><p>Token exchange succeeded but no access_token in response.</p></div></body></html>""")
+
+        # Save the token
+        tok = _sanitize_bearer_token(access_token)
         set_config("claude_code.oauth_token", tok)
-        strategy_raw = "configured"
-        set_config("claude_code.auth_strategy", strategy_raw)
+        set_config("claude_code.auth_strategy", "configured")
         pool = get_claude_pool()
         if pool:
-            pool._auth_strategy = strategy_raw
-            for proc in pool._processes.values():
-                proc.set_auth_strategy(strategy_raw)
-        return {"ok": True, "saved": True, "length": len(tok), "auth_strategy": strategy_raw}
+            pool._auth_strategy = "configured"
+            for p in pool._processes.values():
+                p.set_auth_strategy("configured")
+
+        return HTMLResponse("""<html><body style="background:#1a1a2e;color:#e0e0e0;font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;">
+            <div style="text-align:center;">
+                <div style="font-size:48px;margin-bottom:16px;">&#10003;</div>
+                <h2 style="color:#22c55e;">Claude Code Connected!</h2>
+                <p style="color:#888;">Token saved. You can close this tab.</p>
+                <script>window.opener && window.opener.postMessage({type:'claude-oauth-done'},'*');</script>
+            </div></body></html>""")
+
     except Exception as e:
-        return JSONResponse({"ok": False, "error": f"Failed to read credentials: {e}"}, status_code=500)
-
-
-def _find_claude_cli() -> str | None:
-    """Find the claude CLI binary, checking common install locations."""
-    import shutil
-    found = shutil.which("claude")
-    if found:
-        return found
-    for candidate in [
-        Path.home() / ".local" / "bin" / "claude",
-        Path.home() / ".claude" / "bin" / "claude",
-        Path("/usr/local/bin/claude"),
-    ]:
-        if candidate.exists():
-            return str(candidate)
-    return None
-
-
-@app.get("/api/claude/setup")
-async def api_claude_setup(req: Request):
-    """One-click Claude Code setup: install CLI, run setup-token, import token. Streams SSE progress."""
-    if not _is_admin(req):
-        return JSONResponse({"ok": False, "error": "Admin only"}, status_code=403)
-
-    force_reauth = req.query_params.get("force", "").lower() in ("1", "true", "yes")
-    import json as _json
-
-    async def _stream():
-        def ev(event: str, data: dict):
-            return f"event: {event}\ndata: {_json.dumps(data)}\n\n"
-
-        # --- Step 1: Check / Install CLI ---
-        yield ev("step", {"step": 1, "status": "checking", "message": "Checking for Claude CLI…"})
-        cli_path = _find_claude_cli()
-
-        if cli_path:
-            yield ev("step", {"step": 1, "status": "done", "message": f"Claude CLI found at {cli_path}"})
-        else:
-            yield ev("step", {"step": 1, "status": "installing", "message": "Installing Claude CLI…"})
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    "bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash",
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-                    env={**os.environ, "PATH": f"{Path.home() / '.local' / 'bin'}:{os.environ.get('PATH', '')}"},
-                )
-                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
-                output = stdout.decode(errors="replace") if stdout else ""
-                if proc.returncode != 0:
-                    yield ev("error_msg", {"step": 1, "message": f"Install failed (exit {proc.returncode}): {output[-500:]}"})
-                    return
-                cli_path = _find_claude_cli()
-                if not cli_path:
-                    yield ev("error_msg", {"step": 1, "message": "Install appeared to succeed but claude binary not found. Check PATH."})
-                    return
-                yield ev("step", {"step": 1, "status": "done", "message": f"Claude CLI installed at {cli_path}"})
-            except asyncio.TimeoutError:
-                yield ev("error_msg", {"step": 1, "message": "Install timed out after 120s"})
-                return
-            except Exception as e:
-                yield ev("error_msg", {"step": 1, "message": f"Install error: {e}"})
-                return
-
-        # --- Step 2: Check existing token or launch setup-token and poll ---
-        cred_path = Path.home() / ".claude" / ".credentials.json"
-        existing_token = ""
-        if not force_reauth and cred_path.exists():
-            try:
-                existing_token = _json.loads(cred_path.read_text()).get("claudeAiOauth", {}).get("accessToken", "")
-            except Exception:
-                pass
-
-        token_found = ""
-        if existing_token:
-            # Token already exists — skip auth, use it directly
-            yield ev("step", {"step": 2, "status": "done", "message": "Already authenticated — existing token found."})
-            token_found = existing_token
-        else:
-            # Force re-auth: remove old credentials so setup-token generates fresh ones
-            if force_reauth and cred_path.exists():
-                try:
-                    cred_path.unlink()
-                except Exception:
-                    pass
-
-            pre_mtime = cred_path.stat().st_mtime if cred_path.exists() else 0
-
-            # Try to launch setup-token (opens browser on local machine)
-            _setup_proc = None
-            try:
-                env = {**os.environ, "PATH": f"{Path(cli_path).parent}:{os.environ.get('PATH', '')}"}
-                _setup_proc = await asyncio.create_subprocess_exec(
-                    cli_path, "setup-token",
-                    stdin=asyncio.subprocess.DEVNULL,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                    env=env,
-                )
-            except Exception:
-                pass
-
-            yield ev("step", {"step": 2, "status": "waiting",
-                "message": "Run 'claude setup-token' in a terminal on the server, then complete the browser login. Polling for token…"})
-
-            for i in range(100):  # 100 * 3s = 5 minutes
-                await asyncio.sleep(3)
-                # Check credentials file
-                if cred_path.exists():
-                    try:
-                        cur_mtime = cred_path.stat().st_mtime
-                        if cur_mtime > pre_mtime:
-                            creds = _json.loads(cred_path.read_text())
-                            cur_token = creds.get("claudeAiOauth", {}).get("accessToken", "")
-                            if cur_token:
-                                token_found = cur_token
-                                break
-                    except Exception:
-                        pass
-                # Also check if token was manually saved via paste while we poll
-                saved_tok = (get_config("claude_code.oauth_token", "") or "").strip()
-                if saved_tok:
-                    token_found = saved_tok
-                    break
-                if i % 10 == 9:
-                    yield ev("step", {"step": 2, "status": "waiting", "message": f"Still waiting for token… ({(i+1)*3}s elapsed)"})
-
-            if _setup_proc:
-                try:
-                    _setup_proc.terminate()
-                except Exception:
-                    pass
-
-            if not token_found:
-                yield ev("error_msg", {"step": 2, "message": "Timed out after 5 minutes. Run 'claude setup-token' in a terminal or paste the token manually below."})
-                return
-
-            yield ev("step", {"step": 2, "status": "done", "message": "Token found!"})
-
-        # --- Step 3: Import token ---
-        yield ev("step", {"step": 3, "status": "importing", "message": "Importing token…"})
-        try:
-            tok = _sanitize_bearer_token(token_found)
-            set_config("claude_code.oauth_token", tok)
-            set_config("claude_code.auth_strategy", "configured")
-            pool = get_claude_pool()
-            if pool:
-                pool._auth_strategy = "configured"
-                for p in pool._processes.values():
-                    p.set_auth_strategy("configured")
-            yield ev("step", {"step": 3, "status": "done", "message": "Token imported and saved!"})
-            yield ev("complete", {"ok": True, "message": "Claude Code is ready. Create a Claude worker tab to start."})
-        except Exception as e:
-            yield ev("error_msg", {"step": 3, "message": f"Import failed: {e}"})
-
-    return StreamingResponse(_stream(), media_type="text/event-stream")
+        return HTMLResponse(f"""<html><body style="background:#1a1a2e;color:#e0e0e0;font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;">
+            <div style="text-align:center;"><h2 style="color:#ef4444;">Error</h2><p>{e}</p><p style="color:#888;">You can close this tab and try again.</p></div></body></html>""")
 
 
 # --- Claude Persistent Process Management ---

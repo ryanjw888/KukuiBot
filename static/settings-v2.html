@@ -1055,24 +1055,10 @@
       <!-- Setup Card -->
       <div class="card">
         <h2>Setup</h2>
-        <p style="font-size:12px;color:var(--muted);margin-bottom:12px;">Installs the Claude CLI (if needed), opens a browser to authenticate, and imports the token automatically.</p>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:12px;">Sign in with your Claude account to authenticate. No CLI installation needed.</p>
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">
-          <button class="btn primary" onclick="runClaudeSetup()" id="claude-setup-btn" style="font-size:13px;padding:9px 20px;">Setup Claude Code</button>
-          <button class="btn" onclick="runClaudeSetup(true)" id="claude-reauth-btn" style="font-size:11px;padding:6px 12px;" title="Delete existing token and re-authenticate via browser">Re-authenticate</button>
-        </div>
-        <div id="claude-setup-progress" style="display:none;margin-bottom:10px;">
-          <div id="claude-setup-step1" class="claude-setup-step" style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12px;color:var(--muted);">
-            <span class="claude-step-icon" style="width:18px;text-align:center;">○</span>
-            <span class="claude-step-label">Install Claude CLI</span>
-          </div>
-          <div id="claude-setup-step2" class="claude-setup-step" style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12px;color:var(--muted);">
-            <span class="claude-step-icon" style="width:18px;text-align:center;">○</span>
-            <span class="claude-step-label">Authenticate with Anthropic</span>
-          </div>
-          <div id="claude-setup-step3" class="claude-setup-step" style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:12px;color:var(--muted);">
-            <span class="claude-step-icon" style="width:18px;text-align:center;">○</span>
-            <span class="claude-step-label">Import token</span>
-          </div>
+          <button class="btn primary" onclick="startClaudeOAuth()" id="claude-oauth-btn" style="font-size:13px;padding:9px 20px;">Login with Claude</button>
+          <button class="btn" onclick="startClaudeOAuth()" id="claude-reauth-btn" style="font-size:11px;padding:6px 12px;" title="Re-authenticate with a different account">Re-authenticate</button>
         </div>
         <div id="claude-setup-status" style="font-size:12px;color:var(--muted);"></div>
 
@@ -1093,7 +1079,7 @@
           </details>
         </div>
         <div id="claude-token-loaded" style="display:none;margin-top:6px;padding:6px 10px;border-radius:8px;border:1px solid rgba(34,197,94,0.35);background:rgba(34,197,94,0.10);color:#bbf7d0;font-size:11px;">
-          ✅ Token loaded
+          &#10003; Token loaded
         </div>
         <div id="claude-msg" style="font-size:11px;color:var(--muted);margin-top:8px;"></div>
       </div>
@@ -1722,93 +1708,78 @@ async function loadClaudeToken() {
   }
 }
 
-async function importClaudeToken() {
-  const btn = document.getElementById('claude-import-btn');
-  const msg = document.getElementById('claude-setup-status');
-  if (btn) { btn.disabled = true; btn.textContent = 'Importing…'; }
-  if (msg) msg.textContent = '';
-  try {
-    const r = await fetch(API + '/api/claude/import-token', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json', 'Accept': 'application/json'},
-    });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok || d.ok === false) throw new Error(d.error || ('HTTP ' + r.status));
-    await loadClaudeToken();
-    setClaudeLoaded(true);
-    if (msg) { msg.style.color = 'var(--green)'; msg.textContent = '✅ Token imported! Restart worker to apply.'; }
-    toast('✅ Claude token imported');
-  } catch (e) {
-    if (msg) { msg.style.color = 'var(--red)'; msg.textContent = '❌ ' + (e?.message || String(e)); }
-    toast('❌ Import failed');
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Re-import Token'; }
-  }
-}
-
-function _setStepState(stepNum, state, message) {
-  const el = document.getElementById('claude-setup-step' + stepNum);
-  if (!el) return;
-  const icon = el.querySelector('.claude-step-icon');
-  const label = el.querySelector('.claude-step-label');
-  if (state === 'pending') { icon.textContent = '○'; el.style.color = 'var(--muted)'; }
-  else if (state === 'running') { icon.textContent = '◉'; el.style.color = 'var(--accent)'; }
-  else if (state === 'done') { icon.textContent = '✓'; el.style.color = 'var(--green)'; }
-  else if (state === 'error') { icon.textContent = '✗'; el.style.color = 'var(--red)'; }
-  if (message) label.textContent = message;
-}
-
-async function runClaudeSetup(force) {
-  const btn = document.getElementById('claude-setup-btn');
+async function startClaudeOAuth() {
+  const btn = document.getElementById('claude-oauth-btn');
   const reauthBtn = document.getElementById('claude-reauth-btn');
-  const progress = document.getElementById('claude-setup-progress');
   const statusEl = document.getElementById('claude-setup-status');
-  if (btn) { btn.disabled = true; btn.textContent = 'Setting up…'; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Opening…'; }
   if (reauthBtn) reauthBtn.disabled = true;
-  if (progress) progress.style.display = 'block';
   if (statusEl) { statusEl.style.color = 'var(--muted)'; statusEl.textContent = ''; }
-  _setStepState(1, 'pending'); _setStepState(2, 'pending'); _setStepState(3, 'pending');
 
   try {
-    const url = API + '/api/claude/setup' + (force ? '?force=1' : '');
-    const es = new EventSource(url);
-    await new Promise((resolve, reject) => {
-      es.addEventListener('step', (e) => {
-        const d = JSON.parse(e.data);
-        const st = d.status;
-        if (st === 'checking' || st === 'installing' || st === 'running' || st === 'importing' || st === 'waiting') {
-          _setStepState(d.step, 'running', d.message);
-        } else if (st === 'done') {
-          _setStepState(d.step, 'done', d.message);
-        }
-        if (statusEl) { statusEl.style.color = 'var(--muted)'; statusEl.textContent = d.message; }
-      });
-      es.addEventListener('error_msg', (e) => {
-        const d = JSON.parse(e.data);
-        _setStepState(d.step, 'error', d.message);
-        if (statusEl) { statusEl.style.color = 'var(--red)'; statusEl.textContent = d.message; }
-        es.close();
-        reject(new Error(d.message));
-      });
-      es.addEventListener('complete', (e) => {
-        const d = JSON.parse(e.data);
-        if (statusEl) { statusEl.style.color = 'var(--green)'; statusEl.textContent = d.message; }
-        es.close();
-        resolve();
-      });
-      es.onerror = () => {
-        // EventSource fires onerror on stream close; check if we already resolved
-        es.close();
-      };
-    });
-    await loadClaudeToken();
-    setClaudeLoaded(true);
-    toast('✅ Claude Code setup complete!');
+    // Snapshot the current token so the poll can detect when it changes
+    let prevToken = '';
+    try {
+      const pr = await fetch(API + '/api/claude/config', { headers: { 'Accept': 'application/json' } });
+      const pd = await pr.json();
+      prevToken = (pd.oauth_token || '').trim();
+    } catch {}
+
+    const r = await fetch(API + '/api/claude/oauth/start', { headers: { 'Accept': 'application/json' } });
+    const d = await r.json();
+    if (!r.ok || !d.ok) throw new Error(d.error || 'Failed to start OAuth');
+
+    // Open the authorize URL in a new tab/popup
+    const popup = window.open(d.authorize_url, '_blank', 'width=600,height=700');
+    if (statusEl) { statusEl.style.color = 'var(--accent)'; statusEl.textContent = 'Waiting for login…'; }
+
+    let resolved = false;
+    const finish = () => {
+      if (resolved) return;
+      resolved = true;
+      clearInterval(pollTimer);
+      window.removeEventListener('message', onDone);
+      if (statusEl) { statusEl.style.color = 'var(--green)'; statusEl.textContent = 'Connected!'; }
+      loadClaudeToken();
+      setClaudeLoaded(true);
+      loadClaudeStatus();
+      toast('Claude Code connected!');
+      if (btn) { btn.disabled = false; btn.textContent = 'Login with Claude'; }
+      if (reauthBtn) reauthBtn.disabled = false;
+    };
+
+    // Listen for the callback page's postMessage
+    const onDone = (ev) => {
+      if (ev.data && ev.data.type === 'claude-oauth-done') finish();
+    };
+    window.addEventListener('message', onDone);
+
+    // Also poll the config in case postMessage doesn't fire (popup blocked, different origin, etc.)
+    let attempts = 0;
+    const pollTimer = setInterval(async () => {
+      if (resolved) return;
+      attempts++;
+      try {
+        const cr = await fetch(API + '/api/claude/config', { headers: { 'Accept': 'application/json' } });
+        const cd = await cr.json();
+        const curToken = (cd.oauth_token || '').trim();
+        // Only trigger if a NEW token appeared (different from what was there before)
+        if (curToken && curToken !== prevToken) finish();
+      } catch {}
+      if (attempts >= 120) { // 2 minutes
+        clearInterval(pollTimer);
+        window.removeEventListener('message', onDone);
+        if (statusEl) { statusEl.style.color = 'var(--muted)'; statusEl.textContent = 'Login timed out. Try again.'; }
+        if (btn) { btn.disabled = false; btn.textContent = 'Login with Claude'; }
+        if (reauthBtn) reauthBtn.disabled = false;
+      }
+    }, 1000);
+
   } catch (e) {
-    toast('❌ Setup failed: ' + (e?.message || String(e)));
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Setup Claude Code'; }
-    if (reauthBtn) { reauthBtn.disabled = false; }
+    if (statusEl) { statusEl.style.color = 'var(--red)'; statusEl.textContent = e?.message || String(e); }
+    toast('OAuth failed: ' + (e?.message || String(e)));
+    if (btn) { btn.disabled = false; btn.textContent = 'Login with Claude'; }
+    if (reauthBtn) reauthBtn.disabled = false;
   }
 }
 
