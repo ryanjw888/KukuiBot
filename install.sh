@@ -145,6 +145,9 @@ for dep in mkcert ripgrep; do
 done
 
 # --- Check/install Node.js + Claude Code CLI ---
+# npm may install to ~/.local/bin — ensure it's on PATH for detection
+export PATH="$HOME/.local/bin:$PATH"
+
 if ! command -v node &>/dev/null; then
   echo "→ Installing Node.js (required for Claude Code)..."
   brew install node </dev/null
@@ -154,9 +157,14 @@ echo "✓ Node.js $(node --version 2>/dev/null || echo '(pending)')"
 if ! command -v claude &>/dev/null; then
   echo "→ Installing Claude Code CLI..."
   npm install -g @anthropic-ai/claude-code </dev/null 2>&1 | tail -1
+  # npm may have installed to ~/.local/bin — re-check PATH
+  if [ -f "$HOME/.local/bin/claude" ]; then
+    export PATH="$HOME/.local/bin:$PATH"
+  fi
 fi
 if command -v claude &>/dev/null; then
-  echo "✓ Claude Code CLI $(claude --version 2>/dev/null | head -1)"
+  CLAUDE_BIN_PATH="$(command -v claude)"
+  echo "✓ Claude Code CLI $(claude --version 2>/dev/null | head -1) ($CLAUDE_BIN_PATH)"
 else
   echo "⚠️  Claude Code CLI install failed — install manually: npm install -g @anthropic-ai/claude-code"
 fi
@@ -183,7 +191,16 @@ fi
 # Use the venv's python for everything from here on
 PYTHON_BIN="$VENV_DIR/bin/python3"
 PYTHON_BIN_DIR="$(dirname "$PYTHON_BIN")"
+# Build PATH for launchd — include the directory where claude was found
+CLAUDE_DIR=""
+if command -v claude &>/dev/null; then
+  CLAUDE_DIR="$(dirname "$(command -v claude)")"
+fi
 PATH_ENV="${PYTHON_BIN_DIR}:${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# Add claude's directory if it's not already in the PATH
+if [ -n "$CLAUDE_DIR" ] && ! echo "$PATH_ENV" | grep -qF "$CLAUDE_DIR"; then
+  PATH_ENV="${CLAUDE_DIR}:${PATH_ENV}"
+fi
 
 # --- Accept Xcode license (required before git works after fresh CLT install) ---
 sudo xcodebuild -license accept </dev/null 2>/dev/null || true
