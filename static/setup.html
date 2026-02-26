@@ -624,7 +624,7 @@
       document.getElementById('claude-oauth-waiting').style.display = 'block';
 
       try {
-        const res = await fetch('/api/claude/oauth/start', { headers: { 'Accept': 'application/json' } });
+        const res = await fetch('/api/claude/oauth/start?return_to=setup.html', { headers: { 'Accept': 'application/json' } });
         if (!res.ok) {
           const txt = await res.text();
           throw new Error('HTTP ' + res.status + ': ' + txt.substring(0, 200));

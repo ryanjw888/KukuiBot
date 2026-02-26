@@ -2178,10 +2178,13 @@ async def api_claude_oauth_start(req: Request):
     code_challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
     state = secrets.token_urlsafe(32)
 
-    # Build settings URL base so the callback server can redirect back
+    # Build return URL base so the callback server can redirect back
     scheme = req.headers.get("x-forwarded-proto", req.url.scheme)
     host = req.headers.get("host", req.url.netloc)
-    settings_url_base = f"{scheme}://{host}/settings-v2.html"
+    return_page = req.query_params.get("return_to", "settings-v2.html")
+    if return_page not in ("settings-v2.html", "setup.html"):
+        return_page = "settings-v2.html"
+    settings_url_base = f"{scheme}://{host}/{return_page}"
 
     # Start temporary localhost HTTP server for callback
     port = _start_oauth_callback_server(state, code_verifier, settings_url_base)
