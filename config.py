@@ -92,6 +92,18 @@ if _AGENT_TEMPLATES.is_dir():
     if bundled_policy.exists() and not dest_policy.exists():
         shutil.copy2(bundled_policy, dest_policy)
 
+# --- Seed docs from bundled repo on startup (add new, don't overwrite existing) ---
+_BUNDLED_DOCS = APP_ROOT / "docs"
+if _BUNDLED_DOCS.is_dir():
+    _docs_dest = KUKUIBOT_HOME / "docs"
+    _docs_dest.mkdir(exist_ok=True)
+    for src in _BUNDLED_DOCS.rglob("*"):
+        if src.is_file():
+            dest = _docs_dest / src.relative_to(_BUNDLED_DOCS)
+            if not dest.exists():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dest)
+
 # --- Files ---
 DB_PATH = KUKUIBOT_HOME / "kukuibot.db"
 
