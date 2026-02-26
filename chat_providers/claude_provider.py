@@ -179,6 +179,11 @@ async def process_chat_claude(
                     await _emit_event(session_id, queue, {"type": "context", "tokens": token_count, "max": context_window, "pct": pct, "source": "api"}, run_id=run_id)
 
                 _model_label = f"claude-code ({proc.model})"
+                # Mark task done BEFORE emitting the done event so the client's
+                # drained queue message doesn't hit a 409 race window.
+                _pre_task = active_tasks.get(session_id, {})
+                _pre_task["status"] = "done"
+                active_tasks[session_id] = _pre_task
                 await _emit_event(session_id, queue, {"type": "done", "text": result_text, "model": _model_label, "duration_ms": duration_ms, "tokens": proc.last_input_tokens}, run_id=run_id)
 
                 # Auto smart-compact for Claude when tokens exceed configured threshold
@@ -224,6 +229,11 @@ async def process_chat_claude(
         logger.error(f"Claude persistent stream error: {e}", exc_info=True)
         await _emit_event(session_id, queue, {"type": "error", "message": str(e) or type(e).__name__}, run_id=run_id)
     finally:
+        # Mark task done early so the client's drained queue doesn't hit a 409
+        task = active_tasks.get(session_id, {})
+        task["status"] = "done"
+        active_tasks[session_id] = task
+
         # Always emit a done event so the frontend exits loading state
         if not got_result:
             duration_ms = int((time.time() - t0) * 1000)
@@ -248,10 +258,6 @@ async def process_chat_claude(
                 logger.info(f"Claude timeout history saved: {session_id} → {len(existing_items)} items")
             except Exception as he:
                 logger.warning(f"Failed to save Claude timeout history: {he}")
-
-        task = active_tasks.get(session_id, {})
-        task["status"] = "done"
-        active_tasks[session_id] = task
         _db_mark_run_done(run_id, "done")
         await queue.put(None)
 

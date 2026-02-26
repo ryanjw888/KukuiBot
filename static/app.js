@@ -163,6 +163,7 @@ let newWorkerError = '';
 let _availableWorkers = [];
 let showDeleteTabModal = false;
 let showCompactModal = false;
+let _pendingSkillAfterCompact = null;
 let showMobileWorkerMenu = false;
 let deleteTabTargetId = null;
 let planUsage = null;
@@ -2000,10 +2001,10 @@ function render(opts = {}) {
         </span>
         <div class="controls">
           ${tabApproveAllVisible(tab) ? `<button class="btn-sm ${tabApproveAll(tab) ? 'active' : 'inactive'}" onclick="toggleApproveAll()" title="${tabApproveAll(tab) ? 'Auto Allow is ON — click to turn off' : 'Auto Allow is OFF — click to turn on'}">⚡ Auto Allow${tabApproveAll(tab) ? ' ✓' : ''}</button>` : ''}
-          <div class="reasoning-wrap">
+          ${_isClaudeModel(tab.modelKey) ? '' : `<div class="reasoning-wrap">
             <span class="reasoning-label">Reasoning:</span>
             <div class="reasoning-picker" id="reasoning-picker-host">${renderReasoningPickerButtons()}</div>
-          </div>
+          </div>`}
           <span class="worker-name-badge" id="worker-name-badge" onclick="_toggleSkillsPopup(event)">${_getWorkerDisplayName(tab)}</span>
         </div>
       </div>
@@ -2292,16 +2293,10 @@ async function _insertSkillPrompt(skill) {
     'evidence-anchoring': 'Provide evidence-anchored analysis of: ',
   };
   const starter = starters[skill.id] || `Use the ${skill.id.replace(/-/g, ' ')} skill for: `;
-  // Compact first so the model starts fresh with skills loaded in context
-  await doCompact();
-  // Re-query input after compact since renders rebuild the DOM
-  const input = document.getElementById('input');
-  if (!input) return;
-  input.value = starter;
-  input.focus();
-  input.setSelectionRange(starter.length, starter.length);
-  autoResize(input);
-  updateInputBtn();
+  // Store the skill so confirmCompact can insert the prompt after compacting
+  _pendingSkillAfterCompact = { starter };
+  // Show the compact confirmation modal instead of compacting immediately
+  showCompactConfirm();
 }
 
 function _getModelLogoForKey(modelKey) {
@@ -2983,7 +2978,7 @@ function renderWorkLog(workLog, isWorking = false, activeToolLabel = null, toolC
     : toolSummary;
 
   const rightBusy = isWorking
-    ? `<span class="work-head-right"><button class="wl-inline-stop" onclick="cancelGeneration(event)" title="Stop generation">Stop</button></span>`
+    ? `<span class="work-head-right"><span class="typing-dots mini"><div class="dot"></div><div class="dot"></div><div class="dot"></div></span><button class="wl-inline-stop" onclick="cancelGeneration(event)" title="Stop generation">Stop</button></span>`
     : '';
 
   // Connection status indicator bar (left border on toggle row, mirrors deleg-bar pattern)
@@ -4040,8 +4035,11 @@ async function send() {
   }
 
   // Skip pushing a user message if this was drained from the queue (already shown)
-  if (tab._drainedText === sendText) {
+  const wasDrained = tab._drainedText === sendText;
+  const drainRetries = wasDrained ? (tab._drainRetries || 0) : 0;
+  if (wasDrained) {
     delete tab._drainedText;
+    delete tab._drainRetries;
   } else {
     tab.messages.push({ id: Date.now() + 1, role: 'user', text: sendText, timestamp: new Date(), _attachments: _msgAttachments });
   }
@@ -4091,6 +4089,15 @@ async function send() {
         if (check401(res)) return;
         const e = await res.json().catch(() => ({}));
         const errMsg = e.error || 'Request failed: ' + res.status;
+        // If this was a drained (queued) message that hit a 409 race, retry (up to 3x)
+        if (wasDrained && drainRetries < 3 && res.status === 409 && errMsg === 'run_in_progress') {
+          tab._drainedText = sendText;
+          tab._drainRetries = drainRetries + 1;
+          tab.wasLoading = false;
+          tab.loadingSinceMs = 0;
+          setTimeout(() => _drainMessageQueue(tab), 500);
+          return;
+        }
         const displayErr = friendlyError(errMsg, tab) || errMsg;
         tab.messages.push({ id: Date.now() + 1, role: 'assistant', text: `⚠️ ${displayErr}`, timestamp: new Date(), modelLabel: def.shortName || def.name });
         tab.wasLoading = false;
@@ -4179,7 +4186,19 @@ async function send() {
       if (!res.ok) {
         if (check401(res)) return;
         const e = await res.json().catch(() => ({}));
-        throw new Error(e.error || 'Request failed: ' + res.status);
+        const errMsg = e.error || 'Request failed: ' + res.status;
+        // If this was a drained (queued) message that hit a 409 race, retry (up to 3x)
+        if (wasDrained && drainRetries < 3 && res.status === 409 && errMsg === 'run_in_progress') {
+          tab._drainedText = sendText;
+          tab._drainRetries = drainRetries + 1;
+          tab.wasLoading = false;
+          tab.loadingSinceMs = 0;
+          _anthropicIAmSending[sid] = false;
+          setTimeout(() => _drainMessageQueue(tab), 500);
+          handledRestart = true;
+          return;
+        }
+        throw new Error(errMsg);
       }
       const done = await processSseStream(res, fullTextRef, tab.id);
       if (done) streamEnded = true;
@@ -4231,7 +4250,22 @@ async function send() {
       body: JSON.stringify({ message: sendText, session_id: tab.sessionId, ...(attachments ? { attachments } : {}) }),
       signal: tab.streamAbortController?.signal,
     });
-    if (!res.ok) { if (check401(res)) return; const e = await res.json().catch(() => ({})); throw new Error(e.error || 'Request failed: ' + res.status); }
+    if (!res.ok) {
+      if (check401(res)) return;
+      const e = await res.json().catch(() => ({}));
+      const errMsg = e.error || 'Request failed: ' + res.status;
+      // If this was a drained (queued) message that hit a 409 race, retry (up to 3x)
+      if (wasDrained && drainRetries < 3 && res.status === 409 && errMsg === 'run_in_progress') {
+        tab._drainedText = sendText;
+        tab._drainRetries = drainRetries + 1;
+        tab.wasLoading = false;
+        tab.loadingSinceMs = 0;
+        setTimeout(() => _drainMessageQueue(tab), 500);
+        handledRestart = true; // skip finalizeTurn in finally
+        return;
+      }
+      throw new Error(errMsg);
+    }
     const done = await processSseStream(res, fullTextRef, tab.id);
     if (done) streamEnded = true;
   } catch (err) {
@@ -4906,14 +4940,27 @@ function showCompactConfirm() {
 }
 
 function cancelCompactModal() {
+  _pendingSkillAfterCompact = null;
   showCompactModal = false;
   requestRender({ preserveScroll: true });
 }
 
-function confirmCompact() {
+async function confirmCompact() {
+  const pendingSkill = _pendingSkillAfterCompact;
+  _pendingSkillAfterCompact = null;
   showCompactModal = false;
   requestRender({ preserveScroll: true });
-  doCompact();
+  await doCompact();
+  // If this compact was triggered by a skill click, insert the prompt now
+  if (pendingSkill) {
+    const input = document.getElementById('input');
+    if (!input) return;
+    input.value = pendingSkill.starter;
+    input.focus();
+    input.setSelectionRange(pendingSkill.starter.length, pendingSkill.starter.length);
+    autoResize(input);
+    updateInputBtn();
+  }
 }
 
 function renderCompactModal() {

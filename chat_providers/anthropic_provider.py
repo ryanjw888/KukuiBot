@@ -428,6 +428,11 @@ async def process_chat_anthropic(
         token_count, token_source = _effective_context_tokens(items, usage_info or last_api_usage.get(session_id, {}))
         await _emit_event(session_id, queue, {"type": "context", "tokens": token_count, "max": context_window, "pct": round(token_count / context_window, 4), "source": token_source}, run_id=run_id)
 
+        # Mark task done BEFORE emitting the done event so the client's
+        # drained queue message doesn't hit a 409 race window.
+        _pre_task = active_tasks.get(session_id, {})
+        _pre_task["status"] = "done"
+        active_tasks[session_id] = _pre_task
         await _emit_event(session_id, queue, {"type": "done", "text": final_text, "model": f"anthropic ({model})"}, run_id=run_id)
 
     except Exception as e:
