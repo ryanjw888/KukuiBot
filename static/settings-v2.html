@@ -529,6 +529,9 @@
       <button class="sidebar-nav-btn" onclick="showSection('account')">
         <span class="nav-icon">&#9823;</span><span class="nav-label">Account</span>
       </button>
+      <button class="sidebar-nav-btn" onclick="showSection('updates')">
+        <span class="nav-icon">&#128230;</span><span class="nav-label">Updates</span>
+      </button>
       <button class="sidebar-nav-btn active" onclick="showSection('system')">
         <span class="nav-icon">&#9881;</span><span class="nav-label">System</span>
       </button>
@@ -1530,6 +1533,30 @@
     </div>
 
     <!-- ===== SYSTEM SECTION ===== -->
+    <!-- ===== UPDATES SECTION ===== -->
+    <div class="settings-section" id="section-updates">
+      <div class="section-title">Updates</div>
+      <div class="card">
+        <h2>Check for Updates</h2>
+        <p style="font-size:13px;color:var(--muted);margin-bottom:14px;">Check the remote repository for new commits and apply them.</p>
+
+        <div id="update-current" style="font-size:13px;color:var(--muted);margin-bottom:12px;">
+          <span style="color:var(--text);font-weight:500;">Current version:</span> <span id="update-commit">loading...</span>
+          <span style="margin-left:8px;color:var(--muted);">(<span id="update-branch">—</span>)</span>
+        </div>
+
+        <div id="update-status" style="display:none;padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:rgba(0,0,0,0.12);margin-bottom:14px;font-size:13px;">
+        </div>
+
+        <div id="update-log" style="display:none;max-height:240px;overflow-y:auto;padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:rgba(0,0,0,0.2);margin-bottom:14px;font-size:12px;font-family:'SF Mono',Menlo,monospace;white-space:pre-wrap;color:var(--muted);"></div>
+
+        <div style="display:flex;gap:10px;">
+          <button class="btn primary" id="update-check-btn" onclick="updateCheck()">Check for Updates</button>
+          <button class="btn" id="update-apply-btn" onclick="updateApply()" style="display:none;">Apply &amp; Restart</button>
+        </div>
+      </div>
+    </div>
+
     <div class="settings-section active" id="section-system">
       <div class="section-title">System</div>
 
@@ -1572,13 +1599,6 @@
             <div class="setting-desc">Restart the chat/tools backend process</div>
           </div>
           <button class="btn" onclick="restartWorker()">&#9851; Restart</button>
-        </div>
-        <div class="setting-row">
-          <div class="setting-info">
-            <div class="setting-label">Check for Updates</div>
-            <div class="setting-desc">Pull latest changes from the git repository</div>
-          </div>
-          <button class="btn" onclick="checkForUpdates(event)">Check Updates</button>
         </div>
       </div>
     </div>
@@ -2620,35 +2640,90 @@ async function changePassword() {
 }
 
 // ---- Logout ----
-async function checkForUpdates(e) {
-  if (e) e.preventDefault();
-  const status = document.createElement('div');
-  status.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:var(--surface);border:1px solid var(--border);padding:12px 20px;border-radius:10px;z-index:300;font-size:14px;box-shadow:0 8px 32px rgba(0,0,0,0.4);';
-  status.textContent = '📦 Checking for updates...';
-  document.body.appendChild(status);
+// ---- Updates ----
+let _updateBehind = 0;
+async function loadUpdateInfo() {
   try {
     const r = await fetch('/api/update/check', { method: 'POST' });
     const d = await r.json();
+    if (d.commit) document.getElementById('update-commit').textContent = d.commit.substring(0, 8);
+    if (d.branch) document.getElementById('update-branch').textContent = d.branch;
+  } catch {}
+}
+async function updateCheck() {
+  const btn = document.getElementById('update-check-btn');
+  const statusEl = document.getElementById('update-status');
+  const applyBtn = document.getElementById('update-apply-btn');
+  const logEl = document.getElementById('update-log');
+  btn.disabled = true;
+  btn.textContent = 'Checking...';
+  statusEl.style.display = 'block';
+  statusEl.style.color = 'var(--muted)';
+  statusEl.textContent = 'Fetching from remote...';
+  applyBtn.style.display = 'none';
+  logEl.style.display = 'none';
+  try {
+    const r = await fetch('/api/update/check', { method: 'POST' });
+    const d = await r.json();
+    if (d.commit) document.getElementById('update-commit').textContent = d.commit.substring(0, 8);
+    if (d.branch) document.getElementById('update-branch').textContent = d.branch;
     if (d.error) {
-      status.textContent = '❌ ' + d.error;
+      statusEl.style.color = 'var(--red)';
+      statusEl.textContent = d.error;
     } else if (d.up_to_date) {
-      status.textContent = '✅ KukuiBot is up to date.';
+      statusEl.style.color = 'var(--green)';
+      statusEl.textContent = 'KukuiBot is up to date.';
     } else {
-      status.textContent = '📦 ' + d.behind + ' update(s) available. Applying...';
-      const ur = await fetch('/api/update/apply', { method: 'POST' });
-      const ud = await ur.json();
-      if (ud.error) {
-        status.textContent = '❌ Update failed: ' + ud.error;
-      } else {
-        status.textContent = '✅ Updated! Reloading...';
-        setTimeout(() => window.location.reload(), 2000);
-        return;
-      }
+      _updateBehind = d.behind || 0;
+      statusEl.style.color = 'var(--yellow)';
+      statusEl.textContent = d.behind + ' update(s) available.';
+      applyBtn.style.display = 'inline-block';
     }
   } catch (e) {
-    status.textContent = '❌ Network error';
+    statusEl.style.color = 'var(--red)';
+    statusEl.textContent = 'Network error: ' + e.message;
   }
-  setTimeout(() => status.remove(), 4000);
+  btn.disabled = false;
+  btn.textContent = 'Check for Updates';
+}
+async function updateApply() {
+  const btn = document.getElementById('update-apply-btn');
+  const statusEl = document.getElementById('update-status');
+  const logEl = document.getElementById('update-log');
+  btn.disabled = true;
+  btn.textContent = 'Applying...';
+  statusEl.style.color = 'var(--muted)';
+  statusEl.textContent = 'Pulling ' + _updateBehind + ' update(s) and restarting...';
+  try {
+    const r = await fetch('/api/update/apply', { method: 'POST' });
+    const d = await r.json();
+    if (d.error) {
+      statusEl.style.color = 'var(--red)';
+      statusEl.textContent = 'Update failed: ' + d.error;
+      btn.disabled = false;
+      btn.textContent = 'Retry';
+    } else {
+      statusEl.style.color = 'var(--green)';
+      statusEl.textContent = 'Updated successfully! Restarting server...';
+      if (d.summary) {
+        logEl.style.display = 'block';
+        logEl.textContent = d.summary;
+      }
+      btn.style.display = 'none';
+      // Poll for server to come back
+      setTimeout(function poll() {
+        fetch('/auth/status').then(r => {
+          if (r.ok) window.location.reload();
+          else setTimeout(poll, 1500);
+        }).catch(() => setTimeout(poll, 1500));
+      }, 2000);
+    }
+  } catch (e) {
+    statusEl.style.color = 'var(--red)';
+    statusEl.textContent = 'Network error: ' + e.message;
+    btn.disabled = false;
+    btn.textContent = 'Retry';
+  }
 }
 
 async function doLogout() {
@@ -4681,6 +4756,7 @@ loadUnifiStatus();
 loadCloudflareStatus();
 loadCertsList();
 loadWorkerList();
+loadUpdateInfo();
 loadCronJobs();
 if ((window.location.hash || '').replace('#', '') === 'nightly') {
   initReportManager(true);

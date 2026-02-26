@@ -580,6 +580,7 @@ async function _loadOpenRouterModels(force) {
     const r = await fetch(API + '/api/openrouter/config', { headers: { 'Accept': 'application/json' } });
     if (!r.ok) return;
     const d = await r.json();
+    if (!d.has_api_key) { _orModelsLoaded = false; return; }
     const models = d.models || [];
     for (const m of models) {
       // Build a safe key from model ID: "google/gemini-3.1-pro-preview" → "openrouter_gemini_3_1_pro_preview"
