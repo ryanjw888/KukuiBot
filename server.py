@@ -2164,7 +2164,8 @@ def _start_oauth_callback_server(state: str, code_verifier: str, settings_url_ba
 async def api_claude_oauth_start(req: Request):
     """Start OAuth flow: spin up a temp localhost callback server (like the CLI),
     generate PKCE challenge, return the authorization URL."""
-    if not _is_admin(req):
+    # Allow during setup (no admin user yet) or for admins
+    if is_setup_complete() and not _is_admin(req):
         return JSONResponse({"ok": False, "error": "Admin only"}, status_code=403)
 
     logger.info("[OAUTH] /api/claude/oauth/start hit")

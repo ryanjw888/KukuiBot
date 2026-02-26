@@ -71,6 +71,7 @@ AUTH_EXEMPT = {
     "/auth/system-login",
     "/auth/reset-password-terminal",
     "/api/claude/oauth/callback",
+    "/api/claude/oauth/start",
 }
 AUTH_EXEMPT_PREFIXES = ("/static/", "/setup", "/login")
 

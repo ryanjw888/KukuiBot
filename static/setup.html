@@ -333,33 +333,33 @@
       <!-- Method picker — large cards -->
       <div id="method-picker">
         <div class="provider-options">
+          <div class="provider-card" id="card-claude" onclick="startClaudeOAuth()">
+            <div class="card-icon icon-claude">
+              <img src="/claude-opus-icon.png" width="24" height="24" style="display:block;">
+            </div>
+            <div class="card-body">
+              <div class="card-title">Sign in with Claude <span class="badge badge-rec">One-Click</span> <span class="badge badge-rec">Recommended</span></div>
+              <div class="card-desc">Use your Claude Pro or Max subscription. Just sign in — no keys to copy.</div>
+            </div>
+            <div class="card-arrow">›</div>
+          </div>
           <div class="provider-card" id="card-oauth" onclick="startOAuth()">
             <div class="card-icon icon-oauth">
               <img src="/openai-icon.svg" width="24" height="24" style="display:block;">
             </div>
             <div class="card-body">
-              <div class="card-title">Sign in with OpenAI <span class="badge badge-rec">One-Click Login</span></div>
+              <div class="card-title">Sign in with OpenAI <span class="badge badge-rec">One-Click</span></div>
               <div class="card-desc">Use your ChatGPT Plus or Pro subscription. Just sign in — no keys to copy, tokens refresh automatically.</div>
             </div>
             <div class="card-arrow">›</div>
           </div>
-          <div class="provider-card" id="card-claude" onclick="selectMethod('claude')">
+          <div class="provider-card" id="card-claude-key" onclick="selectMethod('claude')">
             <div class="card-icon icon-claude">
-              <img src="/claude-opus-icon.png" width="24" height="24" style="display:block;">
-            </div>
-            <div class="card-body">
-              <div class="card-title">Claude Code <span class="badge badge-adv">Anthropic</span></div>
-              <div class="card-desc">Connect Claude Opus &amp; Sonnet via Anthropic API key. Powers the Claude Code tab.</div>
-            </div>
-            <div class="card-arrow">›</div>
-          </div>
-          <div class="provider-card" id="card-anthropic" onclick="selectMethod('anthropic')">
-            <div class="card-icon icon-anthropic">
               <img src="/claude-icon.svg" width="24" height="24" style="display:block;">
             </div>
             <div class="card-body">
-              <div class="card-title">Anthropic API Key <span class="badge badge-adv">Direct</span></div>
-              <div class="card-desc">Use an Anthropic API key for direct model access. Separate from Claude Code.</div>
+              <div class="card-title">Anthropic API Key <span class="badge badge-adv">Manual</span></div>
+              <div class="card-desc">Use an Anthropic API key for Claude Code or direct model access.</div>
             </div>
             <div class="card-arrow">›</div>
           </div>
@@ -408,91 +408,32 @@
       </div>
 
 
-      <!-- CLAUDE CODE: Instructions + Key Input -->
-      <div id="claude-flow" style="display:none;">
-        <h3 style="font-size:16px; margin:0 0 12px;">Connect Claude Code</h3>
-
-        <div id="claude-method-picker">
-          <p style="font-size:13px; color:var(--muted); margin:0 0 14px;">Choose how to authenticate:</p>
-          <div class="provider-options">
-            <div class="provider-card" onclick="selectClaudeMethod('cli')" style="padding:14px 16px;">
-              <div class="card-icon icon-claude" style="width:36px; height:36px;">
-                <span style="font-size:18px;">⌨️</span>
-              </div>
-              <div class="card-body">
-                <div class="card-title" style="font-size:14px;">Use Local CLI Auth <span class="badge badge-rec">Easiest</span></div>
-                <div class="card-desc">Run <code style="background:rgba(255,255,255,0.06); padding:1px 5px; border-radius:3px;">claude login</code> in Terminal. KukuiBot uses the CLI credentials automatically.</div>
-              </div>
-              <div class="card-arrow">›</div>
-            </div>
-            <div class="provider-card" onclick="selectClaudeMethod('apikey')" style="padding:14px 16px;">
-              <div class="card-icon icon-claude" style="width:36px; height:36px;">
-                <span style="font-size:18px;">🔑</span>
-              </div>
-              <div class="card-body">
-                <div class="card-title" style="font-size:14px;">Paste API Key</div>
-                <div class="card-desc">Use an Anthropic API key from <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color:var(--accent);">console.anthropic.com</a>.</div>
-              </div>
-              <div class="card-arrow">›</div>
-            </div>
-          </div>
-          <div style="text-align:center; margin-top:10px;">
-            <button class="btn-skip" onclick="backToMethods()">← Back to providers</button>
-          </div>
-        </div>
-
-        <!-- CLI auth instructions -->
-        <div id="claude-cli-flow" style="display:none;">
-          <div class="instructions">
-            <p style="font-size:13px; color:var(--muted); margin:0 0 8px;">Open Terminal on this Mac and run:</p>
-            <div style="background:rgba(0,0,0,0.3); border-radius:6px; padding:10px 14px; font-family:monospace; font-size:13px; color:var(--text); margin:8px 0; user-select:all;">claude login</div>
-            <p style="font-size:12px; color:var(--muted); margin:8px 0 0;">Follow the prompts to sign in with your Anthropic account. KukuiBot will use the CLI credentials automatically — no key to paste.</p>
-          </div>
-          <div class="btn-row" style="margin-top:16px;">
-            <button class="btn btn-secondary" onclick="document.getElementById('claude-cli-flow').style.display='none'; document.getElementById('claude-method-picker').style.display='block';">← Back</button>
-            <button class="btn btn-primary" onclick="submitClaudeCli()">I've logged in — Continue</button>
-          </div>
-        </div>
-
-        <!-- API key input -->
-        <div id="claude-apikey-flow" style="display:none;">
-          <label for="claude_key">Anthropic API Key</label>
-          <input type="password" id="claude_key" placeholder="sk-ant-...">
-          <div class="help-text">
-            Get your key at <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com/settings/keys</a>.
-          </div>
-          <div class="btn-row" style="margin-top:12px;">
-            <button class="btn btn-secondary" onclick="document.getElementById('claude-apikey-flow').style.display='none'; document.getElementById('claude-method-picker').style.display='block';">← Back</button>
-            <button class="btn btn-primary" onclick="submitClaudeKey()" id="claude-btn">Connect</button>
-          </div>
-        </div>
+      <!-- CLAUDE OAUTH: Waiting -->
+      <div id="claude-oauth-waiting" style="display:none; text-align:center; padding: 20px 0;">
+        <div class="spinner-lg"></div>
+        <p style="color:var(--text); font-size:14px; margin-top:16px;">Redirecting to Claude login…</p>
+        <button class="btn btn-secondary" onclick="cancelClaudeOAuth()" style="margin-top:12px; width:auto; padding:8px 20px; display:inline-block;">Cancel</button>
       </div>
 
-      <!-- CLAUDE CODE: Success -->
+      <!-- CLAUDE OAUTH: Success -->
       <div id="claude-success" style="display:none; text-align:center; padding: 20px 0;">
         <div style="font-size:48px; margin-bottom:12px;">✓</div>
         <p style="color:var(--green); font-size:16px; font-weight:600;">Claude Code Connected</p>
       </div>
 
-      <!-- ANTHROPIC: Key Input -->
-      <div id="anthropic-flow" style="display:none;">
+      <!-- CLAUDE CODE: API key fallback -->
+      <div id="claude-flow" style="display:none;">
         <h3 style="font-size:16px; margin:0 0 6px;">Anthropic API Key</h3>
-        <p class="subtitle">For direct Anthropic model access (separate from Claude Code).</p>
-        <label for="anthropic_key">API Key</label>
-        <input type="password" id="anthropic_key" placeholder="sk-ant-...">
+        <p class="subtitle">Connect Claude Code and direct Anthropic models with an API key.</p>
+        <label for="claude_key">API Key</label>
+        <input type="password" id="claude_key" placeholder="sk-ant-...">
         <div class="help-text">
           Get your key at <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com/settings/keys</a>.
         </div>
         <div class="btn-row" style="margin-top:12px;">
           <button class="btn btn-secondary" onclick="backToMethods()">← Back</button>
-          <button class="btn btn-primary" onclick="submitAnthropicKey()" id="anthropic-btn">Connect</button>
+          <button class="btn btn-primary" onclick="submitClaudeKey()" id="claude-btn">Connect</button>
         </div>
-      </div>
-
-      <!-- ANTHROPIC: Success -->
-      <div id="anthropic-success" style="display:none; text-align:center; padding: 20px 0;">
-        <div style="font-size:48px; margin-bottom:12px;">✓</div>
-        <p style="color:var(--green); font-size:16px; font-weight:600;">Anthropic Key Saved</p>
       </div>
 
       <!-- OPENROUTER: Key Input -->
@@ -648,7 +589,7 @@
     // --- Method Picker ---
 
     let selectedMethod = 'oauth';
-    const _allFlows = ['claude-flow', 'anthropic-flow', 'openrouter-flow'];
+    const _allFlows = ['claude-flow', 'openrouter-flow'];
 
     function selectMethod(method) {
       selectedMethod = method;
@@ -668,42 +609,78 @@
         const el = document.getElementById(id);
         if (el) el.style.display = 'none';
       });
+      document.getElementById('claude-oauth-waiting').style.display = 'none';
       document.getElementById('method-picker').style.display = 'block';
       document.getElementById('step2-error').style.display = 'none';
     }
 
-    // --- Claude Code Flow ---
+    // --- Claude Code OAuth Flow ---
 
-    function selectClaudeMethod(method) {
-      document.getElementById('claude-method-picker').style.display = 'none';
-      if (method === 'cli') {
-        document.getElementById('claude-cli-flow').style.display = 'block';
-      } else {
-        document.getElementById('claude-apikey-flow').style.display = 'block';
-      }
-    }
+    async function startClaudeOAuth() {
+      const errEl = document.getElementById('step2-error');
+      errEl.style.display = 'none';
 
-    async function submitClaudeCli() {
-      // Set auth strategy to "local" — uses CLI credentials
+      document.getElementById('method-picker').style.display = 'none';
+      document.getElementById('claude-oauth-waiting').style.display = 'block';
+
       try {
-        const res = await fetch('/auth/token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: 'local', provider_type: 'claude_code_cli' }),
-        });
+        const res = await fetch('/api/claude/oauth/start', { headers: { 'Accept': 'application/json' } });
+        if (!res.ok) {
+          const txt = await res.text();
+          throw new Error('HTTP ' + res.status + ': ' + txt.substring(0, 200));
+        }
+        const ct = (res.headers.get('content-type') || '');
+        if (!ct.includes('application/json')) {
+          throw new Error('Server returned non-JSON response.');
+        }
         const data = await res.json();
-        if (data.error) throw new Error(data.error);
+        if (!data.ok) throw new Error(data.error || 'Failed to start OAuth');
 
-        document.getElementById('claude-flow').style.display = 'none';
-        document.getElementById('method-picker').style.display = 'none';
-        document.getElementById('claude-success').style.display = 'block';
-        setTimeout(() => finishSetup(), 800);
+        // Navigate in the same tab — temp callback server redirects back
+        window.location.href = data.authorize_url;
       } catch (e) {
-        const errEl = document.getElementById('step2-error');
+        document.getElementById('claude-oauth-waiting').style.display = 'none';
+        document.getElementById('method-picker').style.display = 'block';
         errEl.textContent = e.message;
         errEl.style.display = 'block';
       }
     }
+
+    function cancelClaudeOAuth() {
+      document.getElementById('claude-oauth-waiting').style.display = 'none';
+      document.getElementById('method-picker').style.display = 'block';
+    }
+
+    // Detect OAuth return (page reloads with ?claude_oauth=success)
+    (function checkClaudeOAuthReturn() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('claude_oauth') === 'success') {
+        // Clean the URL
+        const url = new URL(window.location);
+        url.searchParams.delete('claude_oauth');
+        history.replaceState(null, '', url.pathname + url.hash);
+        // Show success and finish
+        document.getElementById('method-picker').style.display = 'none';
+        document.getElementById('claude-oauth-waiting').style.display = 'none';
+        document.getElementById('claude-success').style.display = 'block';
+        // Make step 2 visible if not already
+        document.getElementById('step-2').classList.add('visible');
+        setTimeout(() => finishSetup(), 800);
+      } else if (params.get('claude_oauth') === 'error') {
+        const msg = params.get('claude_oauth_msg') || 'Authentication failed';
+        const url = new URL(window.location);
+        url.searchParams.delete('claude_oauth');
+        url.searchParams.delete('claude_oauth_msg');
+        history.replaceState(null, '', url.pathname + url.hash);
+        // Show error
+        document.getElementById('step-2').classList.add('visible');
+        const errEl = document.getElementById('step2-error');
+        errEl.textContent = msg;
+        errEl.style.display = 'block';
+      }
+    })();
+
+    // --- Claude Code API Key Flow ---
 
     async function submitClaudeKey() {
       const key = document.getElementById('claude_key').value.trim();
@@ -730,36 +707,6 @@
         errEl.textContent = e.message;
         errEl.style.display = 'block';
         document.getElementById('claude-btn').disabled = false;
-      }
-    }
-
-    // --- Anthropic Key Flow ---
-
-    async function submitAnthropicKey() {
-      const key = document.getElementById('anthropic_key').value.trim();
-      const errEl = document.getElementById('step2-error');
-      errEl.style.display = 'none';
-
-      if (!key) { errEl.textContent = 'Please enter your Anthropic API key'; errEl.style.display = 'block'; return; }
-
-      document.getElementById('anthropic-btn').disabled = true;
-      try {
-        const res = await fetch('/auth/token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: key, provider_type: 'anthropic' }),
-        });
-        const data = await res.json();
-        if (data.error) throw new Error(data.error);
-
-        document.getElementById('anthropic-flow').style.display = 'none';
-        document.getElementById('method-picker').style.display = 'none';
-        document.getElementById('anthropic-success').style.display = 'block';
-        setTimeout(() => finishSetup(), 800);
-      } catch (e) {
-        errEl.textContent = e.message;
-        errEl.style.display = 'block';
-        document.getElementById('anthropic-btn').disabled = false;
       }
     }
 
@@ -1028,11 +975,23 @@
       const f = document.getElementById('step1-form');
       if (f) f.setAttribute('novalidate', '');
     }
+    // Check if returning from Claude OAuth — if so, jump to step 2 immediately
+    const _oauthReturn = new URLSearchParams(window.location.search).get('claude_oauth');
+
     fetch('/auth/status').then(r => r.json()).then(data => {
-      if (data.setup_complete && !forceStep2 && !devMode) {
+      if (_oauthReturn) {
+        // Returning from Claude OAuth — show step 2 regardless of setup state
+        document.getElementById('step-1').style.display = 'none';
+        document.getElementById('step-2').classList.add('visible');
+        const dots = document.querySelector('.steps');
+        if (dots) dots.style.display = 'none';
+        currentStep = 2;
+        // If setup wasn't complete, mark account as skipped so finishSetup creates it
+        if (!data.setup_complete) skippedAccount = true;
+      } else if (data.setup_complete && !forceStep2 && !devMode) {
         window.location.href = '/';
       } else if (data.setup_complete && forceStep2) {
-        // Skip step 1 (account already exists), go straight to OpenAI setup
+        // Skip step 1 (account already exists), go straight to provider setup
         document.getElementById('step-1').style.display = 'none';
         document.getElementById('step-2').classList.add('visible');
         // Hide progress dots since we're only doing step 2
