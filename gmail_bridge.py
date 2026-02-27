@@ -41,7 +41,7 @@ SMTP_PORT = 587
 
 ALL_PERMS = [
     "read_inbox", "read_sent", "create_drafts",
-    "send_owner_only", "send_anyone", "trash",
+    "send_owner_only", "send_within_org", "send_anyone", "trash",
 ]
 
 # --- Helpers ---
@@ -90,11 +90,13 @@ def _sync_tools_md():
     if connected and enabled:
         owner_emails = _get_owner_emails()
         owner_list = ", ".join(sorted(owner_emails)) if owner_emails else email_addr
+        owner_domain = email_addr.split('@')[-1] if '@' in email_addr else ""
         perm_labels = {
             "read_inbox": "Read inbox messages",
             "read_sent": "Read sent messages",
             "create_drafts": "Create email drafts",
             "send_owner_only": f"Send email (to owner only: {owner_list})",
+            "send_within_org": f"Send email (within @{owner_domain} only)" if owner_domain else "Send within organization",
             "send_anyone": "Send email to anyone",
             "trash": "Move messages to trash",
         }
@@ -514,21 +516,38 @@ def create_draft(to: str, subject: str, body: str) -> dict:
 def send_email(to: str, subject: str, body: str) -> dict:
     """
     Send an email via Gmail SMTP.
-    Requires send_owner_only or send_anyone permission.
-    Enforces owner-only restriction server-side. Content sanitized first.
+    Requires send_owner_only, send_within_org, or send_anyone permission.
+    Enforces recipient restrictions server-side. Content sanitized first.
     """
     perms = get_permissions()
+    to_lower = to.strip().lower()
 
+    # Check if ANY send permission is enabled
+    if not (perms.get("send_owner_only") or perms.get("send_within_org") or perms.get("send_anyone")):
+        raise PermissionError("No send permission enabled")
+
+    # Enforce recipient restrictions based on enabled permissions
+    owner_emails = _get_owner_emails()
+
+    # Most permissive: send_anyone
     if perms.get("send_anyone"):
-        pass
+        pass  # No restrictions
+    # Medium: send_within_org
+    elif perms.get("send_within_org"):
+        gmail_email = _get_config("gmail.email", "")
+        owner_domain = gmail_email.split('@')[-1] if '@' in gmail_email else None
+        to_domain = to_lower.split('@')[-1] if '@' in to_lower else None
+
+        if not owner_domain or not to_domain or to_domain != owner_domain:
+            raise PermissionError(
+                f"Send within organization only: recipient must be @{owner_domain}, not {to}"
+            )
+    # Most restrictive: send_owner_only
     elif perms.get("send_owner_only"):
-        owner_emails = _get_owner_emails()
-        if to.strip().lower() not in owner_emails:
+        if to_lower not in owner_emails:
             raise PermissionError(
                 f"Send to owner only: allowed recipients are {', '.join(sorted(owner_emails))}, not {to}"
             )
-    else:
-        raise PermissionError("No send permission enabled")
 
     from email_sanitize import preflight_email
     passed, findings = preflight_email(subject, body)
@@ -547,23 +566,40 @@ def send_email(to: str, subject: str, body: str) -> dict:
 
 def send_html_report(to: str, subject: str, html_path: str) -> dict:
     """
-    Send a local HTML file as an email to an owner address.
+    Send a local HTML file as an email.
     Skips egress sanitizer — this is for static local reports, not AI-generated content.
-    Requires send_owner_only or send_anyone permission.
+    Requires send_owner_only, send_within_org, or send_anyone permission.
     """
     import os
     perms = get_permissions()
+    to_lower = to.strip().lower()
 
+    # Check if ANY send permission is enabled
+    if not (perms.get("send_owner_only") or perms.get("send_within_org") or perms.get("send_anyone")):
+        raise PermissionError("No send permission enabled")
+
+    # Enforce recipient restrictions based on enabled permissions
+    owner_emails = _get_owner_emails()
+
+    # Most permissive: send_anyone
     if perms.get("send_anyone"):
-        pass
+        pass  # No restrictions
+    # Medium: send_within_org
+    elif perms.get("send_within_org"):
+        gmail_email = _get_config("gmail.email", "")
+        owner_domain = gmail_email.split('@')[-1] if '@' in gmail_email else None
+        to_domain = to_lower.split('@')[-1] if '@' in to_lower else None
+
+        if not owner_domain or not to_domain or to_domain != owner_domain:
+            raise PermissionError(
+                f"Send within organization only: recipient must be @{owner_domain}, not {to}"
+            )
+    # Most restrictive: send_owner_only
     elif perms.get("send_owner_only"):
-        owner_emails = _get_owner_emails()
-        if to.strip().lower() not in owner_emails:
+        if to_lower not in owner_emails:
             raise PermissionError(
                 f"Send to owner only: allowed recipients are {', '.join(sorted(owner_emails))}, not {to}"
             )
-    else:
-        raise PermissionError("No send permission enabled")
 
     # Validate the file exists and is under KUKUIBOT_HOME
     abs_path = os.path.abspath(html_path)

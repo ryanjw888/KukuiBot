@@ -724,6 +724,14 @@
 
       <div class="setting-row" style="padding:10px 12px;">
         <div class="setting-info">
+          <div class="setting-label" style="font-size:13px;">Send within My Organization</div>
+          <div class="setting-desc">Send emails to anyone at <span id="gmail-owner-domain" style="color:var(--accent);font-weight:500;">your domain</span></div>
+        </div>
+        <div id="gmail-perm-send_within_org" class="toggle" onclick="toggleGmailPerm('send_within_org')"></div>
+      </div>
+
+      <div class="setting-row" style="padding:10px 12px;">
+        <div class="setting-info">
           <div class="setting-label" style="font-size:13px;">Send to Anyone</div>
           <div class="setting-desc">Send emails to any recipient (requires content scan)</div>
         </div>
@@ -2753,6 +2761,7 @@ async function loadGmailStatus() {
   const connectedActions = document.getElementById('gmail-connected-actions');
   const emailEl = document.getElementById('gmail-email');
   const ownerEmailEl = document.getElementById('gmail-owner-email');
+  const ownerDomainEl = document.getElementById('gmail-owner-domain');
   try {
     const r = await fetch(API + '/api/gmail/status', { headers: { 'Accept': 'application/json' } });
     const d = await r.json();
@@ -2770,11 +2779,14 @@ async function loadGmailStatus() {
       if (connectedStatus) connectedStatus.style.display = '';
       if (emailEl) emailEl.textContent = d.email || '';
       if (ownerEmailEl) ownerEmailEl.textContent = d.email || 'your email';
+      const domain = d.email ? '@' + d.email.split('@')[1] : 'your domain';
+      if (ownerDomainEl) ownerDomainEl.textContent = domain;
       if (credsSection) credsSection.style.display = 'none';
       if (connectedActions) connectedActions.style.display = '';
     } else {
       if (connectedStatus) connectedStatus.style.display = 'none';
       if (ownerEmailEl) ownerEmailEl.textContent = 'your email';
+      if (ownerDomainEl) ownerDomainEl.textContent = 'your domain';
       if (credsSection) credsSection.style.display = '';
       if (connectedActions) connectedActions.style.display = 'none';
     }
