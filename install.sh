@@ -31,6 +31,24 @@ done
 PORT="${CUSTOM_PORT:-${KUKUIBOT_PORT:-7000}}"
 KUKUIBOT_HOME="${CUSTOM_DIR:-${KUKUIBOT_HOME:-$HOME/.kukuibot}}"
 
+# --- Pre-flight validation ---
+if ! echo "$PORT" | grep -qE '^[0-9]+$' || [ "$PORT" -lt 1024 ] || [ "$PORT" -gt 65535 ]; then
+  echo "❌ Invalid port: $PORT (must be 1024-65535)"
+  exit 1
+fi
+
+if lsof -nP -iTCP:${PORT} -sTCP:LISTEN >/dev/null 2>&1; then
+  EXISTING_PROC=$(lsof -nP -iTCP:${PORT} -sTCP:LISTEN | tail -1 | awk '{print $1, $2}')
+  echo "⚠️  Port $PORT is already in use by: $EXISTING_PROC"
+  echo "   Choose a different port with --port or stop the conflicting process"
+  exit 1
+fi
+
+if [ ! -d "$(dirname "$KUKUIBOT_HOME")" ]; then
+  echo "❌ Parent directory does not exist: $(dirname "$KUKUIBOT_HOME")"
+  exit 1
+fi
+
 echo "🧪 Installing KukuiBot..."
 echo "   Port: $PORT"
 echo "   Data: $KUKUIBOT_HOME"
@@ -196,18 +214,51 @@ find_claude() {
 # Prepend common npm bin dirs to PATH so both node and claude are findable
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:$PATH"
 
+# --- Check/install Node.js with version requirement ---
+# Claude Code CLI requires Node.js >= 18.0.0
+NEED_NODE=false
 if ! command -v node &>/dev/null; then
-  echo "→ Installing Node.js (required for Claude Code)..."
-  brew install node </dev/null
+  NEED_NODE=true
+else
+  NODE_MAJOR=$(node -v 2>/dev/null | sed 's/v\([0-9]*\).*/\1/')
+  if [ -z "$NODE_MAJOR" ] || [ "$NODE_MAJOR" -lt 18 ]; then
+    echo "→ Node.js $(node -v 2>/dev/null || echo 'unknown') is too old (need >=18.0.0), upgrading via Homebrew..."
+    NEED_NODE=true
+  fi
 fi
-echo "✓ Node.js $(node --version 2>/dev/null || echo '(pending)')"
 
+if [ "$NEED_NODE" = true ]; then
+  echo "→ Installing Node.js 18+ (required for Claude Code)..."
+  brew install node </dev/null
+  # Refresh brew env to pick up new node
+  eval "$(brew shellenv)"
+fi
+
+NODE_VER=$(node --version 2>/dev/null || echo '(pending)')
+echo "✓ Node.js $NODE_VER"
+
+# --- Install Claude Code CLI ---
 CLAUDE_BIN_PATH=""
 CLAUDE_BIN_PATH="$(find_claude)" || true
 
 if [ -z "$CLAUDE_BIN_PATH" ]; then
   echo "→ Installing Claude Code CLI..."
-  npm install -g @anthropic-ai/claude-code </dev/null 2>&1 | tail -1
+
+  # Try with sudo first (handles permission issues on macOS)
+  # We already primed sudo credentials at the start, so this is safe
+  if sudo npm install -g @anthropic-ai/claude-code </dev/null 2>&1 | tail -1; then
+    echo "  Installed with sudo"
+  else
+    echo "  ⚠️  Global install with sudo failed, trying user-local npm config..."
+    # Fallback: configure npm to use user-local prefix
+    mkdir -p "$HOME/.npm-global"
+    npm config set prefix "$HOME/.npm-global" 2>/dev/null
+    export PATH="$HOME/.npm-global/bin:$PATH"
+    npm install -g @anthropic-ai/claude-code </dev/null 2>&1 | tail -1 || {
+      echo "  ⚠️  npm install failed. You may need to install manually after this script completes."
+    }
+  fi
+
   # Re-search after install
   CLAUDE_BIN_PATH="$(find_claude)" || true
 fi
@@ -217,7 +268,17 @@ if [ -n "$CLAUDE_BIN_PATH" ]; then
   export PATH="$(dirname "$CLAUDE_BIN_PATH"):$PATH"
   echo "✓ Claude Code CLI $("$CLAUDE_BIN_PATH" --version 2>/dev/null | head -1) ($CLAUDE_BIN_PATH)"
 else
-  echo "⚠️  Claude Code CLI not found — install manually: npm install -g @anthropic-ai/claude-code"
+  echo ""
+  echo "⚠️  Claude Code CLI not found after installation attempt."
+  echo "   Manual install steps:"
+  echo "     1. Ensure Node.js >= 18:  node --version"
+  echo "     2. Upgrade if needed:     brew upgrade node"
+  echo "     3. Install Claude CLI:    sudo npm install -g @anthropic-ai/claude-code"
+  echo "   Or use user-local install:"
+  echo "     npm config set prefix ~/.npm-global"
+  echo "     npm install -g @anthropic-ai/claude-code"
+  echo "     export PATH=\"\$HOME/.npm-global/bin:\$PATH\""
+  echo ""
 fi
 
 # --- Install root CA (one-time) ---
@@ -303,15 +364,18 @@ done
 echo "✓ Configuration files ready"
 
 # --- Generate HTTPS certs ---
-if [ ! -f certs/kukuibot.pem ]; then
+# Use absolute path to ensure certs are created in the correct location
+CERT_DIR="$SRC_DIR/certs"
+if [ ! -f "$CERT_DIR/kukuibot.pem" ]; then
   echo "→ Generating HTTPS certificates..."
-  mkdir -p certs
+  mkdir -p "$CERT_DIR"
   LAN_IP=$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "")
   CERT_NAMES="localhost 127.0.0.1"
   [ -n "$LAN_IP" ] && CERT_NAMES="$CERT_NAMES $LAN_IP"
-  mkcert -cert-file certs/kukuibot.pem -key-file certs/kukuibot-key.pem $CERT_NAMES
+  mkcert -cert-file "$CERT_DIR/kukuibot.pem" -key-file "$CERT_DIR/kukuibot-key.pem" $CERT_NAMES
   CAROOT=$(mkcert -CAROOT)
-  cp "$CAROOT/rootCA.pem" certs/rootCA.pem 2>/dev/null || true
+  cp "$CAROOT/rootCA.pem" "$CERT_DIR/rootCA.pem" 2>/dev/null || true
+  echo "  Certificates: $CERT_DIR"
 fi
 echo "✓ HTTPS certs ready"
 
@@ -475,27 +539,56 @@ for i in 1 2 3 4 5 6; do
 done
 
 if [ "$SERVER_OK" = true ]; then
-  SERVER_OK=true
   echo "✓ KukuiBot server running on port $PORT"
 else
-  echo "⚠️  Server didn't start — check /tmp/kukuibot-server.log"
+  echo "⚠️  Server didn't start within expected time"
+  echo ""
+  echo "  Diagnostic steps:"
+  echo "    1. Check server logs:     tail -50 /tmp/kukuibot-server.log"
+  echo "    2. Check launchd status:  launchctl list | grep kukuibot"
+  echo "    3. Verify database:       ls -la $KUKUIBOT_HOME/kukuibot.db"
+  echo "    4. Test manually:         cd $SRC_DIR && $PYTHON_BIN server.py"
+  echo ""
+  echo "  Common issues:"
+  echo "    - Port $PORT already in use: lsof -nP -iTCP:$PORT"
+  echo "    - Certificate issues: Check $CERT_DIR/"
+  echo "    - Python dependencies: $PYTHON_BIN -m pip check"
+  echo ""
 fi
 
 LAN_IP=$(ipconfig getifaddr en0 2>/dev/null || echo "<your-ip>")
 
 echo ""
 echo "═══════════════════════════════════════════════════"
-echo "  🧪 KukuiBot installed successfully!"
+echo "  🧪 KukuiBot installation complete!"
 echo ""
-echo "  Open:    https://localhost:${PORT}"
-echo "  LAN:     https://${LAN_IP}:${PORT}"
+echo "  Access URLs:"
+echo "    Local:  https://localhost:${PORT}"
+echo "    LAN:    https://${LAN_IP}:${PORT}"
+echo ""
+echo "  Configuration:"
+echo "    Data dir:   $KUKUIBOT_HOME"
+echo "    Source:     $SRC_DIR"
+echo "    Python:     $PYTHON_BIN"
+echo "    Node.js:    $(command -v node) ($NODE_VER)"
+if [ -n "$CLAUDE_BIN_PATH" ]; then
+echo "    Claude CLI: $CLAUDE_BIN_PATH"
+fi
 echo ""
 echo "  Manage:"
-echo "    Restart server:   launchctl stop com.kukuibot.server"
-echo "    Server logs:      tail -f /tmp/kukuibot-server.log"
+echo "    Restart:    launchctl stop com.kukuibot.server"
+echo "    Logs:       tail -f /tmp/kukuibot-server.log"
+echo "    Uninstall:  cd $SRC_DIR && ./uninstall.sh"
 echo "═══════════════════════════════════════════════════"
 
-# Open in default browser
-echo ""
-echo "→ Opening KukuiBot in your browser..."
-open "https://localhost:${PORT}"
+# Open in default browser only if server started successfully
+if [ "$SERVER_OK" = true ]; then
+  echo ""
+  echo "→ Opening KukuiBot in your browser..."
+  sleep 1
+  open "https://localhost:${PORT}"
+else
+  echo ""
+  echo "→ Server needs troubleshooting before accessing web interface."
+  echo "  Review the diagnostic steps above and check logs."
+fi
