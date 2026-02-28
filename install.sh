@@ -455,8 +455,6 @@ if [ "$PORT" -lt 1024 ]; then
         <string>${PYTHON_BIN}</string>
         <string>${SRC_DIR}/server.py</string>
     </array>
-    <key>UserName</key>
-    <string>$(whoami)</string>
     <key>WorkingDirectory</key>
     <string>${SRC_DIR}</string>
     <key>RunAtLoad</key>
