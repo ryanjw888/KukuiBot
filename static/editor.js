@@ -16,6 +16,9 @@ const EditorModule = (function () {
   let filterText = '';
   let editorReady = false;
   let _currentTreePath = '';  // last loaded tree path (for mobile dropdown)
+  let _searchMode = false;    // true when showing search results
+  let _searchTimer = null;    // debounce timer for search
+  let _previewMode = false;   // true when showing HTML preview
 
   // Ace theme mapping (matches KukuiBot themes)
   const ACE_THEMES = {
@@ -81,6 +84,8 @@ const EditorModule = (function () {
     originalContent = '';
     expandedDirs.clear();
     filterText = '';
+    _searchMode = false;
+    _previewMode = false;
   }
 
   // --- Theme sync ---
@@ -109,6 +114,7 @@ const EditorModule = (function () {
       }
       if (!fileTreeRoot) fileTreeRoot = data.path;
       _currentTreePath = data.path;
+      _searchMode = false;
       renderTree(data.path, data.entries);
       // Also update mobile dropdown if open
       if (_mobileDropdownOpen) _renderMobileDropdownList(data.path, data.entries);
@@ -124,14 +130,15 @@ const EditorModule = (function () {
     // Store entries for this path
     host.dataset.path = parentPath;
 
-    const filter = filterText.toLowerCase();
+    // When in search mode, don't apply local filter — results come pre-filtered from server
+    const filter = _searchMode ? '' : filterText.toLowerCase();
     const filtered = filter
       ? entries.filter(e => e.name.toLowerCase().includes(filter))
       : entries;
 
     let html = '';
-    // Show parent nav if not at root
-    if (parentPath !== fileTreeRoot) {
+    // Show parent nav if not at root (and not in search mode)
+    if (!_searchMode && parentPath !== fileTreeRoot) {
       const parent = parentPath.split('/').slice(0, -1).join('/') || '/';
       html += `<div class="ft-item ft-parent" onclick="EditorModule.navigateUp('${escAttr(parent)}')">
         <span class="ft-icon">..</span>
@@ -153,19 +160,27 @@ const EditorModule = (function () {
       } else {
         const isActive = currentFile && currentFile.path === entry.path;
         const sizeStr = entry.size != null ? formatSize(entry.size) : '';
+        // In search mode, show relative path; in tree mode, show just the name
+        const displayName = _searchMode && entry.rel ? entry.rel : entry.name;
         html += `<div class="ft-item ft-file${isActive ? ' active' : ''}" onclick="EditorModule.openFile('${escAttr(entry.path)}')" title="${esc(entry.path)}${sizeStr ? ' (' + sizeStr + ')' : ''}">
           <span class="ft-icon">&nbsp;</span>
-          <span class="ft-name">${esc(entry.name)}</span>
+          <span class="ft-name">${esc(displayName)}</span>
         </div>`;
       }
     }
 
+    if (_searchMode && !html) {
+      html = '<div class="ft-empty">No matching files</div>';
+    }
+
     host.innerHTML = html;
 
-    // Load expanded dirs
-    for (const entry of filtered) {
-      if (entry.type === 'dir' && expandedDirs.has(entry.path)) {
-        loadSubTree(entry.path);
+    // Load expanded dirs (not in search mode)
+    if (!_searchMode) {
+      for (const entry of filtered) {
+        if (entry.type === 'dir' && expandedDirs.has(entry.path)) {
+          loadSubTree(entry.path);
+        }
       }
     }
   }
@@ -235,9 +250,82 @@ const EditorModule = (function () {
     loadTree(path);
   }
 
+  // --- Search (replaces old filter) ---
+
   function onFilterInput(value) {
     filterText = value;
-    loadTree(document.getElementById('file-tree')?.dataset.path || fileTreeRoot);
+
+    // Clear any pending search
+    if (_searchTimer) {
+      clearTimeout(_searchTimer);
+      _searchTimer = null;
+    }
+
+    if (!value.trim()) {
+      // Empty input — back to normal tree view
+      _searchMode = false;
+      loadTree(document.getElementById('file-tree')?.dataset.path || fileTreeRoot);
+      return;
+    }
+
+    // Debounce: wait 300ms after user stops typing before searching
+    _searchTimer = setTimeout(() => _doSearch(value.trim()), 300);
+  }
+
+  async function _doSearch(query) {
+    const root = fileTreeRoot || '';
+    try {
+      const url = '/api/files/search?q=' + encodeURIComponent(query) +
+        (root ? '&path=' + encodeURIComponent(root) : '');
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.error) {
+        console.error('Search error:', data.error);
+        return;
+      }
+      _searchMode = true;
+      const host = document.getElementById('file-tree');
+      if (host) host.dataset.path = data.root || fileTreeRoot;
+      renderTree(data.root || fileTreeRoot, data.results);
+    } catch (err) {
+      console.error('Search failed:', err);
+    }
+  }
+
+  // --- New File ---
+
+  async function createNewFile() {
+    const dir = _currentTreePath || fileTreeRoot || '';
+    const name = prompt('New file name:');
+    if (!name || !name.trim()) return;
+
+    const safeName = name.trim();
+    // Basic validation
+    if (safeName.includes('/') || safeName.includes('\\')) {
+      alert('File name cannot contain path separators. Navigate to the target directory first.');
+      return;
+    }
+
+    const fullPath = dir + '/' + safeName;
+
+    try {
+      const res = await fetch('/api/files/write', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: fullPath, content: '' }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        alert('Failed to create file: ' + data.error);
+        return;
+      }
+      // Reload tree to show the new file
+      await loadTree(_currentTreePath || fileTreeRoot);
+      // Open the new file
+      openFile(data.path);
+    } catch (err) {
+      alert('Failed to create file: ' + err.message);
+    }
   }
 
   // --- File Operations ---
@@ -247,6 +335,9 @@ const EditorModule = (function () {
     if (isDirty) {
       if (!confirm('You have unsaved changes. Discard them?')) return;
     }
+
+    // Reset preview mode — will re-activate below for HTML files if preference is saved
+    _previewMode = false;
 
     try {
       const res = await fetch('/api/files/read?path=' + encodeURIComponent(path));
@@ -289,6 +380,13 @@ const EditorModule = (function () {
         aceEditor.focus();
       }
 
+      // If HTML file and preview preference is saved, show preview; otherwise show editor
+      if (_isHtmlFile() && localStorage.getItem('kukuibot.editor.htmlPreview') === '1') {
+        _previewMode = true;
+        _showPreviewView();
+      } else {
+        _showEditorView();
+      }
       updateToolbar();
       updateFileTreeSelection();
 
@@ -343,6 +441,53 @@ const EditorModule = (function () {
     updateToolbar();
   }
 
+  // --- HTML Preview ---
+
+  function _isHtmlFile() {
+    if (!currentFile) return false;
+    return currentFile.language === 'html';
+  }
+
+  function togglePreview() {
+    if (!_isHtmlFile()) return;
+    _previewMode = !_previewMode;
+
+    // Persist preference so it sticks across file switches
+    localStorage.setItem('kukuibot.editor.htmlPreview', _previewMode ? '1' : '0');
+
+    if (_previewMode) {
+      _showPreviewView();
+    } else {
+      _showEditorView();
+    }
+    updateToolbar();
+  }
+
+  function _showPreviewView() {
+    const aceContainer = document.getElementById('ace-editor');
+    const previewContainer = document.getElementById('editor-preview');
+    if (aceContainer) aceContainer.style.display = 'none';
+    if (previewContainer) {
+      previewContainer.style.display = 'flex';
+      // Get current content (may have unsaved edits)
+      const content = aceEditor ? aceEditor.getValue() : originalContent;
+      const iframe = previewContainer.querySelector('iframe');
+      if (iframe) {
+        // Use srcdoc for sandboxed rendering
+        iframe.srcdoc = content;
+      }
+    }
+  }
+
+  function _showEditorView() {
+    _previewMode = false;
+    const aceContainer = document.getElementById('ace-editor');
+    const previewContainer = document.getElementById('editor-preview');
+    if (aceContainer) aceContainer.style.display = '';
+    if (previewContainer) previewContainer.style.display = 'none';
+    if (aceEditor) aceEditor.resize();
+  }
+
   // --- UI Updates ---
 
   function updateToolbar() {
@@ -353,6 +498,7 @@ const EditorModule = (function () {
     const dirtyDot = document.getElementById('editor-dirty-dot');
     const readonlyBadge = document.getElementById('editor-readonly-badge');
     const cursorEl = document.getElementById('editor-cursor-pos');
+    const previewBtn = document.getElementById('editor-preview-btn');
 
     if (pathEl) {
       if (!currentFile) {
@@ -395,6 +541,12 @@ const EditorModule = (function () {
     if (cursorEl && aceEditor) {
       const pos = aceEditor.getCursorPosition();
       cursorEl.textContent = `Ln ${pos.row + 1}, Col ${pos.column + 1}`;
+    }
+    // Preview toggle — only visible for HTML files
+    if (previewBtn) {
+      previewBtn.style.display = _isHtmlFile() ? '' : 'none';
+      previewBtn.classList.toggle('active', _previewMode);
+      previewBtn.title = _previewMode ? 'Show source' : 'Preview HTML';
     }
     // Update mobile filter placeholder with current filename
     const mobileFilterEl = document.getElementById('mobile-editor-filter');
@@ -669,12 +821,16 @@ const EditorModule = (function () {
           <span id="editor-save-indicator" class="editor-save-indicator"></span>
         </div>
         <div class="editor-toolbar-right">
+          <button id="editor-preview-btn" class="editor-btn editor-preview-toggle" onclick="EditorModule.togglePreview()" style="display:none" title="Preview HTML">Preview</button>
           <button class="editor-btn editor-refresh-btn" onclick="EditorModule.refresh()" title="Refresh file">&#x21bb;</button>
           <button id="editor-save-btn" class="editor-btn" onclick="EditorModule.save()" disabled title="Save (Cmd+S)">Save</button>
           <button id="editor-revert-btn" class="editor-btn" onclick="EditorModule.revert()" disabled title="Revert to saved">Revert</button>
         </div>
       </div>
       <div id="ace-editor" class="ace-editor-container"></div>
+      <div id="editor-preview" class="editor-preview-container" style="display:none">
+        <iframe sandbox="allow-same-origin" class="editor-preview-iframe"></iframe>
+      </div>
       <div class="editor-status-bar">
         <span id="editor-lang" class="editor-lang"></span>
         <span id="editor-cursor-pos" class="editor-cursor-pos"></span>
@@ -685,7 +841,8 @@ const EditorModule = (function () {
   function renderFileTreeSidebar() {
     return `
       <div class="ft-filter-wrap">
-        <input type="text" class="ft-filter" placeholder="Filter files..." value="${esc(filterText)}" oninput="EditorModule.onFilterInput(this.value)" />
+        <input type="text" class="ft-filter" placeholder="Search files..." value="${esc(filterText)}" oninput="EditorModule.onFilterInput(this.value)" />
+        <button class="ft-new-file-btn" onclick="EditorModule.createNewFile()" title="New file in current directory">+</button>
       </div>
       <div id="file-tree" class="file-tree"></div>
     `;
@@ -697,6 +854,7 @@ const EditorModule = (function () {
     _currentTreePath = path || '';
     expandedDirs.clear();
     filterText = '';
+    _searchMode = false;
     loadTree(path);
   }
 
@@ -720,6 +878,10 @@ const EditorModule = (function () {
     postInit,
     renderEditorPanel,
     renderFileTreeSidebar,
+    // New file
+    createNewFile,
+    // HTML preview
+    togglePreview,
     // Mobile file dropdown
     openMobileDropdown,
     closeMobileDropdown,
