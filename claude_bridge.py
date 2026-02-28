@@ -53,6 +53,58 @@ from skill_loader import load_skills_for_worker
 logger = logging.getLogger("kukuibot.claude_bridge")
 
 
+# ---------------------------------------------------------------------------
+#  OAuth Token Refresh Helper
+# ---------------------------------------------------------------------------
+
+async def refresh_cli_oauth_token() -> tuple[bool, str]:
+    """Trigger the CLI built-in OAuth refresh by spawning a throwaway process.
+
+    Returns (success, new_token).  success is True when the credentials file
+    was updated with a later expiresAt than before the spawn.
+    """
+    creds_path = Path.home() / ".claude" / ".credentials.json"
+
+    def _read_expiry() -> tuple[str, int]:
+        try:
+            if not creds_path.is_file():
+                return "", 0
+            data = json.loads(creds_path.read_text())
+            oauth = data.get("claudeAiOauth", {})
+            tok = (oauth.get("accessToken") or "").strip()
+            exp = int(oauth.get("expiresAt", 0))
+            return tok, exp
+        except Exception:
+            return "", 0
+
+    old_tok, old_exp = _read_expiry()
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            CLAUDE_BIN, "--print", "-p", "ping",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(proc.wait(), timeout=45)
+    except asyncio.TimeoutError:
+        logger.warning("refresh_cli_oauth_token: throwaway process timed out (45s)")
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return False, ""
+    except Exception as e:
+        logger.warning(f"refresh_cli_oauth_token: spawn failed: {e}")
+        return False, ""
+
+    new_tok, new_exp = _read_expiry()
+    if new_exp > old_exp and new_tok:
+        logger.info(f"refresh_cli_oauth_token: token refreshed (new expiry in {(new_exp/1000 - time.time())/60:.0f}m)")
+        return True, new_tok
+    return False, ""
+
+
 def _find_claude_binary() -> str:
     """Find the claude binary, searching common install locations.
 
@@ -644,6 +696,9 @@ class PersistentClaudeProcess:
         # - local: rely on local Claude CLI auth state (no injected auth env vars)
         self._auth_strategy: str = "configured"
         self._last_auth_error: Optional[str] = None  # Captured from stderr/stdout when CLI reports auth failure
+        self._auth_recovery_attempts: int = 0
+        self._auth_recovery_window_start: float = 0.0
+        self._auth_error_recovering: bool = False
 
         self._compaction_state = _load_compaction_state(slot_id)
         self._compacting = False
@@ -1179,10 +1234,31 @@ class PersistentClaudeProcess:
                     pass
 
             # Include auth error in the terminal event so the user sees a clear message
-            auth_err = self._last_auth_error
+            auth_err = self._last_auth_error or self._auth_error_recovering
+            self._auth_error_recovering = False
             if auth_err:
-                self._broadcast({"type": "result", "result": f"⚠️ Authentication failed: {auth_err}", "subtype": "auth_error"})
-                self._last_auth_error = None  # Clear after surfacing
+                # Attempt auto-recovery before surfacing the error
+                now = time.time()
+                if now - self._auth_recovery_window_start > 600:
+                    self._auth_recovery_attempts = 0
+                    self._auth_recovery_window_start = now
+                recovered = False
+                if self._auth_recovery_attempts < 2:
+                    self._auth_recovery_attempts += 1
+                    logger.info(f"Auth error detected — attempting token refresh (attempt {self._auth_recovery_attempts}/2, slot={self.slot_id})")
+                    try:
+                        ok, new_tok = await refresh_cli_oauth_token()
+                        if ok:
+                            logger.info(f"Auth recovery succeeded — process will restart with fresh token on next message (slot={self.slot_id})")
+                            self._context_injected = False
+                            self._last_auth_error = None
+                            recovered = True
+                    except Exception as e:
+                        logger.warning(f"Auth recovery failed: {e}")
+                if not recovered:
+                    auth_msg = self._last_auth_error or "Authentication error (token expired)"
+                    self._broadcast({"type": "result", "result": f"⚠️ Authentication failed: {auth_msg}", "subtype": "auth_error"})
+                self._last_auth_error = None
             else:
                 rc = self.proc.returncode if self.proc else None
                 stderr_tail = "\n".join(self._recent_stderr[-5:]) if self._recent_stderr else ""
@@ -1217,10 +1293,11 @@ class PersistentClaudeProcess:
                 if len(self._recent_stderr) > 10:
                     self._recent_stderr.pop(0)
                 low = text.lower()
-                # Detect auth failures and surface them to the user
+                # Detect auth failures — flag for recovery in _read_loop finally
                 if any(kw in low for kw in _AUTH_ERROR_KEYWORDS):
                     logger.error(f"[stderr:auth] {text}")
                     self._last_auth_error = text
+                    self._auth_error_recovering = True
                     self._broadcast({"type": "error", "error": text})
                 elif "error" in low or "failed" in low:
                     logger.warning(f"[stderr] {text}")

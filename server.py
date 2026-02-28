@@ -824,6 +824,28 @@ def _read_cli_credentials() -> tuple[str, int]:
         return "", 0
 
 
+def _read_cli_credentials_raw() -> tuple[str, int]:
+    """Read credentials without the expiry filter — for status display.
+
+    Returns (token, expires_at_epoch_s) or ("", 0) if file missing/unreadable.
+    """
+    creds_path = Path.home() / ".claude" / ".credentials.json"
+    try:
+        if not creds_path.is_file():
+            return "", 0
+        import json as _json
+        data = _json.loads(creds_path.read_text())
+        oauth = data.get("claudeAiOauth", {})
+        token = (oauth.get("accessToken") or "").strip()
+        expires_ms = oauth.get("expiresAt", 0)
+        if not token:
+            return "", 0
+        expires_s = int(expires_ms / 1000) if expires_ms else 0
+        return token, expires_s
+    except Exception:
+        return "", 0
+
+
 def _claude_auth_strategy() -> str:
     strategy = (get_config("claude_code.auth_strategy", "configured") or "configured").strip().lower()
     return strategy if strategy in {"configured", "local"} else "configured"
@@ -2038,6 +2060,25 @@ async def api_claude_config_get(req: Request):
     # Return raw token so user can verify it saved; UI does not mask it.
     # API key is never returned.
     return {"ok": True, "oauth_token": tok, "has_api_key": has_key, "auth_strategy": strategy}
+
+
+@app.get("/api/claude/auth")
+async def api_claude_auth_status(req: Request):
+    """Return Claude OAuth token health status (admin only)."""
+    if not _is_admin(req):
+        return JSONResponse({"ok": False, "error": "Admin only"}, status_code=403)
+    _, expires_s = _read_cli_credentials_raw()
+    import time as _time
+    now = _time.time()
+    remaining_hours = round((expires_s - now) / 3600, 2) if expires_s else None
+    token_healthy = (expires_s - now) > 900 if expires_s else False  # >15 min
+    return {
+        "ok": True,
+        "token_expires_at": expires_s,
+        "token_remaining_hours": remaining_hours,
+        "token_healthy": token_healthy,
+        "auth_strategy": _claude_auth_strategy(),
+    }
 
 
 @app.post("/api/claude/config")
@@ -4112,6 +4153,40 @@ async def _memory_reaper():
             logger.warning(f"Memory reaper error: {e}")
 
 
+async def _token_refresh_monitor():
+    """Background task: proactively refresh the Claude CLI OAuth token before expiry."""
+    from claude_bridge import CLAUDE_BIN, refresh_cli_oauth_token
+    logger.info("Token refresh monitor started (interval=300s, threshold=900s)")
+    while True:
+        try:
+            await asyncio.sleep(300)  # Check every 5 minutes
+            _, expires_s = _read_cli_credentials_raw()
+            if not expires_s:
+                continue  # No credentials file or no expiry info
+            remaining = expires_s - time.time()
+            if remaining > 900:  # More than 15 min left — nothing to do
+                continue
+            logger.info(f"OAuth token expiring in {remaining:.0f}s — triggering proactive refresh")
+            ok, new_tok = await refresh_cli_oauth_token()
+            if ok and new_tok:
+                set_config("claude_code.oauth_token", new_tok)
+                logger.info("Proactive token refresh succeeded — DB synced")
+                continue
+            # First attempt failed — retry after 30s
+            logger.warning("Proactive token refresh attempt 1 failed — retrying in 30s")
+            await asyncio.sleep(30)
+            ok, new_tok = await refresh_cli_oauth_token()
+            if ok and new_tok:
+                set_config("claude_code.oauth_token", new_tok)
+                logger.info("Proactive token refresh succeeded on retry — DB synced")
+            else:
+                logger.error("Proactive token refresh failed after 2 attempts — token may expire soon")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"Token refresh monitor error: {e}")
+
+
 @app.on_event("startup")
 async def startup():
     _init_server_log()
@@ -4192,6 +4267,8 @@ async def startup():
     # direct wakes for those tabs are skipped to avoid duplicates.
     # See _system_wake() docstring for the full recovery flow.
     _app_state.system_wake_task = asyncio.create_task(_system_wake())
+    # Start proactive OAuth token refresh monitor
+    _app_state.token_refresh_monitor_task = asyncio.create_task(_token_refresh_monitor())
     _init_worker_ports()
     logger.info(f"{APP_NAME} unified server started on {HOST}:{PORT}")
 
