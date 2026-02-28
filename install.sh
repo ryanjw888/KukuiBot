@@ -32,7 +32,8 @@ PORT="${CUSTOM_PORT:-${KUKUIBOT_PORT:-443}}"
 KUKUIBOT_HOME="${CUSTOM_DIR:-${KUKUIBOT_HOME:-$HOME/.kukuibot}}"
 
 # --- Interactive port selection (if not specified via flags) ---
-if [ -z "$CUSTOM_PORT" ] && [ -t 0 ]; then
+# Always prompt for port (uses /dev/tty so it works even when piped via curl | bash)
+if [ -z "$CUSTOM_PORT" ]; then
   echo "🧪 KukuiBot Installation"
   echo ""
   echo "Select HTTPS port for KukuiBot:"
@@ -41,7 +42,7 @@ if [ -z "$CUSTOM_PORT" ] && [ -t 0 ]; then
   echo "  7000  - Legacy default"
   echo "  Other - Custom port (1-65535)"
   echo ""
-  read -p "Enter port [443]: " USER_PORT
+  read -p "Enter port [443]: " USER_PORT </dev/tty
 
   if [ -n "$USER_PORT" ]; then
     PORT="$USER_PORT"
