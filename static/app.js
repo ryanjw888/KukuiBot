@@ -162,6 +162,8 @@ let newWorkerModelKey = 'codex';
 let newWorkerIdentityKey = '';
 let newWorkerError = '';
 let _availableWorkers = [];
+let _updateAvailable = false;
+let _updateBehindCount = 0;
 let showDeleteTabModal = false;
 let showCompactModal = false;
 let _pendingSkillAfterCompact = null;
@@ -1906,6 +1908,7 @@ function render(opts = {}) {
       <div class="sidebar-section">
         ${_renderGroupedTabs(tabs)}
         <button class="new-worker-btn" onclick="openNewWorkerModal()" title="Create a new worker">+ New Worker</button>
+        ${_updateAvailable ? `<button class="update-available-btn" onclick="window.location.href='/settings-v2.html#updates'" title="${_updateBehindCount} update${_updateBehindCount === 1 ? '' : 's'} available">&#8593; Update Available</button>` : ''}
       </div>
       ${planUsage?.ok ? `
       <div class="sidebar-usage">
@@ -5887,6 +5890,8 @@ async function boot() {
     requestRender();
     // Defer non-critical metadata (usage stats, token counts) until after UI is rendered
     refreshMeta();
+    // Check for updates once per calendar day (non-blocking)
+    checkForUpdatesDaily();
 
     // Check for ?editor= query param (e.g. from settings "Open in File Editor" button)
     const urlParams = new URLSearchParams(window.location.search);
@@ -5897,6 +5902,30 @@ async function boot() {
       setAppMode('editor', editorPath);
     }
   } catch { requestRender({ preserveScroll: true }); }
+}
+
+// --- Daily update check (once per calendar day) ---
+async function checkForUpdatesDaily() {
+  const today = new Date().toISOString().slice(0, 10);
+  const lastCheck = localStorage.getItem('kukuibot.lastUpdateCheck');
+  if (lastCheck === today) {
+    // Already checked today — restore cached result
+    _updateAvailable = localStorage.getItem('kukuibot.updateAvailable') === '1';
+    _updateBehindCount = parseInt(localStorage.getItem('kukuibot.updateBehind') || '0', 10);
+    if (_updateAvailable) requestRender({ preserveScroll: true });
+    return;
+  }
+  try {
+    const r = await fetch(API + '/api/update/check', { method: 'POST', credentials: 'same-origin', signal: AbortSignal.timeout(20000) });
+    if (!r.ok) return;
+    const d = await r.json();
+    _updateAvailable = !d.up_to_date && d.behind > 0;
+    _updateBehindCount = d.behind || 0;
+    localStorage.setItem('kukuibot.lastUpdateCheck', today);
+    localStorage.setItem('kukuibot.updateAvailable', _updateAvailable ? '1' : '0');
+    localStorage.setItem('kukuibot.updateBehind', String(_updateBehindCount));
+    if (_updateAvailable) requestRender({ preserveScroll: true });
+  } catch {}
 }
 
 // --- Claude Bridge health poll (for sidebar status dot) ---
