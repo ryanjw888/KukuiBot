@@ -2168,7 +2168,7 @@ function _getWorkerIcon(tab) {
 const WORKER_MODEL_PREFS = {
   'developer':     ['claude_opus', 'claude_sonnet', 'anthropic_sonnet_4_6', 'codex', 'spark'],
   'code-analyst':  ['claude_opus', 'claude_sonnet', 'anthropic_sonnet_4_6', 'codex', 'spark'],
-  'dev-manager':   ['anthropic_sonnet_4_6', 'claude_sonnet', 'claude_opus', 'codex', 'spark'],
+  'dev-manager':   ['claude_opus', 'codex', 'claude_sonnet', 'anthropic_sonnet_4_6', 'spark'],
   'it-admin':      ['anthropic_sonnet_4_6', 'claude_sonnet', 'claude_opus', 'codex', 'spark'],
   'seo':           ['spark', 'codex', 'anthropic_sonnet_4_6', 'claude_sonnet', 'claude_opus'],
   'assistant':     ['anthropic_sonnet_4_6', 'spark', 'codex', 'claude_sonnet', 'claude_opus'],
