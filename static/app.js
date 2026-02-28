@@ -2799,6 +2799,14 @@ function renderMessage(m, def, tabId = null, msgIdx = -1) {
     }
   }
 
+  // System wake notifications — render as system cards regardless of stored role
+  if (rawText.startsWith('[SYSTEM WAKE]')) {
+    if (!m._card) {
+      m._card = { icon: '🔄', title: 'System Wake', stats: [], files: [], _showBody: true };
+    }
+    return renderSystemCard(Object.assign({}, m, { role: 'system' }));
+  }
+
   // ALL system messages render as cards — auto-wrap plain ones
   if (m.role === 'system') {
     if (!m._card) {

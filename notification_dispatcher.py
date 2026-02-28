@@ -181,16 +181,18 @@ class NotificationDispatcher:
             self._tasks.pop(session_id, None)
 
     async def dispatch_pending(self, session_id: str) -> int:
-        """Deliver pending notifications to a session if subprocess is idle.
+        """Deliver pending notifications to a session.
 
-        Returns count of notifications delivered.
+        If subprocess is idle, fires a proactive wake. If busy, queues
+        notifications in-memory so they're drained by send_message() on
+        the next user message. Returns count of notifications dispatched.
         """
         # Claim from DB
         ids, payloads = notification_store.claim(session_id, limit=20)
         if not ids:
             return 0
 
-        # Check if subprocess is idle
+        # Get subprocess (must exist to queue notifications)
         pool = self._get_claude_pool()
         if not pool:
             # No pool — release claims back to pending
@@ -203,20 +205,15 @@ class NotificationDispatcher:
             self._release_claims(ids)
             return 0
 
-        # Check idle state
-        if not self._is_subprocess_idle(session_id, proc):
-            # Busy — release claims back to pending so they can be
-            # drained by the in-flight run or a later dispatch
-            self._release_claims(ids)
-            return 0
-
         # Format notification text
         rendered = []
         for payload in payloads:
             rendered.append(notification_store.render_notification(payload))
         notify_text = "\n\n".join(rendered)
 
-        # Queue in-memory on subprocess (for drain_notifications path)
+        # Queue in-memory on subprocess — always do this regardless of idle state.
+        # If busy, notifications will be drained by send_message() on the next
+        # user message. If idle, proactive wake will deliver them immediately.
         proc.queue_notification(notify_text)
 
         # Broadcast SSE event to browser
@@ -233,7 +230,15 @@ class NotificationDispatcher:
         # Mark as injected in DB
         notification_store.mark_injected(ids)
 
-        # Fire proactive wake if idle
+        # Fire proactive wake only if idle — if busy, the in-memory queue
+        # will be drained by send_message() on the next turn
+        if not self._is_subprocess_idle(session_id, proc):
+            logger.info(
+                f"NotificationDispatcher: subprocess busy for {session_id}, "
+                f"{len(ids)} notification(s) queued in-memory for next message drain"
+            )
+            return len(ids)
+
         task_id = payloads[0].get("task_id", "dispatch") if payloads else "dispatch"
         to_status = payloads[0].get("to_status", "notification") if payloads else "notification"
         woke = await self._try_proactive_wake(

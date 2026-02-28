@@ -735,10 +735,16 @@ class PersistentClaudeProcess:
 
     # --- Compaction ---
 
-    def _record_exchange(self, user_text: str, assistant_text: str):
-        """Record a user/assistant exchange for compaction history and persistent chat log."""
+    def _record_exchange(self, user_text: str, assistant_text: str, is_internal: bool = False):
+        """Record a user/assistant exchange for compaction history and persistent chat log.
+
+        When is_internal=True (proactive wake, system notifications), the input
+        message is logged with role="system" so it renders as a system card in
+        the UI instead of a user bubble.
+        """
+        input_role = "system" if is_internal else "user"
         history = self._compaction_state.get("history", [])
-        history.append({"role": "user", "content": user_text, "timestamp": time.time()})
+        history.append({"role": input_role, "content": user_text, "timestamp": time.time()})
         history.append({"role": "assistant", "content": assistant_text, "timestamp": time.time()})
         if len(history) > 200:
             history = history[-200:]
@@ -746,7 +752,7 @@ class PersistentClaudeProcess:
         if len(history) % 10 == 0:
             _save_compaction_state(self._compaction_state, self.slot_id)
         _append_to_bridge_chat_log(
-            "user",
+            input_role,
             user_text,
             kukuibot_session_id=self.kukuibot_session_id,
             worker_identity=self.worker_identity,
@@ -1440,9 +1446,11 @@ class PersistentClaudeProcess:
                 logger.warning(f"send_message ended without result event — broadcasting synthetic result (slot={self.slot_id})")
                 self._broadcast({"type": "result", "result": self._last_response_text, "subtype": "timeout"})
 
-            # Record exchange for compaction history and persistent chat log
+            # Record exchange for compaction history and persistent chat log.
+            # Internal messages (proactive wake, system notifications) are logged
+            # with role="system" so they render as system cards, not user bubbles.
             if self._last_response_text:
-                self._record_exchange(text, self._last_response_text)
+                self._record_exchange(text, self._last_response_text, is_internal=suppress_user_broadcast)
         finally:
             self.chat_lock.release()
 
