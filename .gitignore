@@ -44,8 +44,12 @@ audits/
 rustscan_*.txt
 
 # Markdown files (may contain sensitive/operational content)
+# IMPORTANT: Negations must come BEFORE blocking patterns
+!README.md
+!LICENSE.md
+!SECURITY.md
+!docs/
 *.md
-**/*.md
 memory/
 
 # Email and communication data
