@@ -1580,6 +1580,27 @@
           <button class="btn" onclick="restartWorker()">&#9851; Restart</button>
         </div>
       </div>
+
+      <!-- Access Mode -->
+      <div class="card" id="access-mode-card">
+        <h2>Access Mode</h2>
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-label">Network Access</div>
+            <div class="setting-desc" id="access-mode-desc">Loading...</div>
+          </div>
+          <select id="access-mode-select" onchange="setAccessMode(this.value)" style="min-width:150px;">
+            <option value="local">Local Only</option>
+            <option value="remote">Remote Access</option>
+          </select>
+        </div>
+        <div id="access-mode-warning" style="display:none;margin-top:8px;padding:10px 14px;border-radius:8px;border:1px solid rgba(255,180,0,0.3);background:rgba(255,180,0,0.08);font-size:12px;color:#e0a800;">
+        </div>
+        <div id="access-mode-restart" style="display:none;margin-top:10px;padding:10px 14px;border-radius:8px;border:1px solid rgba(100,200,100,0.3);background:rgba(100,200,100,0.08);font-size:12px;color:var(--green);display:flex;align-items:center;justify-content:space-between;">
+          <span>Restart required to apply changes.</span>
+          <button class="btn primary" onclick="restartWorker()" style="font-size:12px;padding:5px 12px;">Restart Now</button>
+        </div>
+      </div>
     </div>
 
     </div><!-- /container -->
@@ -2751,6 +2772,76 @@ async function doLogout() {
 async function restartWorker() {
   toast('Restarting…');
   try { await fetch(API + '/api/restart', { method: 'POST' }); toast('♻️ Restart requested'); } catch { toast('Failed'); }
+}
+
+// ---- Access Mode ----
+let _accessModeSaved = 'local';  // tracks what the server is currently running
+
+async function loadAccessMode() {
+  try {
+    const r = await fetch(API + '/api/system/access-mode');
+    const d = await r.json();
+    const sel = document.getElementById('access-mode-select');
+    const desc = document.getElementById('access-mode-desc');
+    const warn = document.getElementById('access-mode-warning');
+    if (sel) sel.value = d.mode || 'local';
+    _accessModeSaved = d.mode || 'local';
+    if (desc) {
+      if (d.mode === 'remote') {
+        desc.textContent = 'Accepting connections from any network interface (0.0.0.0)';
+      } else {
+        desc.textContent = 'Only accepting connections from this device (127.0.0.1)';
+      }
+    }
+    // If setup is not complete, show warning and disable remote option
+    if (!d.setup_complete) {
+      if (warn) {
+        warn.style.display = 'block';
+        warn.textContent = 'A user account must be created before enabling remote access. Go to Account settings to set a password.';
+      }
+      const remoteOpt = sel ? sel.querySelector('option[value="remote"]') : null;
+      if (remoteOpt) remoteOpt.disabled = true;
+    }
+  } catch {}
+}
+
+async function setAccessMode(mode) {
+  const warn = document.getElementById('access-mode-warning');
+  const restartDiv = document.getElementById('access-mode-restart');
+  const desc = document.getElementById('access-mode-desc');
+  try {
+    const r = await fetch(API + '/api/system/access-mode', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ mode })
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      toast(d.error || 'Failed');
+      // Reset select to saved value
+      const sel = document.getElementById('access-mode-select');
+      if (sel) sel.value = _accessModeSaved;
+      if (warn) { warn.style.display = 'block'; warn.textContent = d.error; }
+      return;
+    }
+    if (warn) warn.style.display = 'none';
+    if (desc) {
+      desc.textContent = mode === 'remote'
+        ? 'Accepting connections from any network interface (0.0.0.0)'
+        : 'Only accepting connections from this device (127.0.0.1)';
+    }
+    toast('Access mode updated to ' + (mode === 'remote' ? 'Remote' : 'Local'));
+    // Show restart banner if mode changed from what server is running
+    if (mode !== _accessModeSaved && restartDiv) {
+      restartDiv.style.display = 'flex';
+    } else if (restartDiv) {
+      restartDiv.style.display = 'none';
+    }
+  } catch {
+    toast('Failed to update access mode');
+    const sel = document.getElementById('access-mode-select');
+    if (sel) sel.value = _accessModeSaved;
+  }
 }
 
 // ---- Gmail ----

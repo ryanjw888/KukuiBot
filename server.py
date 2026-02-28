@@ -3428,6 +3428,41 @@ async def api_restart(req: Request):
     return {"ok": True, "message": "Restarting server..."}
 
 
+# --- Access Mode ---
+
+@app.get("/api/system/access-mode")
+async def api_get_access_mode(req: Request):
+    """Return the current access mode (local or remote)."""
+    from auth import get_config, is_setup_complete
+    mode = get_config("access_mode", "local")
+    return {"mode": mode, "setup_complete": is_setup_complete()}
+
+
+@app.post("/api/system/access-mode")
+async def api_set_access_mode(req: Request):
+    """Set access mode: 'local' (127.0.0.1) or 'remote' (0.0.0.0).
+    Remote mode requires user setup (password) to be complete."""
+    user = get_request_user(req) or {}
+    role = str(user.get("role") or "")
+    if role != "admin" and not is_localhost(req):
+        return JSONResponse({"error": "Admin access required"}, status_code=403)
+
+    from auth import get_config, set_config, is_setup_complete
+    body = await req.json()
+    mode = body.get("mode", "local")
+    if mode not in ("local", "remote"):
+        return JSONResponse({"error": "Invalid mode. Must be 'local' or 'remote'."}, status_code=400)
+
+    if mode == "remote" and not is_setup_complete():
+        return JSONResponse(
+            {"error": "User account must be set up before enabling remote access. Go to Account settings first."},
+            status_code=400,
+        )
+
+    set_config("access_mode", mode)
+    return {"ok": True, "mode": mode, "restart_required": True}
+
+
 # --- DB Health & Recovery ---
 
 @app.get("/api/db/health")
@@ -4140,7 +4175,21 @@ if __name__ == "__main__":
     from hypercorn.config import Config as HyperConfig
 
     hc = HyperConfig()
-    hc.bind = [f"{HOST}:{PORT}"]
+
+    # Check DB for access mode override (remote = 0.0.0.0, local = 127.0.0.1)
+    effective_host = HOST
+    try:
+        from auth import get_config as _get_cfg
+        _access_mode = _get_cfg("access_mode", "local")
+        if _access_mode == "remote":
+            effective_host = "0.0.0.0"
+            logger.info("Access mode: remote (binding to 0.0.0.0)")
+        else:
+            logger.info("Access mode: local (binding to 127.0.0.1)")
+    except Exception:
+        pass  # DB not ready yet — use default HOST
+
+    hc.bind = [f"{effective_host}:{PORT}"]
     hc.loglevel = "info"
     if SSL_CERT.exists() and SSL_KEY.exists():
         hc.certfile = str(SSL_CERT)
@@ -4159,9 +4208,9 @@ if __name__ == "__main__":
         tls_note = "asyncio"
 
     if SSL_CERT.exists() and SSL_KEY.exists():
-        logger.info(f"{APP_NAME} HTTPS+H2 on {HOST}:{PORT} (Hypercorn, {tls_note})")
+        logger.info(f"{APP_NAME} HTTPS+H2 on {effective_host}:{PORT} (Hypercorn, {tls_note})")
     else:
-        logger.info(f"{APP_NAME} HTTP on {HOST}:{PORT} (no TLS certs, {tls_note})")
+        logger.info(f"{APP_NAME} HTTP on {effective_host}:{PORT} (no TLS certs, {tls_note})")
 
     with asyncio.Runner(loop_factory=loop_factory) as runner:
         runner.run(serve(app, hc))
