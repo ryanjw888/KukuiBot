@@ -4,7 +4,7 @@
 #   or:  bash install.sh --port 8080 --dir ~/my-kukuibot
 #
 # Options:
-#   --port PORT   Server port (default: 7000)
+#   --port PORT   Server port (default: 443)
 #   --dir  DIR    Data directory (default: ~/.kukuibot)
 #
 # Architecture:
@@ -28,7 +28,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-PORT="${CUSTOM_PORT:-${KUKUIBOT_PORT:-7000}}"
+PORT="${CUSTOM_PORT:-${KUKUIBOT_PORT:-443}}"
 KUKUIBOT_HOME="${CUSTOM_DIR:-${KUKUIBOT_HOME:-$HOME/.kukuibot}}"
 
 # --- Pre-flight validation ---
@@ -406,7 +406,71 @@ rm -f "$LAUNCH_AGENTS/com.kukuibot.worker.plist"
 echo "  Using Python: $PYTHON_BIN"
 
 # --- KukuiBot Server ---
-cat > "$LAUNCH_AGENTS/com.kukuibot.server.plist" << PLIST
+# For privileged ports (<1024), install as root LaunchDaemon
+# For user ports (>=1024), install as user LaunchAgent
+if [ "$PORT" -lt 1024 ]; then
+  echo "  Port $PORT requires root daemon (LaunchDaemon)"
+  PLIST_PATH="/Library/LaunchDaemons/com.kukuibot.server.plist"
+  PLIST_TYPE="daemon"
+  # Stop and remove existing daemon
+  sudo launchctl bootout system/com.kukuibot.server 2>/dev/null || true
+  sudo launchctl unload "$PLIST_PATH" 2>/dev/null || true
+
+  sudo tee "$PLIST_PATH" > /dev/null << PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.kukuibot.server</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${PYTHON_BIN}</string>
+        <string>${SRC_DIR}/server.py</string>
+    </array>
+    <key>UserName</key>
+    <string>$(whoami)</string>
+    <key>WorkingDirectory</key>
+    <string>${SRC_DIR}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>StandardOutPath</key>
+    <string>/tmp/kukuibot-server.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/kukuibot-server.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>$HOME</string>
+        <key>PATH</key>
+        <string>${PATH_ENV}</string>
+        <key>KUKUIBOT_HOME</key>
+        <string>${KUKUIBOT_HOME}</string>
+        <key>KUKUIBOT_PORT</key>
+        <string>${PORT}</string>${CLAUDE_BIN_PLIST_ENTRY}
+    </dict>
+</dict>
+</plist>
+PLIST
+
+  sudo chown root:wheel "$PLIST_PATH"
+  sudo chmod 644 "$PLIST_PATH"
+  sudo launchctl bootstrap system "$PLIST_PATH"
+  sudo launchctl kickstart -k system/com.kukuibot.server
+
+else
+  echo "  Port $PORT uses user agent (LaunchAgent)"
+  PLIST_PATH="$LAUNCH_AGENTS/com.kukuibot.server.plist"
+  PLIST_TYPE="agent"
+  # Stop and remove existing agent
+  launchctl bootout "gui/${UID_VAL}/com.kukuibot.server" 2>/dev/null || true
+  launchctl unload "$PLIST_PATH" 2>/dev/null || true
+
+  cat > "$PLIST_PATH" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -445,9 +509,11 @@ cat > "$LAUNCH_AGENTS/com.kukuibot.server.plist" << PLIST
 </plist>
 PLIST
 
-launchctl bootstrap "gui/${UID_VAL}" "$LAUNCH_AGENTS/com.kukuibot.server.plist" 2>/dev/null || \
-  launchctl load "$LAUNCH_AGENTS/com.kukuibot.server.plist" 2>/dev/null || true
-echo "✓ KukuiBot server (port $PORT) installed"
+  launchctl bootstrap "gui/${UID_VAL}" "$PLIST_PATH" 2>/dev/null || \
+    launchctl load "$PLIST_PATH" 2>/dev/null || true
+fi
+
+echo "✓ KukuiBot server (port $PORT) installed as $PLIST_TYPE"
 
 # =============================================
 # Privileged helper daemon (root launchd)

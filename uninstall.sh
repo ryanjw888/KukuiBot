@@ -37,13 +37,25 @@ fi
 # --- Stop and unload services ---
 echo "→ Stopping services..."
 UID_VAL=$(id -u)
-for svc in com.kukuibot.server com.kukuibot.worker; do
-  launchctl bootout "gui/${UID_VAL}/${svc}" 2>/dev/null || true
-  launchctl stop "$svc" 2>/dev/null || true
-  launchctl unload "$LAUNCH_AGENTS/${svc}.plist" 2>/dev/null || true
-  rm -f "$LAUNCH_AGENTS/${svc}.plist"
-  echo "  ✓ $svc removed"
-done
+
+# Try both LaunchAgent (user) and LaunchDaemon (root) for server
+echo "  Checking user LaunchAgent..."
+launchctl bootout "gui/${UID_VAL}/com.kukuibot.server" 2>/dev/null || true
+launchctl stop com.kukuibot.server 2>/dev/null || true
+launchctl unload "$LAUNCH_AGENTS/com.kukuibot.server.plist" 2>/dev/null || true
+rm -f "$LAUNCH_AGENTS/com.kukuibot.server.plist"
+
+echo "  Checking root LaunchDaemon (for privileged ports)..."
+sudo launchctl bootout system/com.kukuibot.server 2>/dev/null || true
+sudo rm -f /Library/LaunchDaemons/com.kukuibot.server.plist
+
+# Legacy worker
+launchctl bootout "gui/${UID_VAL}/com.kukuibot.worker" 2>/dev/null || true
+launchctl stop com.kukuibot.worker 2>/dev/null || true
+launchctl unload "$LAUNCH_AGENTS/com.kukuibot.worker.plist" 2>/dev/null || true
+rm -f "$LAUNCH_AGENTS/com.kukuibot.worker.plist"
+
+echo "  ✓ com.kukuibot.server removed"
 
 # Root LaunchDaemon (privileged helper)
 echo "→ Removing privileged helper daemon..."
