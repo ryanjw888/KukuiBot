@@ -48,9 +48,17 @@ rustscan_*.txt
 !README.md
 !LICENSE.md
 !SECURITY.md
-!docs/
+!docs/DESIGN.md
+!docs/CONTEXT_WINDOW_TRACKING.md
+!docs/MAX_SESSIONS.md
 *.md
 memory/
+# Keep these private (operational/persona data)
+agent/*.md
+workers/*.md
+models/*.md
+skills/**/*.md
+docs/NetworkAudit.md
 
 # Email and communication data
 emails/
