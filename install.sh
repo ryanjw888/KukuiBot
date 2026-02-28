@@ -37,8 +37,8 @@ if [ -z "$CUSTOM_PORT" ]; then
   echo "🧪 KukuiBot Installation"
   echo ""
   echo "Select HTTPS port for KukuiBot:"
-  echo "  443   - Standard HTTPS (recommended, requires root daemon)"
-  echo "  8443  - Alternative HTTPS (no root required)"
+  echo "  443   - Standard HTTPS (recommended)"
+  echo "  8443  - Alternative HTTPS"
   echo "  7000  - Legacy default"
   echo "  Other - Custom port (1-65535)"
   echo ""
@@ -56,10 +56,9 @@ if ! echo "$PORT" | grep -qE '^[0-9]+$' || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65
   exit 1
 fi
 
-# Warn about privileged ports (< 1024) but allow them
+# Note about privileged ports (< 1024) — handled via pfctl forwarding
 if [ "$PORT" -lt 1024 ]; then
-  echo "⚠️  Port $PORT requires root privileges (privileged port < 1024)"
-  echo "   The server will need to run as root or with proper capabilities"
+  echo "ℹ️  Port $PORT is privileged — will use pfctl forwarding (server runs as your user)"
 fi
 
 if lsof -nP -iTCP:${PORT} -sTCP:LISTEN >/dev/null 2>&1; then
@@ -434,112 +433,131 @@ rm -f "$LAUNCH_AGENTS/com.kukuibot.worker.plist"
 echo "  Using Python: $PYTHON_BIN"
 
 # --- KukuiBot Server ---
-# For privileged ports (<1024), install as root LaunchDaemon
-# For user ports (>=1024), install as user LaunchAgent
+# Always run as user LaunchAgent (never root). For privileged ports (<1024),
+# the server binds to an internal high port and pfctl forwards the external
+# port to it. This avoids all root-ownership issues (Claude CLI, git, file
+# permissions).
+
+BIND_PORT="$PORT"
+BIND_PORT_PLIST_ENTRY=""
+PFCTL_ANCHOR="com.kukuibot"
+PFCTL_ANCHOR_DIR="/etc/pf.anchors"
+PFCTL_DAEMON_PLIST="/Library/LaunchDaemons/com.kukuibot.portfwd.plist"
+
+# Clean up any legacy root LaunchDaemon for the server (from older installs)
+sudo launchctl bootout system/com.kukuibot.server 2>/dev/null || true
+sudo rm -f /Library/LaunchDaemons/com.kukuibot.server.plist 2>/dev/null || true
+
 if [ "$PORT" -lt 1024 ]; then
-  echo "  Port $PORT requires root daemon (LaunchDaemon)"
-  PLIST_PATH="/Library/LaunchDaemons/com.kukuibot.server.plist"
-  PLIST_TYPE="daemon"
-  # Stop and remove existing daemon
-  sudo launchctl bootout system/com.kukuibot.server 2>/dev/null || true
-  sudo launchctl unload "$PLIST_PATH" 2>/dev/null || true
+  BIND_PORT=8443
+  echo "  Port $PORT → server binds to $BIND_PORT (pfctl forwards $PORT → $BIND_PORT)"
+  BIND_PORT_PLIST_ENTRY="
+        <key>KUKUIBOT_BIND_PORT</key>
+        <string>${BIND_PORT}</string>"
 
-  sudo tee "$PLIST_PATH" > /dev/null << PLIST
+  # --- pfctl port-forwarding anchor ---
+  sudo mkdir -p "$PFCTL_ANCHOR_DIR"
+  sudo tee "$PFCTL_ANCHOR_DIR/$PFCTL_ANCHOR" > /dev/null << PF
+# KukuiBot port forwarding — redirect privileged port to user-space server
+rdr pass on lo0 inet proto tcp from any to 127.0.0.1 port ${PORT} -> 127.0.0.1 port ${BIND_PORT}
+rdr pass on lo0 inet proto tcp from any to any port ${PORT} -> 127.0.0.1 port ${BIND_PORT}
+PF
+
+  # Load the anchor into pf.conf if not already present
+  if ! grep -qF "com.kukuibot" /etc/pf.conf 2>/dev/null; then
+    # Insert anchor lines before the last line (which is usually a trailing newline or rule)
+    sudo cp /etc/pf.conf /etc/pf.conf.kukuibot-backup
+    # Append anchor references
+    printf '\n# KukuiBot port forwarding\nrdr-anchor "%s"\nload anchor "%s" from "%s/%s"\n' \
+      "$PFCTL_ANCHOR" "$PFCTL_ANCHOR" "$PFCTL_ANCHOR_DIR" "$PFCTL_ANCHOR" \
+      | sudo tee -a /etc/pf.conf > /dev/null
+  fi
+
+  # Apply the rules now
+  sudo pfctl -ef /etc/pf.conf 2>/dev/null || sudo pfctl -f /etc/pf.conf 2>/dev/null || true
+
+  # --- LaunchDaemon to re-apply pfctl rules on boot ---
+  sudo tee "$PFCTL_DAEMON_PLIST" > /dev/null << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.kukuibot.server</string>
+    <string>com.kukuibot.portfwd</string>
     <key>ProgramArguments</key>
     <array>
-        <string>${PYTHON_BIN}</string>
-        <string>${SRC_DIR}/server.py</string>
+        <string>/sbin/pfctl</string>
+        <string>-ef</string>
+        <string>/etc/pf.conf</string>
     </array>
-    <key>WorkingDirectory</key>
-    <string>${SRC_DIR}</string>
     <key>RunAtLoad</key>
     <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>ThrottleInterval</key>
-    <integer>30</integer>
     <key>StandardOutPath</key>
-    <string>/tmp/kukuibot-server.log</string>
+    <string>/tmp/kukuibot-portfwd.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/kukuibot-server.log</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>HOME</key>
-        <string>$HOME</string>
-        <key>PATH</key>
-        <string>${PATH_ENV}</string>
-        <key>KUKUIBOT_HOME</key>
-        <string>${KUKUIBOT_HOME}</string>
-        <key>KUKUIBOT_PORT</key>
-        <string>${PORT}</string>${CLAUDE_BIN_PLIST_ENTRY}
-    </dict>
+    <string>/tmp/kukuibot-portfwd.log</string>
 </dict>
 </plist>
 PLIST
 
-  sudo chown root:wheel "$PLIST_PATH"
-  sudo chmod 644 "$PLIST_PATH"
-  sudo launchctl bootstrap system "$PLIST_PATH"
-  sudo launchctl kickstart -k system/com.kukuibot.server
+  sudo chown root:wheel "$PFCTL_DAEMON_PLIST"
+  sudo chmod 644 "$PFCTL_DAEMON_PLIST"
+  sudo launchctl bootout system/com.kukuibot.portfwd 2>/dev/null || true
+  sudo launchctl bootstrap system "$PFCTL_DAEMON_PLIST"
 
-else
-  echo "  Port $PORT uses user agent (LaunchAgent)"
-  PLIST_PATH="$LAUNCH_AGENTS/com.kukuibot.server.plist"
-  PLIST_TYPE="agent"
-  # Stop and remove existing agent
-  launchctl bootout "gui/${UID_VAL}/com.kukuibot.server" 2>/dev/null || true
-  launchctl unload "$PLIST_PATH" 2>/dev/null || true
-
-  cat > "$PLIST_PATH" << PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.kukuibot.server</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>${PYTHON_BIN}</string>
-        <string>${SRC_DIR}/server.py</string>
-    </array>
-    <key>WorkingDirectory</key>
-    <string>${SRC_DIR}</string>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>ThrottleInterval</key>
-    <integer>30</integer>
-    <key>StandardOutPath</key>
-    <string>/tmp/kukuibot-server.log</string>
-    <key>StandardErrorPath</key>
-    <string>/tmp/kukuibot-server.log</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>HOME</key>
-        <string>$HOME</string>
-        <key>PATH</key>
-        <string>${PATH_ENV}</string>
-        <key>KUKUIBOT_HOME</key>
-        <string>${KUKUIBOT_HOME}</string>
-        <key>KUKUIBOT_PORT</key>
-        <string>${PORT}</string>${CLAUDE_BIN_PLIST_ENTRY}
-    </dict>
-</dict>
-</plist>
-PLIST
-
-  launchctl bootstrap "gui/${UID_VAL}" "$PLIST_PATH" 2>/dev/null || \
-    launchctl load "$PLIST_PATH" 2>/dev/null || true
+  echo "✓ Port forwarding: $PORT → $BIND_PORT (pfctl)"
 fi
 
-echo "✓ KukuiBot server (port $PORT) installed as $PLIST_TYPE"
+# --- Server LaunchAgent (always runs as user, never root) ---
+PLIST_PATH="$LAUNCH_AGENTS/com.kukuibot.server.plist"
+
+# Stop any existing agent
+launchctl bootout "gui/${UID_VAL}/com.kukuibot.server" 2>/dev/null || true
+launchctl unload "$PLIST_PATH" 2>/dev/null || true
+
+cat > "$PLIST_PATH" << PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.kukuibot.server</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${PYTHON_BIN}</string>
+        <string>${SRC_DIR}/server.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>${SRC_DIR}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>StandardOutPath</key>
+    <string>/tmp/kukuibot-server.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/kukuibot-server.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>$HOME</string>
+        <key>PATH</key>
+        <string>${PATH_ENV}</string>
+        <key>KUKUIBOT_HOME</key>
+        <string>${KUKUIBOT_HOME}</string>
+        <key>KUKUIBOT_PORT</key>
+        <string>${PORT}</string>${BIND_PORT_PLIST_ENTRY}${CLAUDE_BIN_PLIST_ENTRY}
+    </dict>
+</dict>
+</plist>
+PLIST
+
+launchctl bootstrap "gui/${UID_VAL}" "$PLIST_PATH" 2>/dev/null || \
+  launchctl load "$PLIST_PATH" 2>/dev/null || true
+
+echo "✓ KukuiBot server (port $BIND_PORT) installed as user agent"
 
 # =============================================
 # Privileged helper daemon (root launchd)
@@ -630,7 +648,7 @@ fi
 echo -n "→ Waiting for server to start"
 SERVER_OK=false
 for i in $(seq 1 15); do
-  if lsof -nP -iTCP:${PORT} -sTCP:LISTEN >/dev/null 2>&1; then
+  if lsof -nP -iTCP:${BIND_PORT} -sTCP:LISTEN >/dev/null 2>&1; then
     SERVER_OK=true
     break
   fi
@@ -640,7 +658,11 @@ done
 echo ""
 
 if [ "$SERVER_OK" = true ]; then
-  echo "✓ KukuiBot server running on port $PORT"
+  if [ "$BIND_PORT" != "$PORT" ]; then
+    echo "✓ KukuiBot server running on port $BIND_PORT (accessible on port $PORT via pfctl)"
+  else
+    echo "✓ KukuiBot server running on port $PORT"
+  fi
 else
   echo "⚠️  Server didn't start within 45 seconds"
   echo ""
@@ -659,7 +681,7 @@ else
   echo "    4. Test manually:         cd $SRC_DIR && $PYTHON_BIN server.py"
   echo ""
   echo "  Common issues:"
-  echo "    - Port $PORT already in use: lsof -nP -iTCP:$PORT"
+  echo "    - Port $BIND_PORT already in use: lsof -nP -iTCP:$BIND_PORT"
   echo "    - Certificate issues: Check $CERT_DIR/"
   echo "    - Python dependencies: $PYTHON_BIN -m pip check"
   echo ""

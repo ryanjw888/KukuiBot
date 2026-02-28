@@ -32,6 +32,7 @@ import asyncio
 import json
 import logging
 import os
+import pwd
 import re
 import time
 from dataclasses import dataclass
@@ -150,6 +151,62 @@ def _find_claude_binary() -> str:
 
 
 CLAUDE_BIN = _find_claude_binary()
+
+
+def _demote_to_owner() -> callable | None:
+    """Return a preexec_fn that drops root privileges to the KUKUIBOT_HOME owner.
+
+    When the server runs as a LaunchDaemon (root) for privileged port binding,
+    Claude CLI refuses --permission-mode bypassPermissions under root/sudo.
+    This creates a preexec_fn that switches to the actual user who owns the
+    KUKUIBOT_HOME directory before exec.
+
+    Returns None if already running as a non-root user (no privilege drop needed).
+    """
+    if os.geteuid() != 0:
+        return None
+
+    # Determine the owning user from HOME env or KUKUIBOT_HOME directory ownership
+    home_dir = os.environ.get("HOME", "")
+    if home_dir:
+        try:
+            st = os.stat(home_dir)
+            owner_uid = st.st_uid
+            owner_gid = st.st_gid
+        except OSError:
+            logger.warning(f"Cannot stat HOME={home_dir}, cannot drop privileges")
+            return None
+    else:
+        try:
+            st = os.stat(str(WORKSPACE))
+            owner_uid = st.st_uid
+            owner_gid = st.st_gid
+        except OSError:
+            logger.warning("Cannot determine owner UID, cannot drop privileges")
+            return None
+
+    if owner_uid == 0:
+        # Owner is root — nothing to drop to
+        return None
+
+    try:
+        pw = pwd.getpwuid(owner_uid)
+        owner_name = pw.pw_name
+    except KeyError:
+        owner_name = str(owner_uid)
+
+    logger.info(f"Will drop privileges for Claude subprocess: root → {owner_name} (uid={owner_uid}, gid={owner_gid})")
+
+    def _drop():
+        os.setgid(owner_gid)
+        os.setuid(owner_uid)
+        os.environ["HOME"] = home_dir or pw.pw_dir
+        os.environ.pop("SUDO_USER", None)
+        os.environ.pop("SUDO_UID", None)
+        os.environ.pop("SUDO_GID", None)
+
+    return _drop
+
 
 # Context window: Claude Code CLI uses 1M context
 CONTEXT_WINDOW = 1_000_000
@@ -931,6 +988,10 @@ class PersistentClaudeProcess:
             cmd.extend(["--resume", resume_session])
 
         try:
+            # When running as root (LaunchDaemon for privileged port), drop to the
+            # owning user before exec — Claude CLI refuses bypassPermissions as root.
+            demote_fn = _demote_to_owner()
+
             self.proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdin=asyncio.subprocess.PIPE,
@@ -939,6 +1000,7 @@ class PersistentClaudeProcess:
                 cwd=str(WORKSPACE),
                 env=env,
                 limit=10 * 1024 * 1024,  # 10MB line buffer
+                preexec_fn=demote_fn,
             )
 
             self.started_at = time.time()

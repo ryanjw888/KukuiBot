@@ -45,9 +45,26 @@ launchctl stop com.kukuibot.server 2>/dev/null || true
 launchctl unload "$LAUNCH_AGENTS/com.kukuibot.server.plist" 2>/dev/null || true
 rm -f "$LAUNCH_AGENTS/com.kukuibot.server.plist"
 
-echo "  Checking root LaunchDaemon (for privileged ports)..."
+echo "  Checking root LaunchDaemon (legacy privileged port installs)..."
 sudo launchctl bootout system/com.kukuibot.server 2>/dev/null || true
 sudo rm -f /Library/LaunchDaemons/com.kukuibot.server.plist
+
+echo "  Checking pfctl port forwarding..."
+sudo launchctl bootout system/com.kukuibot.portfwd 2>/dev/null || true
+sudo rm -f /Library/LaunchDaemons/com.kukuibot.portfwd.plist
+sudo rm -f /etc/pf.anchors/com.kukuibot
+# Remove kukuibot lines from pf.conf (restore from backup if available)
+if grep -qF "com.kukuibot" /etc/pf.conf 2>/dev/null; then
+  if [ -f /etc/pf.conf.kukuibot-backup ]; then
+    sudo cp /etc/pf.conf.kukuibot-backup /etc/pf.conf
+    sudo rm -f /etc/pf.conf.kukuibot-backup
+  else
+    sudo sed -i '' '/com\.kukuibot/d' /etc/pf.conf 2>/dev/null || true
+    sudo sed -i '' '/# KukuiBot port forwarding/d' /etc/pf.conf 2>/dev/null || true
+  fi
+  sudo pfctl -f /etc/pf.conf 2>/dev/null || true
+fi
+echo "  ✓ Port forwarding rules removed"
 
 # Legacy worker
 launchctl bootout "gui/${UID_VAL}/com.kukuibot.worker" 2>/dev/null || true
@@ -104,6 +121,7 @@ echo "  ✅ KukuiBot uninstalled completely."
 echo ""
 echo "  What was removed:"
 echo "    • LaunchAgents (com.kukuibot.server, com.kukuibot.worker)"
+echo "    • Port forwarding (pfctl anchor, com.kukuibot.portfwd)"
 echo "    • Cron jobs (backup, orphan cleanup)"
 echo "    • Sudoers rules (/etc/sudoers.d/kukuibot-*)"
 echo "    • All data ($KUKUIBOT_HOME)"

@@ -36,6 +36,7 @@ from config import (
     DEFAULT_NUDGE_ENABLED,
     DEFAULT_REASONING_EFFORT,
     DEFAULT_SELF_COMPACT,
+    BIND_PORT,
     HOST,
     SSL_CERT,
     SSL_KEY,
@@ -767,12 +768,53 @@ def _claude_api_key() -> str:
 
 
 def _claude_oauth_token() -> str:
-    # Prefer DB-configured token (set via Settings) if present; fallback to env var.
-    tok = (get_config("claude_code.oauth_token", "") or "")
-    tok = _sanitize_bearer_token(tok)
-    if tok:
-        return tok
+    """Get the freshest OAuth token available.
+
+    Priority: DB → CLI credentials.json (auto-syncs to DB) → env var.
+    The CLI auto-refreshes its token in ~/.claude/.credentials.json,
+    so we always prefer that over a potentially stale DB copy.
+    """
+    db_tok = _sanitize_bearer_token(get_config("claude_code.oauth_token", "") or "")
+
+    # Check the CLI's auto-refreshed credentials file
+    cli_tok, cli_expires = _read_cli_credentials()
+    if cli_tok:
+        if cli_tok != db_tok:
+            # CLI has a newer token — sync to DB so Settings UI stays current
+            set_config("claude_code.oauth_token", cli_tok)
+            logger.info("Synced fresh OAuth token from CLI credentials to DB")
+        return cli_tok
+
+    if db_tok:
+        return db_tok
+
     return _sanitize_bearer_token(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or "")
+
+
+def _read_cli_credentials() -> tuple[str, int]:
+    """Read the access token from ~/.claude/.credentials.json.
+
+    Returns (token, expires_at_epoch_s) or ("", 0) if unavailable/expired.
+    """
+    creds_path = Path.home() / ".claude" / ".credentials.json"
+    try:
+        if not creds_path.is_file():
+            return "", 0
+        import json as _json
+        data = _json.loads(creds_path.read_text())
+        oauth = data.get("claudeAiOauth", {})
+        token = (oauth.get("accessToken") or "").strip()
+        expires_ms = oauth.get("expiresAt", 0)
+        if not token:
+            return "", 0
+        expires_s = int(expires_ms / 1000) if expires_ms else 0
+        # Only return if token hasn't expired (with 60s buffer)
+        import time as _time
+        if expires_s and expires_s < _time.time() + 60:
+            return "", 0
+        return token, expires_s
+    except Exception:
+        return "", 0
 
 
 def _claude_auth_strategy() -> str:
@@ -3536,6 +3578,16 @@ async def api_db_backup(req: Request):
     return JSONResponse(result, status_code=status)
 
 
+def _git_cmd(src_dir: str, *args: str) -> list[str]:
+    """Build a git command with safe.directory config.
+
+    When the server runs as root (LaunchDaemon for privileged ports), git
+    rejects operations on repos owned by a different user. Adding
+    safe.directory bypasses the dubious-ownership check for our known repo.
+    """
+    return ["git", "-c", f"safe.directory={src_dir}", "-C", src_dir, *args]
+
+
 @app.post("/api/backup")
 async def api_backup(req: Request):
     """Trigger a git backup (commit + push)."""
@@ -3548,7 +3600,7 @@ async def api_backup(req: Request):
     # Preflight: ensure origin exists
     try:
         has_origin = subprocess.run(
-            ["git", "-C", repo_dir, "remote", "get-url", "origin"],
+            _git_cmd(repo_dir, "remote", "get-url", "origin"),
             capture_output=True,
             text=True,
             timeout=5,
@@ -3602,7 +3654,7 @@ async def api_backup_status():
     # source-code clone origin as a configured backup — that's the install origin)
     if not origin_url:
         try:
-            p = subprocess.run(["git", "-C", repo_dir, "remote", "get-url", "origin"], capture_output=True, text=True, timeout=5)
+            p = subprocess.run(_git_cmd(repo_dir, "remote", "get-url", "origin"), capture_output=True, text=True, timeout=5)
             if p.returncode == 0:
                 origin_url = (p.stdout or "").strip()
                 # Don't mark as configured — this is just the install clone origin
@@ -3611,7 +3663,7 @@ async def api_backup_status():
 
     if not branch:
         try:
-            bp = subprocess.run(["git", "-C", repo_dir, "symbolic-ref", "--quiet", "--short", "HEAD"], capture_output=True, text=True, timeout=5)
+            bp = subprocess.run(_git_cmd(repo_dir, "symbolic-ref", "--quiet", "--short", "HEAD"), capture_output=True, text=True, timeout=5)
             if bp.returncode == 0:
                 branch = (bp.stdout or "").strip()
         except Exception:
@@ -3669,7 +3721,7 @@ async def api_backup_config(req: Request):
 
     try:
         # Ensure git repo exists
-        if subprocess.run(["git", "-C", repo_dir, "rev-parse", "--is-inside-work-tree"], capture_output=True, text=True, timeout=5).returncode != 0:
+        if subprocess.run(_git_cmd(repo_dir, "rev-parse", "--is-inside-work-tree"), capture_output=True, text=True, timeout=5).returncode != 0:
             return JSONResponse({"error": f"Not a git repo: {repo_dir}"}, status_code=400)
 
         selected_url = None
@@ -3687,11 +3739,11 @@ async def api_backup_config(req: Request):
                 "detail": last_err[:300],
             }, status_code=400)
 
-        has_origin = subprocess.run(["git", "-C", repo_dir, "remote", "get-url", "origin"], capture_output=True, text=True, timeout=5).returncode == 0
+        has_origin = subprocess.run(_git_cmd(repo_dir, "remote", "get-url", "origin"), capture_output=True, text=True, timeout=5).returncode == 0
         if has_origin:
-            subprocess.run(["git", "-C", repo_dir, "remote", "set-url", "origin", selected_url], check=True, timeout=10)
+            subprocess.run(_git_cmd(repo_dir, "remote", "set-url", "origin", selected_url), check=True, timeout=10)
         else:
-            subprocess.run(["git", "-C", repo_dir, "remote", "add", "origin", selected_url], check=True, timeout=10)
+            subprocess.run(_git_cmd(repo_dir, "remote", "add", "origin", selected_url), check=True, timeout=10)
 
         set_config("backup_repo_url", selected_url)
         set_config("backup_branch", branch)
@@ -3732,25 +3784,25 @@ async def update_check(req: Request):
     src_dir = str(KUKUIBOT_HOME / "src")
     try:
         result = subprocess.run(
-            ["git", "-C", src_dir, "fetch", "origin", "--quiet"],
+            _git_cmd(src_dir, "fetch", "origin", "--quiet"),
             capture_output=True, text=True, timeout=15,
         )
         if result.returncode != 0:
             return JSONResponse({"error": f"Fetch failed: {result.stderr.strip()}"}, status_code=500)
 
         branch = subprocess.run(
-            ["git", "-C", src_dir, "symbolic-ref", "--quiet", "--short", "HEAD"],
+            _git_cmd(src_dir, "symbolic-ref", "--quiet", "--short", "HEAD"),
             capture_output=True, text=True, timeout=5,
         ).stdout.strip() or "master"
 
         behind = subprocess.run(
-            ["git", "-C", src_dir, "rev-list", "--count", f"HEAD..origin/{branch}"],
+            _git_cmd(src_dir, "rev-list", "--count", f"HEAD..origin/{branch}"),
             capture_output=True, text=True, timeout=5,
         ).stdout.strip()
         behind_count = int(behind) if behind.isdigit() else 0
 
         commit = subprocess.run(
-            ["git", "-C", src_dir, "rev-parse", "HEAD"],
+            _git_cmd(src_dir, "rev-parse", "HEAD"),
             capture_output=True, text=True, timeout=5,
         ).stdout.strip()
 
@@ -3764,21 +3816,21 @@ async def update_apply(req: Request):
     """Pull latest updates and restart."""
     src_dir = str(KUKUIBOT_HOME / "src")
     try:
-        subprocess.run(["git", "-C", src_dir, "stash", "--quiet"], capture_output=True, timeout=5)
+        subprocess.run(_git_cmd(src_dir, "stash", "--quiet"), capture_output=True, timeout=5)
 
         branch = subprocess.run(
-            ["git", "-C", src_dir, "symbolic-ref", "--quiet", "--short", "HEAD"],
+            _git_cmd(src_dir, "symbolic-ref", "--quiet", "--short", "HEAD"),
             capture_output=True, text=True, timeout=5,
         ).stdout.strip() or "master"
 
         result = subprocess.run(
-            ["git", "-C", src_dir, "pull", "origin", branch, "--ff-only"],
+            _git_cmd(src_dir, "pull", "origin", branch, "--ff-only"),
             capture_output=True, text=True, timeout=30,
         )
         if result.returncode != 0:
             return JSONResponse({"error": f"Pull failed: {result.stderr.strip()}"}, status_code=500)
 
-        subprocess.run(["git", "-C", src_dir, "stash", "pop", "--quiet"], capture_output=True, timeout=5)
+        subprocess.run(_git_cmd(src_dir, "stash", "pop", "--quiet"), capture_output=True, timeout=5)
 
         summary = result.stdout.strip().split("\n")[-1] if result.stdout.strip() else "Updated"
 
@@ -4189,7 +4241,7 @@ if __name__ == "__main__":
     except Exception:
         pass  # DB not ready yet — use default HOST
 
-    hc.bind = [f"{effective_host}:{PORT}"]
+    hc.bind = [f"{effective_host}:{BIND_PORT}"]
     hc.loglevel = "info"
     if SSL_CERT.exists() and SSL_KEY.exists():
         hc.certfile = str(SSL_CERT)
@@ -4207,10 +4259,11 @@ if __name__ == "__main__":
         loop_factory = None
         tls_note = "asyncio"
 
+    port_note = f" (pfctl {PORT}→{BIND_PORT})" if BIND_PORT != PORT else ""
     if SSL_CERT.exists() and SSL_KEY.exists():
-        logger.info(f"{APP_NAME} HTTPS+H2 on {effective_host}:{PORT} (Hypercorn, {tls_note})")
+        logger.info(f"{APP_NAME} HTTPS+H2 on {effective_host}:{BIND_PORT}{port_note} (Hypercorn, {tls_note})")
     else:
-        logger.info(f"{APP_NAME} HTTP on {effective_host}:{PORT} (no TLS certs, {tls_note})")
+        logger.info(f"{APP_NAME} HTTP on {effective_host}:{BIND_PORT}{port_note} (no TLS certs, {tls_note})")
 
     with asyncio.Runner(loop_factory=loop_factory) as runner:
         runner.run(serve(app, hc))
