@@ -159,6 +159,22 @@ Environment variables (all optional):
 - **Root mode** — 10-minute TTL bypass for admin tasks
 - **Content guard** — two-stage injection detection (DeBERTa + sandboxed model)
 
+### Gmail Security Controls
+
+When Gmail is connected, three granular send permission levels are available in Settings:
+
+| Permission | Owner | Same Domain | External |
+|-----------|-------|-------------|----------|
+| **Send to Owner Only** | ✅ | ❌ | ❌ |
+| **Send within Org** | ✅ | ✅ | ❌ |
+| **Send to Anyone** | ✅ | ✅ | ✅ |
+
+- **Owner-only** mode restricts sending to the authenticated Gmail account and any configured admin emails
+- **Organization** mode allows sending only to addresses at the same domain (e.g., @wilmot.org)
+- **Anyone** mode permits external sends (validates via content sanitizer)
+- All outbound email is scanned for sensitive content (IPs, ports, credentials, tokens) before sending
+- Permissions are enforced server-side — attempts to bypass are blocked with `PermissionError`
+
 ## Voice Input
 
 Click the mic button to dictate. Uses the Web Speech API:
