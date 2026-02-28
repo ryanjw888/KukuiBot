@@ -49,6 +49,9 @@ memory/
 session-*.md
 notes-*.md
 
+# Skills with sensitive/operational content
+skills/it-admin/network-audit-execution.md
+
 # Email and communication data
 emails/
 messages/
