@@ -45,20 +45,21 @@ rustscan_*.txt
 
 # Markdown files (may contain sensitive/operational content)
 # IMPORTANT: Negations must come BEFORE blocking patterns
+# Allow all original .md files (frozen snapshot from initial release)
 !README.md
 !LICENSE.md
 !SECURITY.md
-!docs/DESIGN.md
-!docs/CONTEXT_WINDOW_TRACKING.md
-!docs/MAX_SESSIONS.md
+!docs/*.md
+!agent/*.md
+!workers/*.md
+!models/*.md
+!skills/**/*.md
 *.md
 memory/
-# Keep these private (operational/persona data)
-agent/*.md
-workers/*.md
-models/*.md
-skills/**/*.md
-docs/NetworkAudit.md
+# Session/runtime markdown (still private)
+session-*.md
+notes-*.md
+*-execution.md
 
 # Email and communication data
 emails/
