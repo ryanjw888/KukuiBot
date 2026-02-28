@@ -367,6 +367,15 @@ cd "$SRC_DIR"
 echo "→ Installing Python dependencies..."
 "$PYTHON_BIN" -m pip install -q -r requirements.txt </dev/null
 
+# --- Install Playwright browser (needed for web browsing tool) ---
+if ! "$PYTHON_BIN" -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); p.stop()" 2>/dev/null; then
+  echo "→ Installing Playwright Chromium browser..."
+  "$PYTHON_BIN" -m playwright install chromium </dev/null 2>&1 | tail -1
+  echo "✓ Playwright Chromium installed"
+else
+  echo "✓ Playwright Chromium already installed"
+fi
+
 # --- Seed default data files (only if missing — won't overwrite user customizations) ---
 echo "→ Seeding default configuration files..."
 for f in SOUL.md USER.md TOOLS.md MEMORY.md; do
@@ -617,24 +626,35 @@ fi
 # Verify
 # =============================================
 
-# Give the server more time on first launch (imports take a while)
-echo "→ Waiting for server to start..."
+# Give the server time to start — first launch is slow (Python imports,
+# DB schema init, TLS setup). Wait up to 45 seconds with progress dots.
+echo -n "→ Waiting for server to start"
 SERVER_OK=false
-for i in 1 2 3 4 5 6; do
+for i in $(seq 1 15); do
   if lsof -nP -iTCP:${PORT} -sTCP:LISTEN >/dev/null 2>&1; then
     SERVER_OK=true
     break
   fi
-  sleep 2
+  printf "."
+  sleep 3
 done
+echo ""
 
 if [ "$SERVER_OK" = true ]; then
   echo "✓ KukuiBot server running on port $PORT"
 else
-  echo "⚠️  Server didn't start within expected time"
+  echo "⚠️  Server didn't start within 45 seconds"
   echo ""
+  # Show recent log output so the user doesn't have to go hunting
+  if [ -s /tmp/kukuibot-server.log ]; then
+    echo "  Recent server log output:"
+    echo "  ─────────────────────────"
+    tail -20 /tmp/kukuibot-server.log | sed 's/^/    /'
+    echo "  ─────────────────────────"
+    echo ""
+  fi
   echo "  Diagnostic steps:"
-  echo "    1. Check server logs:     tail -50 /tmp/kukuibot-server.log"
+  echo "    1. Full server log:       tail -50 /tmp/kukuibot-server.log"
   echo "    2. Check launchd status:  launchctl list | grep kukuibot"
   echo "    3. Verify database:       ls -la $KUKUIBOT_HOME/kukuibot.db"
   echo "    4. Test manually:         cd $SRC_DIR && $PYTHON_BIN server.py"
@@ -654,7 +674,7 @@ echo "  🧪 KukuiBot installation complete!"
 echo ""
 echo "  Access URLs:"
 echo "    Local:  https://localhost:${PORT}"
-echo "    LAN:    https://${LAN_IP}:${PORT}"
+echo "    LAN:    https://${LAN_IP}:${PORT}  (requires enabling Remote Access in Settings)"
 echo ""
 echo "  Configuration:"
 echo "    Data dir:   $KUKUIBOT_HOME"
