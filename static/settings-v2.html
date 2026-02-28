@@ -1465,35 +1465,71 @@
       <div class="section-title">Account</div>
       <div class="card">
         <h2>Account</h2>
-    <div class="setting-row">
-      <div class="setting-info">
-        <div class="setting-label">Change Password</div>
-        <div class="setting-desc">Update your KukuiBot login password</div>
+
+        <!-- No account exists — show Create Account -->
+        <div id="account-create" style="display:none;">
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">No Account Found</div>
+              <div class="setting-desc">Create an admin account to enable remote access and password-protected login.</div>
+            </div>
+          </div>
+          <div style="margin-top:8px;">
+            <div class="pw-input-group">
+              <label>Username</label>
+              <input type="text" id="acct-username" placeholder="e.g. ryan" autocomplete="off">
+            </div>
+            <div class="pw-input-group">
+              <label>Display Name</label>
+              <input type="text" id="acct-display" placeholder="e.g. Ryan" autocomplete="off">
+            </div>
+            <div class="pw-input-group">
+              <label>Password</label>
+              <input type="password" id="acct-pw" placeholder="Min 6 characters">
+            </div>
+            <div class="pw-input-group">
+              <label>Confirm Password</label>
+              <input type="password" id="acct-pw-confirm" placeholder="Confirm">
+            </div>
+            <div class="btn-row">
+              <button class="btn primary" onclick="createAccount()">Create Account</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Account exists — show Change Password -->
+        <div id="account-manage" style="display:none;">
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">Change Password</div>
+              <div class="setting-desc">Logged in as <strong id="acct-current-user"></strong></div>
+            </div>
+            <button class="btn" onclick="showPasswordChange()">🔑 Change</button>
+          </div>
+          <div id="pw-section" style="display:none;margin-top:8px;">
+            <div class="pw-input-group">
+              <label>New Password</label>
+              <input type="password" id="pw-new" placeholder="Min 6 characters">
+            </div>
+            <div class="pw-input-group">
+              <label>Confirm Password</label>
+              <input type="password" id="pw-confirm" placeholder="Confirm">
+            </div>
+            <div class="btn-row">
+              <button class="btn primary" onclick="changePassword()">Save Password</button>
+              <button class="btn" onclick="document.getElementById('pw-section').style.display='none'">Cancel</button>
+            </div>
+          </div>
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">Logout</div>
+              <div class="setting-desc">Sign out of KukuiBot on this device</div>
+            </div>
+            <button class="btn danger" onclick="doLogout()">↩ Logout</button>
+          </div>
+        </div>
+
       </div>
-      <button class="btn" onclick="showPasswordChange()">🔑 Change</button>
-    </div>
-    <div id="pw-section" style="display:none;margin-top:8px;">
-      <div class="pw-input-group">
-        <label>New Password</label>
-        <input type="password" id="pw-new" placeholder="Min 6 characters">
-      </div>
-      <div class="pw-input-group">
-        <label>Confirm Password</label>
-        <input type="password" id="pw-confirm" placeholder="Confirm">
-      </div>
-      <div class="btn-row">
-        <button class="btn primary" onclick="changePassword()">Save Password</button>
-        <button class="btn" onclick="document.getElementById('pw-section').style.display='none'">Cancel</button>
-      </div>
-    </div>
-    <div class="setting-row">
-      <div class="setting-info">
-        <div class="setting-label">Logout</div>
-        <div class="setting-desc">Sign out of KukuiBot on this device</div>
-      </div>
-      <button class="btn danger" onclick="doLogout()">↩ Logout</button>
-    </div>
-  </div>
     </div>
 
     <!-- ===== CERTIFICATE SECTION ===== -->
@@ -2654,6 +2690,45 @@ async function doBackup() {
     const d = await r.json();
     toast(d.ok ? '✅ Backup done' : '❌ ' + (d.error || 'Failed'));
     loadBackup();
+  } catch (e) { toast('Error: ' + e.message); }
+}
+
+// ---- Account ----
+async function loadAccountStatus() {
+  try {
+    const r = await fetch(API + '/auth/account-status');
+    const d = await r.json();
+    if (d.exists) {
+      document.getElementById('account-create').style.display = 'none';
+      document.getElementById('account-manage').style.display = '';
+      document.getElementById('acct-current-user').textContent = d.display_name || d.username;
+    } else {
+      document.getElementById('account-create').style.display = '';
+      document.getElementById('account-manage').style.display = 'none';
+    }
+  } catch (e) {
+    console.error('Failed to load account status:', e);
+  }
+}
+
+async function createAccount() {
+  const username = document.getElementById('acct-username').value.trim();
+  const display = document.getElementById('acct-display').value.trim();
+  const pw = document.getElementById('acct-pw').value;
+  const confirm = document.getElementById('acct-pw-confirm').value;
+  if (!username) { toast('Username is required'); return; }
+  if (!pw || pw.length < 6) { toast('Password must be at least 6 characters'); return; }
+  if (pw !== confirm) { toast('Passwords don\'t match'); return; }
+  try {
+    const r = await fetch(API + '/auth/create-account', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ username, password: pw, display_name: display || username })
+    });
+    const d = await r.json();
+    if (d.error) { toast('❌ ' + d.error); return; }
+    toast('✅ Account created: ' + (d.display_name || d.username));
+    loadAccountStatus();
   } catch (e) { toast('Error: ' + e.message); }
 }
 
@@ -4892,6 +4967,7 @@ loadClaudeAutoCompactPct();
 loadOpenRouterConfig();
 loadAnthropicConfig();
 loadConnectionsOverview();
+loadAccountStatus();
 loadGmailStatus();
 loadUnifiStatus();
 loadCloudflareStatus();

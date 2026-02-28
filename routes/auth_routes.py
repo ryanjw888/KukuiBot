@@ -17,6 +17,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from auth import (
     _sessions,
     complete_setup,
+    create_user,
     db_connection,
     get_auth_status,
     get_request_user,
@@ -439,6 +440,40 @@ async def auth_me(req: Request):
     return {"username": username, "display_name": display_name, "role": role}
 
 
+@router.get("/auth/account-status")
+async def account_status(req: Request):
+    """Check whether an admin user account exists."""
+    with db_connection() as db:
+        row = db.execute("SELECT username, display_name FROM users WHERE role = 'admin' LIMIT 1").fetchone()
+        if row:
+            return {"exists": True, "username": row[0], "display_name": row[1] or row[0]}
+        return {"exists": False}
+
+
+@router.post("/auth/create-account")
+async def create_account(req: Request):
+    """Create admin account (localhost only, when no user exists yet)."""
+    if not is_localhost(req):
+        return JSONResponse({"error": "Account creation only available from localhost"}, status_code=403)
+    # Check no admin exists already
+    with db_connection() as db:
+        row = db.execute("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1").fetchone()
+        if row:
+            return JSONResponse({"error": "Admin account already exists. Use Change Password instead."}, status_code=400)
+    body = await req.json()
+    username = body.get("username", "").strip().lower()
+    password = body.get("password", "")
+    display_name = body.get("display_name", "").strip()
+    if not username or not password:
+        return JSONResponse({"error": "Username and password are required"}, status_code=400)
+    if len(password) < 6:
+        return JSONResponse({"error": "Password must be at least 6 characters"}, status_code=400)
+    if not create_user(username, password, role="admin", display_name=display_name or username):
+        return JSONResponse({"error": "Failed to create user"}, status_code=500)
+    logger.info(f"Admin account created from settings: {username}")
+    return {"ok": True, "username": username, "display_name": display_name or username}
+
+
 @router.post("/auth/change-password")
 async def change_password(req: Request):
     """Change password for the currently logged-in user."""
@@ -451,7 +486,7 @@ async def change_password(req: Request):
         with db_connection() as db:
             row = db.execute("SELECT username FROM users WHERE role = 'admin' LIMIT 1").fetchone()
             if not row:
-                return JSONResponse({"error": "No admin user found"}, status_code=400)
+                return JSONResponse({"error": "No admin account exists yet. Create one first."}, status_code=400)
             username = row[0]
     body = await req.json()
     new_pw = body.get("new_password", "")
