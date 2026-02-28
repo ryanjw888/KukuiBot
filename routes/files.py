@@ -2,11 +2,13 @@
 routes/files.py — File browser & editor API for the KukuiBot file editor.
 
 Endpoints:
-  GET  /api/files/tree   — list directory contents
-  GET  /api/files/read   — read file contents
-  POST /api/files/write  — save file contents
+  GET  /api/files/tree    — list directory contents
+  GET  /api/files/search  — recursive filename search
+  GET  /api/files/read    — read file contents
+  POST /api/files/write   — save file contents
 """
 
+import fnmatch
 import logging
 import mimetypes
 import os
@@ -108,8 +110,9 @@ def _resolve_and_guard(raw_path: str, *, for_write: bool = False) -> tuple[str |
     expanded = os.path.expanduser(raw_path)
     resolved = os.path.realpath(expanded)
 
-    # Security: use the same path guard as tool calls
-    blocked = check_path_access(resolved, for_write=for_write, elevated=False)
+    # Security: elevated=True because this is the authenticated human user
+    # editing via the web UI, not an AI agent tool call.
+    blocked = check_path_access(resolved, for_write=for_write, elevated=True)
     if blocked:
         return None, blocked
 
@@ -165,6 +168,65 @@ async def api_files_tree(request: Request, path: str = "", show_hidden: bool = F
     entries.sort(key=lambda e: (0 if e["type"] == "dir" else 1, e["name"].lower()))
 
     return {"path": resolved, "entries": entries}
+
+
+@router.get("/api/files/search")
+async def api_files_search(request: Request, q: str = "", path: str = "", limit: int = 50):
+    """Recursive filename search across the workspace."""
+
+    if not q or len(q) < 2:
+        return {"results": [], "query": q}
+
+    root = path or str(WORKSPACE)
+    resolved, err = _resolve_and_guard(root)
+    if err:
+        return JSONResponse({"error": err}, status_code=403)
+
+    if not os.path.isdir(resolved):
+        return JSONResponse({"error": "Not a directory"}, status_code=400)
+
+    query_lower = q.lower()
+    # Support glob-style patterns (e.g. "*.md") or plain substring match
+    use_glob = "*" in q or "?" in q
+    results = []
+
+    for dirpath, dirnames, filenames in os.walk(resolved):
+        # Prune hidden/blacklisted directories in-place
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in _HIDDEN_DIRS and not d.startswith(".")
+        ]
+
+        for fname in filenames:
+            if fname.startswith("."):
+                continue
+            matched = (
+                fnmatch.fnmatch(fname.lower(), query_lower)
+                if use_glob
+                else query_lower in fname.lower()
+            )
+            if matched:
+                full = os.path.join(dirpath, fname)
+                try:
+                    st_info = os.stat(full)
+                except OSError:
+                    continue
+                # Relative path from search root for display
+                rel = os.path.relpath(full, resolved)
+                results.append({
+                    "name": fname,
+                    "path": full,
+                    "rel": rel,
+                    "type": "file",
+                    "size": st_info.st_size,
+                    "modified": st_info.st_mtime,
+                })
+                if len(results) >= limit:
+                    break
+        if len(results) >= limit:
+            break
+
+    return {"results": results, "query": q, "root": resolved, "truncated": len(results) >= limit}
 
 
 @router.get("/api/files/read")
