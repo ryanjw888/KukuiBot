@@ -43,14 +43,10 @@ audits/
 *.xml
 rustscan_*.txt
 
-# Sensitive markdown files (memory, session notes)
+# Markdown files (may contain sensitive/operational content)
+*.md
+**/*.md
 memory/
-**/memory/*.md
-session-*.md
-notes-*.md
-
-# Skills with sensitive/operational content
-skills/it-admin/network-audit-execution.md
 
 # Email and communication data
 emails/
