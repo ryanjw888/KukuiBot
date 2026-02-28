@@ -82,6 +82,10 @@ async def process_chat_claude(
             return
 
         thinking_started = False
+        # State for incremental tool input accumulation (detail extraction from input_json_delta)
+        _cur_tool_name = None
+        _cur_tool_input_json = ""
+        _cur_tool_detail_sent = False
 
         async for event in proc.send_message(user_message, inject_context=True, suppress_user_broadcast=is_internal):
             event_type = event.get("type", "")
@@ -94,17 +98,22 @@ async def process_chat_claude(
                 if inner_type == "content_block_start":
                     cb = inner.get("content_block", {})
                     if cb.get("type") == "tool_use":
-                        elapsed = int(time.time() - t0)
-                        tool_name = cb.get("name", "tool")
+                        _cur_tool_name = cb.get("name", "tool")
+                        _cur_tool_input_json = ""
+                        _cur_tool_detail_sent = False
                         tool_input = cb.get("input", {})
                         detail = ""
-                        if tool_name == "Bash" and tool_input.get("command"):
+                        if _cur_tool_name == "Bash" and tool_input.get("command"):
                             detail = tool_input["command"][:200]
-                        elif tool_name in ("Read", "Write", "Edit") and tool_input.get("file_path"):
+                        elif _cur_tool_name in ("Read", "Write", "Edit") and tool_input.get("file_path"):
                             detail = tool_input["file_path"]
-                        elif tool_name in ("Grep", "Glob") and tool_input.get("pattern"):
-                            detail = tool_input["pattern"]
-                        await _emit_event(session_id, queue, {"type": "tool_use", "name": tool_name, "input": detail}, run_id=run_id)
+                        elif _cur_tool_name in ("Grep", "Glob") and tool_input.get("pattern"):
+                            detail = tool_input["pattern"][:200]
+                        elif _cur_tool_name in ("WebSearch", "WebFetch"):
+                            detail = (tool_input.get("query") or tool_input.get("url") or "")[:200]
+                        if detail:
+                            _cur_tool_detail_sent = True
+                        await _emit_event(session_id, queue, {"type": "tool_use", "name": _cur_tool_name, "input": detail}, run_id=run_id)
                     elif cb.get("type") == "thinking":
                         if not thinking_started:
                             await _emit_event(session_id, queue, {"type": "thinking_start"}, run_id=run_id)
@@ -123,6 +132,55 @@ async def process_chat_claude(
                         thinking_text = delta.get("thinking", "")
                         if thinking_text:
                             await _emit_event(session_id, queue, {"type": "thinking", "text": thinking_text}, run_id=run_id)
+                    elif delta.get("type") == "input_json_delta" and _cur_tool_name and not _cur_tool_detail_sent:
+                        _cur_tool_input_json += delta.get("partial_json", "")
+                        # Try to extract detail from accumulated JSON fragments
+                        detail = ""
+                        raw = _cur_tool_input_json
+                        if _cur_tool_name == "Bash":
+                            idx = raw.find('"command"')
+                            if idx >= 0:
+                                val_start = raw.find('"', idx + 9 + 1)
+                                if val_start >= 0:
+                                    val_end = raw.find('"', val_start + 1)
+                                    if val_end >= 0:
+                                        detail = raw[val_start+1:val_end][:200]
+                                    elif len(raw) - val_start > 10:
+                                        detail = raw[val_start+1:][:200]
+                        elif _cur_tool_name in ("Read", "Write", "Edit"):
+                            idx = raw.find('"file_path"')
+                            if idx >= 0:
+                                val_start = raw.find('"', idx + 11 + 1)
+                                if val_start >= 0:
+                                    val_end = raw.find('"', val_start + 1)
+                                    if val_end >= 0:
+                                        detail = raw[val_start+1:val_end]
+                        elif _cur_tool_name in ("Grep", "Glob"):
+                            idx = raw.find('"pattern"')
+                            if idx >= 0:
+                                val_start = raw.find('"', idx + 9 + 1)
+                                if val_start >= 0:
+                                    val_end = raw.find('"', val_start + 1)
+                                    if val_end >= 0:
+                                        detail = raw[val_start+1:val_end][:200]
+                        elif _cur_tool_name in ("WebSearch", "WebFetch"):
+                            for key in ('"query"', '"url"', '"prompt"'):
+                                idx = raw.find(key)
+                                if idx >= 0:
+                                    val_start = raw.find('"', idx + len(key) + 1)
+                                    if val_start >= 0:
+                                        val_end = raw.find('"', val_start + 1)
+                                        if val_end >= 0:
+                                            detail = raw[val_start+1:val_end][:200]
+                                            break
+                        if detail:
+                            _cur_tool_detail_sent = True
+                            await _emit_event(session_id, queue, {"type": "tool_use", "name": _cur_tool_name, "input": detail}, run_id=run_id)
+
+                elif inner_type == "content_block_stop":
+                    _cur_tool_name = None
+                    _cur_tool_input_json = ""
+                    _cur_tool_detail_sent = False
 
             elif event_type == "assistant":
                 # Full assistant message (tool calls, text blocks)
@@ -137,11 +195,13 @@ async def process_chat_claude(
                         elif tool_name in ("Read", "Write", "Edit") and tool_input.get("file_path"):
                             detail = tool_input["file_path"]
                         elif tool_name in ("Grep", "Glob") and tool_input.get("pattern"):
-                            detail = tool_input["pattern"]
+                            detail = tool_input["pattern"][:200]
+                        elif tool_name in ("WebSearch", "WebFetch"):
+                            detail = (tool_input.get("query") or tool_input.get("url") or "")[:200]
                         await _emit_event(session_id, queue, {"type": "tool_use", "name": tool_name, "input": detail}, run_id=run_id)
 
             elif event_type == "ping":
-                await _emit_event(session_id, queue, {"type": "ping", "elapsed": event.get("elapsed", 0), "tool": event.get("tool", "working")}, run_id=run_id)
+                await _emit_event(session_id, queue, {"type": "ping", "elapsed": event.get("elapsed", 0), "tool": event.get("tool", "working"), "detail": event.get("detail", "")}, run_id=run_id)
 
             elif event_type == "error":
                 await _emit_event(session_id, queue, {"type": "error", "message": event.get("error", "Unknown error")}, run_id=run_id)
