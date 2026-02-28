@@ -390,6 +390,21 @@ async def _do_delegation_cleanup(task_id: str):
                 except Exception as hist_err:
                     logger.warning(f"Delegation cleanup: failed to append base tab history: {hist_err}")
 
+                # 3) Broadcast SSE event to the base tab so the frontend refreshes
+                try:
+                    pool = get_claude_pool()
+                    if pool:
+                        base_proc = pool.get(base_sid)
+                        if base_proc:
+                            base_proc._broadcast({
+                                "type": "delegation_notification",
+                                "task_id": task_id,
+                                "status": task_status,
+                                "message": summary_text,
+                            })
+                except Exception as sse_err:
+                    logger.debug(f"Delegation cleanup: SSE broadcast to base tab skipped: {sse_err}")
+
                 logger.info(f"Delegation cleanup: wrote summary to base tab {base_sid} for {task_id}")
             except Exception as log_err:
                 logger.warning(f"Delegation cleanup: failed to write summary to base tab: {log_err}")

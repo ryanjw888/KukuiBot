@@ -2442,6 +2442,7 @@ async def api_set_worker_identity(req: Request):
     body = await req.json()
     session_id = str(body.get("session_id") or "").strip()
     worker_identity = str(body.get("worker_identity") or "").strip()
+    model_key = str(body.get("model_key") or "").strip()
     if not session_id:
         return JSONResponse({"ok": False, "error": "session_id required"}, status_code=400)
     owner = _resolve_owner_username(req)
@@ -2452,15 +2453,17 @@ async def api_set_worker_identity(req: Request):
         with db_connection() as db:
             _ensure_tab_meta_schema(db)
             db.execute(
-                """INSERT INTO tab_meta (owner, session_id, worker_identity, updated_at)
-                   VALUES (?, ?, ?, ?)
+                """INSERT INTO tab_meta (owner, session_id, worker_identity, model_key, updated_at)
+                   VALUES (?, ?, ?, ?, ?)
                    ON CONFLICT(owner, session_id) DO UPDATE SET
                        worker_identity = excluded.worker_identity,
+                       model_key = CASE WHEN excluded.model_key != '' THEN excluded.model_key
+                                        ELSE COALESCE(tab_meta.model_key, excluded.model_key) END,
                        updated_at = excluded.updated_at""",
-                (owner, session_id, worker_identity, now),
+                (owner, session_id, worker_identity, model_key, now),
             )
             db.commit()
-            return {"ok": True, "session_id": session_id, "worker_identity": worker_identity}
+            return {"ok": True, "session_id": session_id, "worker_identity": worker_identity, "model_key": model_key}
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 

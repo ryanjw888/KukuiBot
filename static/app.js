@@ -4765,7 +4765,7 @@ async function confirmNewWorkerModal() {
       await fetch(API + '/api/tab/worker-identity', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: t.sessionId, worker_identity: newWorkerIdentityKey }),
+        body: JSON.stringify({ session_id: t.sessionId, worker_identity: newWorkerIdentityKey, model_key: newWorkerModelKey }),
       });
     } catch {}
   }
@@ -6009,14 +6009,19 @@ async function pollDelegActivity() {
           _delegActivityDoneTimers[p.task_id] = setTimeout(() => {
             _delegActivityDismissed.add(p.task_id);
             delete _delegActivityDoneTimers[p.task_id];
-            requestRender({ preserveScroll: true });
+            _updateDelegBarsDOM();
           }, 3000);
         }
       }
     }
 
-    requestRender({ preserveScroll: true });
+    _updateDelegBarsDOM();
   } catch {}
+}
+
+function _updateDelegBarsDOM() {
+  const host = document.getElementById('deleg-bars-host');
+  if (host) host.innerHTML = renderDelegationBars();
 }
 
 function _startDelegActivityPoll() {
@@ -6038,7 +6043,7 @@ function dismissDelegBar(taskId) {
     clearTimeout(_delegActivityDoneTimers[taskId]);
     delete _delegActivityDoneTimers[taskId];
   }
-  requestRender({ preserveScroll: true });
+  _updateDelegBarsDOM();
   // Persist dismiss to DB so it survives page refresh
   fetch(API + '/api/delegate/dismiss', {
     method: 'POST',
