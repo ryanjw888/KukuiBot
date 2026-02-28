@@ -34,3 +34,23 @@ config/security-policy.json
 # Session state
 .claude_session_*
 .claude_compaction_*
+
+# Reports and audits (contain PII/network data)
+reports/
+audits/
+*.nmap
+*.gnmap
+*.xml
+rustscan_*.txt
+
+# Sensitive markdown files (memory, session notes)
+memory/
+**/memory/*.md
+session-*.md
+notes-*.md
+
+# Email and communication data
+emails/
+messages/
+*.eml
+*.msg
