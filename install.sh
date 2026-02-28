@@ -28,8 +28,22 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-PORT="${CUSTOM_PORT:-${KUKUIBOT_PORT:-7000}}"
+PORT="${CUSTOM_PORT:-${KUKUIBOT_PORT:-}}"
 KUKUIBOT_HOME="${CUSTOM_DIR:-${KUKUIBOT_HOME:-$HOME/.kukuibot}}"
+
+# --- Interactive port selection (if not specified via flags) ---
+if [ -z "$PORT" ]; then
+  echo "🧪 KukuiBot Installation"
+  echo ""
+  echo "Select HTTPS port for KukuiBot:"
+  echo "  7000  - Default"
+  echo "  8443  - Alternative HTTPS"
+  echo "  Other - Custom port (1024-65535)"
+  echo ""
+  read -p "Enter port [7000]: " USER_PORT </dev/tty
+  PORT="${USER_PORT:-7000}"
+  echo ""
+fi
 
 # --- Pre-flight validation ---
 if ! echo "$PORT" | grep -qE '^[0-9]+$' || [ "$PORT" -lt 1024 ] || [ "$PORT" -gt 65535 ]; then

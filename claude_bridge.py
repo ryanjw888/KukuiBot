@@ -1163,18 +1163,30 @@ class PersistentClaudeProcess:
             logger.error(f"Read loop error: {e}")
         finally:
             logger.warning("Read loop terminated -- process will auto-restart on next message")
+
+            # Give stderr reader a moment to finish capturing output
+            await asyncio.sleep(0.5)
+            if self.proc and self.proc.returncode is None:
+                try:
+                    await asyncio.wait_for(self.proc.wait(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    pass
+
             # Include auth error in the terminal event so the user sees a clear message
             auth_err = self._last_auth_error
             if auth_err:
-                self._broadcast({"type": "result", "result": f"Authentication failed: {auth_err}", "subtype": "auth_error"})
+                self._broadcast({"type": "result", "result": f"⚠️ Authentication failed: {auth_err}", "subtype": "auth_error"})
                 self._last_auth_error = None  # Clear after surfacing
             else:
                 rc = self.proc.returncode if self.proc else None
-                stderr_tail = "; ".join(self._recent_stderr[-3:]) if self._recent_stderr else ""
-                die_msg = f"Claude process exited (rc={rc})"
+                stderr_tail = "\n".join(self._recent_stderr[-5:]) if self._recent_stderr else ""
                 if stderr_tail:
-                    die_msg += f": {stderr_tail}"
-                logger.error(die_msg)
+                    die_msg = f"⚠️ Claude process exited (rc={rc}):\n{stderr_tail}"
+                elif rc is None:
+                    die_msg = "⚠️ Claude process exited unexpectedly. Check that Claude CLI is authenticated — run `claude` in terminal to log in, or add an API key in Settings."
+                else:
+                    die_msg = f"⚠️ Claude process exited (rc={rc}). Check server logs for details."
+                logger.error(f"Claude process died: rc={rc}, stderr={stderr_tail!r}")
                 self._broadcast({"type": "result", "result": die_msg, "subtype": "process_died"})
             if self.proc:
                 try:
