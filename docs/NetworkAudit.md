@@ -1,22 +1,23 @@
 # Network Audit Runbook
 
-**Version:** 2.0
-**Author:** MacBot IT Admin Worker
-**Last Updated:** 2026-02-20
+**Version:** 3.0
+**Author:** Kukui IT Admin Worker
+**Last Updated:** 2026-02-27
 **Classification:** Internal — Authorized Scanning Only
 
 ---
 
 ## Overview
 
-This runbook defines a repeatable, multi-phase network security audit for home, lab, or small office environments. It is designed to be executed by MacBot's IT Admin worker using bash tools, but every command is documented so a human can run it manually.
+This runbook defines a repeatable, multi-phase network security audit for home, lab, or small office environments. It uses the best available open-source tools with graceful fallbacks — the audit works with just nmap but is significantly faster and more thorough with the enhanced tool stack.
 
 **Design principles:**
+- **Tool-flexible** — prefers RustScan + Nuclei but falls back to nmap + manual probes
 - Generic and portable — subnet, ports, and device baselines are parameterized
 - IoT-aware — covers protocols that traditional enterprise scanners miss (MQTT, Modbus, UPnP, mDNS)
 - IPv4 + IPv6 — scans both address families to catch dual-stack devices
 - Non-destructive — read-only probes, no exploitation, no credential stuffing
-- Produces a self-contained HTML report suitable for email delivery
+- Produces a Kukui IT branded HTML report suitable for email delivery
 
 ---
 
@@ -32,26 +33,60 @@ This runbook defines a repeatable, multi-phase network security audit for home, 
 | `openssl` | TLS certificate inspection | Pre-installed on macOS |
 | `python3` | OUI lookup, report generation | Pre-installed on macOS |
 
+### Enhanced Tools (Preferred — install for best results)
+
+| Tool | Purpose | Install | Fallback if missing |
+|------|---------|---------|-------------------|
+| `rustscan` | Ultra-fast port discovery (65K ports in seconds) | `brew install rustscan` | nmap 32-port scan |
+| `nuclei` | Template-based vuln scanning (12K+ templates) | `brew install nuclei` | nmap NSE scripts + manual probes |
+| nmap-bootstrap-xsl | Auto-generate HTML report from nmap XML | `curl -L -o nmap-bootstrap.xsl https://raw.githubusercontent.com/Haxxnet/nmap-bootstrap-xsl/main/nmap-bootstrap.xsl` | Manual HTML tables |
+
 ### Optional Tools
 
 | Tool | Purpose | Install |
 |------|---------|---------|
 | `mosquitto_pub` | MQTT anonymous-auth testing | `brew install mosquitto` |
 | `dns-sd` | mDNS/DNS-SD service enumeration | Pre-installed on macOS |
+| OpenVAS/GVM | Deep credentialed vulnerability scanning (100K+ tests) — heavyweight, only needed for authenticated/credentialed scans where client provides SSH/SNMP credentials | Docker — see setup below |
+| Vuls | Lightweight agentless credentialed scanning via SSH — single Go binary alternative to OpenVAS | `curl -L https://github.com/future-architect/vuls/releases/latest/download/install.sh \| bash` |
 
 ### Verify Installation
 
 ```bash
-# Check nmap
+# Required (audit blocked without nmap)
 which nmap || brew install nmap
 nmap --version
-
-# Check all others
 which curl arp openssl python3
+
+# Enhanced tools (preferred but not required)
+echo "=== Enhanced Tool Check ==="
+which rustscan 2>/dev/null && echo "RustScan: OK" || echo "RustScan: not installed (will use nmap for port discovery)"
+which nuclei 2>/dev/null && echo "Nuclei: OK" || echo "Nuclei: not installed (will use manual probes)"
+[ -f "$HOME/.kukuibot/tools/nmap-bootstrap.xsl" ] && echo "nmap-bootstrap-xsl: OK" || echo "nmap-bootstrap-xsl: not found (will skip auto technical appendix)"
 
 # Optional tools (non-fatal if missing)
 which mosquitto_pub 2>/dev/null && echo "mosquitto: OK" || echo "mosquitto: not installed (MQTT auth test will be limited)"
 which dns-sd 2>/dev/null && echo "dns-sd: OK" || echo "dns-sd: not installed (mDNS enumeration will be limited)"
+
+# Heavy optional (only for credentialed engagements)
+docker ps 2>/dev/null | grep -q greenbone && echo "OpenVAS: OK (running)" || echo "OpenVAS: not running (only needed for credentialed scans)"
+which vuls 2>/dev/null && echo "Vuls: OK" || echo "Vuls: not installed (lightweight alternative to OpenVAS for credentialed scans)"
+```
+
+### OpenVAS Docker Setup (Optional — Only for Credentialed Engagements)
+
+Only set up OpenVAS when a client engagement specifically requires authenticated/credentialed scanning (e.g., client provides SSH keys or SNMP credentials for deep host inspection). For standard external posture audits, RustScan + Nuclei + nmap cover 90%+ of what OpenVAS would find.
+
+```bash
+# Pull and start Greenbone Community Edition
+mkdir -p ~/.kukuibot/tools/openvas && cd ~/.kukuibot/tools/openvas
+curl -L -o docker-compose.yml https://greenbone.github.io/docs/latest/_static/docker-compose-22.4.yml
+docker compose -f docker-compose.yml -p greenbone-community-edition pull
+docker compose -f docker-compose.yml -p greenbone-community-edition up -d
+
+# Wait for feed sync (first run takes 1-2 hours)
+# Web UI available at https://localhost:9392 (admin/admin)
+# WARNING: Multi-GB download, heavy on resources
 ```
 
 ---
@@ -265,22 +300,52 @@ echo "IPv6 link-local hosts found: $IPV6_COUNT"
 
 **Goal:** Identify open ports and running services on all discovered hosts.
 
-### Step 2.1 — Full Port Scan (32 Ports)
+### Step 2.1 — Port Discovery
+
+**Option A: RustScan (preferred — if installed)**
+
+RustScan discovers all 65,535 ports in seconds, then hands off to nmap for service detection. This is dramatically faster than scanning a fixed port list.
 
 ```bash
-nmap -Pn -n $NMAP_TIMING -sT -sV --version-light --open \
-  $SCAN_TIMEOUT \
-  -p $PORTS \
-  -iL "$REPORT_DIR/hosts_arp.txt" \
-  -oA "$REPORT_DIR/ports_scan"
+if which rustscan > /dev/null 2>&1; then
+  echo "=== Using RustScan for full-port discovery ==="
 
-# Extract hosts with at least one open port
-grep 'open' "$REPORT_DIR/ports_scan.gnmap" | \
-  awk '{print $2}' | sort -u | \
-  tee "$REPORT_DIR/open_hosts.txt"
+  # RustScan all hosts, pipe to nmap for service detection + XML output
+  rustscan -a "$(cat "$REPORT_DIR/hosts_arp.txt" | tr '\n' ',')" \
+    --ulimit 5000 \
+    -- -sV --version-light -oA "$REPORT_DIR/ports_scan"
 
-OPEN_COUNT=$(wc -l < "$REPORT_DIR/open_hosts.txt")
-echo "Hosts with open ports: $OPEN_COUNT"
+  # Extract hosts with open ports
+  grep 'open' "$REPORT_DIR/ports_scan.gnmap" | \
+    awk '{print $2}' | sort -u | \
+    tee "$REPORT_DIR/open_hosts.txt"
+
+  OPEN_COUNT=$(wc -l < "$REPORT_DIR/open_hosts.txt")
+  echo "Hosts with open ports: $OPEN_COUNT"
+fi
+```
+
+**Option B: nmap 32-port scan (fallback)**
+
+If RustScan is not available, use the standard 32-port list.
+
+```bash
+if ! which rustscan > /dev/null 2>&1; then
+  echo "=== Using nmap 32-port scan (RustScan not available) ==="
+
+  nmap -Pn -n $NMAP_TIMING -sT -sV --version-light --open \
+    $SCAN_TIMEOUT \
+    -p $PORTS \
+    -iL "$REPORT_DIR/hosts_arp.txt" \
+    -oA "$REPORT_DIR/ports_scan"
+
+  grep 'open' "$REPORT_DIR/ports_scan.gnmap" | \
+    awk '{print $2}' | sort -u | \
+    tee "$REPORT_DIR/open_hosts.txt"
+
+  OPEN_COUNT=$(wc -l < "$REPORT_DIR/open_hosts.txt")
+  echo "Hosts with open ports: $OPEN_COUNT"
+fi
 ```
 
 ### Step 2.2 — Service Version Deep Scan (Open Hosts Only)
@@ -293,6 +358,8 @@ if [ -s "$REPORT_DIR/open_hosts.txt" ]; then
     -oA "$REPORT_DIR/service_versions"
 fi
 ```
+
+**Important:** Always ensure `-oX` (or `-oA`) output is saved — it's needed for nmap-bootstrap-xsl report generation in Phase 7.
 
 ---
 
@@ -515,6 +582,58 @@ if [ -n "$AFP_HOSTS" ]; then
 fi
 ```
 
+### Step 3.6 — Nuclei Template Scanning (if available)
+
+Run Nuclei's community templates against all discovered hosts for automated CVE detection, misconfiguration checks, default credential testing, and exposed panel discovery.
+
+```bash
+if which nuclei > /dev/null 2>&1; then
+  echo "=== Nuclei Template Scanning ==="
+
+  # Update templates (quick, pulls latest from projectdiscovery)
+  nuclei -update-templates 2>/dev/null
+
+  # Build target list with protocol prefixes for HTTP services
+  NUCLEI_TARGETS="$REPORT_DIR/nuclei_targets.txt"
+  > "$NUCLEI_TARGETS"
+  while read -r HOST; do
+    for PORT in 80 81 8080; do
+      grep -q "${HOST}.*${PORT}/open" "$REPORT_DIR/ports_scan.gnmap" 2>/dev/null && \
+        echo "http://${HOST}:${PORT}" >> "$NUCLEI_TARGETS"
+    done
+    for PORT in 443 8443; do
+      grep -q "${HOST}.*${PORT}/open" "$REPORT_DIR/ports_scan.gnmap" 2>/dev/null && \
+        echo "https://${HOST}:${PORT}" >> "$NUCLEI_TARGETS"
+    done
+    # Also add raw IP for non-HTTP templates (SSH, FTP, etc.)
+    echo "$HOST" >> "$NUCLEI_TARGETS"
+  done < "$REPORT_DIR/open_hosts.txt"
+
+  # Run Nuclei — critical, high, and medium severity templates
+  nuclei -l "$NUCLEI_TARGETS" \
+    -severity critical,high,medium \
+    -t cves/ \
+    -t misconfiguration/ \
+    -t default-logins/ \
+    -t exposed-panels/ \
+    -t network/ \
+    -j -o "$REPORT_DIR/nuclei_results.json" \
+    -silent 2>/dev/null
+
+  # Also run in human-readable format for the audit log
+  nuclei -l "$NUCLEI_TARGETS" \
+    -severity critical,high,medium \
+    -t cves/ -t misconfiguration/ -t default-logins/ -t exposed-panels/ -t network/ \
+    -o "$REPORT_DIR/nuclei_results.txt" \
+    -silent 2>/dev/null
+
+  NUCLEI_FINDINGS=$(wc -l < "$REPORT_DIR/nuclei_results.json" 2>/dev/null || echo 0)
+  echo "Nuclei findings: $NUCLEI_FINDINGS"
+else
+  echo "Nuclei not installed — skipping template scanning. Manual probes from Steps 3.1-3.5 still apply."
+fi
+```
+
 ---
 
 ## Phase 4: MAC OUI Vendor Identification & Device Classification
@@ -656,7 +775,24 @@ for d in devices:
 
 ## Phase 5: Vulnerability Assessment
 
-**Goal:** Check for known vulnerabilities specific to each device type and service version.
+**Goal:** Check for known vulnerabilities specific to each device type and service version. Primary tools: Nuclei templates + nmap version checks + manual probes. OpenVAS available as optional heavyweight for credentialed engagements.
+
+### Step 5.0 — OpenVAS Deep Scan (optional — credentialed engagements only)
+
+Only relevant when a client provides SSH/SNMP/WinRM credentials for authenticated host scanning. For standard external posture audits, skip this and proceed to Step 5.1 — Nuclei + nmap + manual probes cover 90%+ of what OpenVAS finds.
+
+```bash
+if docker ps 2>/dev/null | grep -q greenbone; then
+  echo "=== OpenVAS Deep Vulnerability Scan (credentialed) ==="
+  # Launch via web UI at https://localhost:9392
+  # 1. Create target with discovered hosts + client credentials
+  # 2. Run "Full and fast" scan config
+  # 3. Wait for completion (15-60 min)
+  # 4. Export report as XML to: $REPORT_DIR/openvas_report.xml
+else
+  echo "OpenVAS not running — using Nuclei + manual checks (standard for external posture audits)"
+fi
+```
 
 ### Step 5.1 — Version-Based CVE Checks
 
@@ -856,14 +992,31 @@ fi
 
 ## Phase 7: Report Generation
 
-**Goal:** Produce a polished, self-contained HTML report suitable for email delivery and archival.
+**Goal:** Produce a polished, Kukui IT branded HTML report suitable for email delivery and archival.
+
+### Step 7.0 — Technical Appendix (nmap-bootstrap-xsl)
+
+If the nmap-bootstrap-xsl stylesheet is available, auto-generate a detailed technical appendix from the nmap XML output. This provides a complete per-host breakdown with zero manual effort.
+
+```bash
+XSL_PATH="$HOME/.kukuibot/tools/nmap-bootstrap.xsl"
+
+if [ -f "$XSL_PATH" ] && [ -f "$REPORT_DIR/ports_scan.xml" ]; then
+  echo "=== Generating Technical Appendix via nmap-bootstrap-xsl ==="
+  xsltproc -o "$REPORT_DIR/technical_appendix.html" "$XSL_PATH" "$REPORT_DIR/ports_scan.xml"
+  echo "Technical appendix generated: $REPORT_DIR/technical_appendix.html"
+else
+  echo "nmap-bootstrap-xsl or XML output not available — technical appendix will be built manually"
+fi
+```
 
 ### Report Data Model
 
-The report generator consumes all Phase 1–6 output files and produces:
+The report generator consumes all Phase 1–6 output files (plus Nuclei/OpenVAS results if available) and produces:
 
-1. **Markdown report** — `network_security_report.md`
-2. **HTML report** — `network_security_report.html` (email-ready)
+1. **Executive HTML report** — `network_security_report.html` (Kukui IT branded, email-ready)
+2. **JSON audit log** — `network_audit_YYYY-MM-DD.json` (structured findings)
+3. **Technical appendix** — `technical_appendix.html` (auto-generated if nmap-bootstrap-xsl available)
 
 ### Risk Score Calculation
 
@@ -887,55 +1040,65 @@ Final score: clamped to 0–100
   76–100: High risk   (red)
 ```
 
-### HTML Report Template Spec
-
-The HTML report follows MacBot's standard dark-themed email format:
+### HTML Report Template Spec — Kukui IT Branding
 
 ```
+BRANDING:
+  Logo:          https://kukuiit.com/wp-content/uploads/2024/07/logo.png
+  Primary color: #5aad1a (Kukui green)
+  Header:        White background (logo designed for white)
+  Overall:       Clean, modern, polished, professional
+
 STRUCTURE:
-+-- Header: "Network Security Audit Report"
-|   +-- Subtitle: date, scope, method
-+-- Stat Cards (4-column grid):
-|   +-- Risk Gauge (score/100, color-coded)
++-- Header: White background
+|   +-- Kukui IT logo (centered or left-aligned)
+|   +-- "Network Audit performed by Kukui IT on [date]"
+|   +-- Thin green (#5aad1a) accent line
++-- Risk Grade Badge (letter grade, color-coded)
++-- Stat Cards (4-column):
+|   +-- Risk Score (out of 100, color-coded)
 |   +-- Devices Observed (count)
 |   +-- Exposed Hosts (count)
 |   +-- Total Findings (count)
-+-- Executive Summary (paragraph)
-+-- Findings (ordered by severity):
++-- Executive Summary (paragraph — high-level posture assessment)
++-- Key Vulnerabilities (ordered by severity: Critical → Low):
 |   +-- Each finding card:
-|       +-- Title with severity tag
-|       +-- Asset IP
-|       +-- Evidence block (monospace pre)
-|       +-- CVE/CWE reference (if applicable)
+|       +-- Severity badge + title
+|       +-- Affected device/IP
+|       +-- Evidence block (monospace)
+|       +-- Business impact statement
 |       +-- Remediation steps
-+-- Positive Controls (green checkmarks)
-+-- Baseline Comparison:
-|   +-- New devices (if any)
-|   +-- Missing devices (if any)
-|   +-- IP changes (if any)
-+-- Priority Action Plan (table: priority, action, owner, ETA)
-+-- Vendor Overview (tag cloud)
-+-- Full Device Inventory (table):
+|       +-- CVE reference (if applicable)
++-- Positive Security Practices (green checkmarks)
++-- Device Inventory (table):
 |   +-- IP, MAC, Vendor, Category (color tag), Open Ports
-+-- Footer: "Generated by MacBot · {date}"
++-- Priority Action Plan (table: urgency tier, action, notes)
++-- Baseline Comparison (if prior scan exists):
+|   +-- New / Missing / Moved devices
++-- Technical Appendix link (if nmap-bootstrap-xsl generated)
++-- Footer: "Report generated by Kukui IT · kukuiit.com · [date]"
 
 STYLING:
-  background:    #0b1220
-  cards:         #111827, border #1f2937, radius 12px
-  text:          #e5e7eb (body), #94a3b8 (muted)
+  background:    #ffffff (white) or very light gray #f8f9fa
+  header bg:     #ffffff (white — logo requires white background)
+  accent:        #5aad1a (Kukui green) — borders, buttons, highlights, links
+  cards:         #ffffff bg, subtle shadow, border-radius 12px
+  text:          #1a1a1a (body), #6b7280 (muted)
   severity colors:
-    Critical:    #ef4444 (bg: rgba(239,68,68,0.1))
-    High:        #dc2626 (border-left on finding cards)
-    Medium:      #f59e0b
-    Low:         #3b82f6
-    Info:        #64748b
-  positive:      #22c55e
-  gauge:         #f59e0b (medium), #ef4444 (high), #22c55e (low)
-  category tags: pill-shaped, #1f2937 bg, 12px font
-  tables:        #111827 bg, sticky headers on #0f172a
-  code/pre:      #0f172a bg, #cbd5e1 text, 1px border #1e293b
-  max-width:     1200px (report), 680px (email variant)
+    Critical:    #dc2626 (red)
+    High:        #ea580c (orange-red)
+    Medium:      #f59e0b (amber)
+    Low:         #3b82f6 (blue)
+    Info:        #64748b (slate)
+  positive:      #5aad1a (Kukui green)
+  evidence/pre:  #1e293b bg, #e2e8f0 text (dark terminal style with green monospace)
+  category tags: pill-shaped, light colored backgrounds
+  tables:        clean borders, alternating row shading
+  max-width:     800px (email optimized)
   font:          -apple-system, BlinkMacSystemFont, Segoe UI, Roboto
+  layout:        TABLE-BASED (for email compatibility — no CSS grid/flexbox/variables)
+  styles:        ALL INLINE (for email rendering)
+  emojis:        Smart use throughout — severity indicators, section headers, positive findings
 ```
 
 ### Category Color Tags
@@ -998,18 +1161,22 @@ echo "Baseline updated with $(wc -l < "$REPORT_DIR/../network_baseline.txt") MAC
 
 Run phases in order. Each phase depends on the previous.
 
-| Phase | Name | ~Duration | Depends On |
-|-------|------|-----------|------------|
-| 1 | Environment & Reconnaissance | 30–45 sec | — |
-| 2 | Port Scanning & Service Enum | 2–10 min | Phase 1 hosts |
-| 3 | Targeted Security Probes | 1–5 min | Phase 2 open hosts |
-| 4 | Vendor ID & Classification | 10 sec | Phase 1 ARP data |
-| 5 | Vulnerability Assessment | 1–3 min | Phases 2, 3, 4 |
-| 6 | Baseline Comparison | 5 sec | Phase 1 hosts + prior baseline |
-| 7 | Report Generation | 10 sec | All phases |
-| 8 | Delivery & Archival | 10 sec | Phase 7 report |
+| Phase | Name | With Enhanced Tools | With nmap Only | Depends On |
+|-------|------|-------------------|----------------|------------|
+| 0 | Pre-Audit Setup | 10 sec | 10 sec | — |
+| 1 | Reconnaissance & Discovery | 30–45 sec | 30–45 sec | Phase 0 |
+| 2 | Port Scanning & Service Enum | **30 sec–2 min** (RustScan) | 2–10 min | Phase 1 |
+| 3 | Targeted Security Probes | **2–5 min** (+ Nuclei) | 1–5 min | Phase 2 |
+| 4 | Vendor ID & Classification | 10 sec | 10 sec | Phase 1 |
+| 5 | Vulnerability Assessment | **1–3 min** (Nuclei + manual) | 1–3 min | Phases 2, 3, 4 |
+| 6 | Baseline Comparison | 5 sec | 5 sec | Phase 1 + prior |
+| 7 | Report Generation | **5 sec** (auto appendix) | 10 sec | All phases |
+| 8 | Delivery & Archival | 10 sec | 10 sec | Phase 7 |
 
-**Total estimated time: 5–20 minutes** (depends on network size and host responsiveness)
+**Total estimated time:**
+- **With RustScan + Nuclei (standard):** 3–10 minutes — best balance of speed and coverage
+- **With nmap only:** 5–20 minutes — still effective, manual probes compensate
+- **With OpenVAS (credentialed engagements):** add 15–60 minutes for deep authenticated scan
 
 ---
 
@@ -1057,6 +1224,11 @@ Or tell MacBot: *"Schedule a weekly network audit on Sundays at 3 AM"*
 ## References
 
 - [Nmap Reference Guide](https://nmap.org/book/man.html)
+- [RustScan — The Modern Port Scanner](https://github.com/bee-san/RustScan)
+- [Nuclei — Community Vulnerability Scanner](https://github.com/projectdiscovery/nuclei)
+- [Nuclei Templates (11K+)](https://github.com/projectdiscovery/nuclei-templates)
+- [Greenbone OpenVAS Docker Setup](https://greenbone.github.io/docs/latest/22.4/container/index.html)
+- [nmap-bootstrap-xsl — HTML Reports from nmap XML](https://github.com/Haxxnet/nmap-bootstrap-xsl)
 - [OWASP Testing Guide](https://owasp.org/www-project-web-security-testing-guide/)
 - [CIS Controls v8](https://www.cisecurity.org/controls)
 - [IEEE OUI Database](https://standards-oui.ieee.org/)
