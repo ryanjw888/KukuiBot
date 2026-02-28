@@ -627,6 +627,21 @@ LETSENCRYPT_WORK = os.path.expanduser("~/letsencrypt/work")
 LETSENCRYPT_LOGS = os.path.expanduser("~/letsencrypt/logs")
 
 
+def _ensure_certbot_dirs():
+    """Ensure certbot directories exist and log file is writable."""
+    for d in (LETSENCRYPT_CONFIG, LETSENCRYPT_WORK, LETSENCRYPT_LOGS):
+        os.makedirs(d, exist_ok=True)
+    log_file = os.path.join(LETSENCRYPT_LOGS, "letsencrypt.log")
+    if os.path.exists(log_file) and not os.access(log_file, os.W_OK):
+        try:
+            os.chmod(log_file, 0o644)
+        except OSError:
+            raise PermissionError(
+                f"Cannot write to {log_file} — it may be owned by root. "
+                f"Run: sudo chown {os.getenv('USER', 'jarvis')}:staff {log_file}"
+            )
+
+
 def _ensure_cf_creds_file() -> str:
     """Write a temp cloudflare.ini from DB-stored token for certbot."""
     token = _cf_token()
@@ -700,6 +715,11 @@ async def api_certs_generate(request: Request):
         return JSONResponse({"error": "domain is required"}, status_code=400)
 
     try:
+        _ensure_certbot_dirs()
+    except PermissionError as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+    try:
         creds_path = _ensure_cf_creds_file()
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
@@ -757,6 +777,10 @@ async def api_certs_renew(request: Request):
         return JSONResponse({"error": f"Certificate '{safe_name}' not found"}, status_code=404)
     if _cert_renew_jobs.get(safe_name, {}).get("status") == "running":
         return {"ok": True, "status": "running", "cert_name": safe_name}
+    try:
+        _ensure_certbot_dirs()
+    except PermissionError as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
     try:
         creds_path = _ensure_cf_creds_file()
     except ValueError as e:
