@@ -135,11 +135,7 @@ MEMORY_DIR = KUKUIBOT_HOME / "memory"
 APP_NAME = os.environ.get("KUKUIBOT_APP_NAME", "KukuiBot")
 
 # --- Server ---
-# KUKUIBOT_PORT = the external-facing port (what users type in their browser)
-# KUKUIBOT_BIND_PORT = the actual port the server binds to (may differ when
-#   pfctl forwards a privileged port like 443 to a high port like 8443)
 PORT = int(os.environ.get("KUKUIBOT_PORT", "7000"))
-BIND_PORT = int(os.environ.get("KUKUIBOT_BIND_PORT", "") or PORT)
 HOST = os.environ.get("KUKUIBOT_HOST", "127.0.0.1")
 SSL_CERT = Path(__file__).parent / "certs" / "kukuibot.pem"
 SSL_KEY = Path(__file__).parent / "certs" / "kukuibot-key.pem"

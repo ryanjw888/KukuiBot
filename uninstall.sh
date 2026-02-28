@@ -37,42 +37,13 @@ fi
 # --- Stop and unload services ---
 echo "→ Stopping services..."
 UID_VAL=$(id -u)
-
-# Try both LaunchAgent (user) and LaunchDaemon (root) for server
-echo "  Checking user LaunchAgent..."
-launchctl bootout "gui/${UID_VAL}/com.kukuibot.server" 2>/dev/null || true
-launchctl stop com.kukuibot.server 2>/dev/null || true
-launchctl unload "$LAUNCH_AGENTS/com.kukuibot.server.plist" 2>/dev/null || true
-rm -f "$LAUNCH_AGENTS/com.kukuibot.server.plist"
-
-echo "  Checking root LaunchDaemon (legacy privileged port installs)..."
-sudo launchctl bootout system/com.kukuibot.server 2>/dev/null || true
-sudo rm -f /Library/LaunchDaemons/com.kukuibot.server.plist
-
-echo "  Checking pfctl port forwarding..."
-sudo launchctl bootout system/com.kukuibot.portfwd 2>/dev/null || true
-sudo rm -f /Library/LaunchDaemons/com.kukuibot.portfwd.plist
-sudo rm -f /etc/pf.anchors/com.kukuibot
-# Remove kukuibot lines from pf.conf (restore from backup if available)
-if grep -qF "com.kukuibot" /etc/pf.conf 2>/dev/null; then
-  if [ -f /etc/pf.conf.kukuibot-backup ]; then
-    sudo cp /etc/pf.conf.kukuibot-backup /etc/pf.conf
-    sudo rm -f /etc/pf.conf.kukuibot-backup
-  else
-    sudo sed -i '' '/com\.kukuibot/d' /etc/pf.conf 2>/dev/null || true
-    sudo sed -i '' '/# KukuiBot port forwarding/d' /etc/pf.conf 2>/dev/null || true
-  fi
-  sudo pfctl -f /etc/pf.conf 2>/dev/null || true
-fi
-echo "  ✓ Port forwarding rules removed"
-
-# Legacy worker
-launchctl bootout "gui/${UID_VAL}/com.kukuibot.worker" 2>/dev/null || true
-launchctl stop com.kukuibot.worker 2>/dev/null || true
-launchctl unload "$LAUNCH_AGENTS/com.kukuibot.worker.plist" 2>/dev/null || true
-rm -f "$LAUNCH_AGENTS/com.kukuibot.worker.plist"
-
-echo "  ✓ com.kukuibot.server removed"
+for svc in com.kukuibot.server com.kukuibot.worker; do
+  launchctl bootout "gui/${UID_VAL}/${svc}" 2>/dev/null || true
+  launchctl stop "$svc" 2>/dev/null || true
+  launchctl unload "$LAUNCH_AGENTS/${svc}.plist" 2>/dev/null || true
+  rm -f "$LAUNCH_AGENTS/${svc}.plist"
+  echo "  ✓ $svc removed"
+done
 
 # Root LaunchDaemon (privileged helper)
 echo "→ Removing privileged helper daemon..."
@@ -121,7 +92,6 @@ echo "  ✅ KukuiBot uninstalled completely."
 echo ""
 echo "  What was removed:"
 echo "    • LaunchAgents (com.kukuibot.server, com.kukuibot.worker)"
-echo "    • Port forwarding (pfctl anchor, com.kukuibot.portfwd)"
 echo "    • Cron jobs (backup, orphan cleanup)"
 echo "    • Sudoers rules (/etc/sudoers.d/kukuibot-*)"
 echo "    • All data ($KUKUIBOT_HOME)"
