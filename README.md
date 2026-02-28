@@ -13,7 +13,7 @@ pip install -r requirements.txt
 python3 server.py
 ```
 
-Open **https://localhost:7000** — the setup wizard walks you through everything.
+Open **https://localhost** (or **https://localhost:443**) — the setup wizard walks you through everything.
 
 ## What You Get
 
@@ -54,7 +54,9 @@ Or with custom options:
 curl -fsSL https://github.com/ryanjw888/KukuiBot/raw/main/install.sh | bash -s -- --port 8443 --dir ~/my-kukuibot
 ```
 
-The installer handles all dependencies (Python 3.11+, mkcert, ripgrep, Node.js, Claude Code CLI), HTTPS certs, launchd services, and cron jobs.
+**Default port:** 443 (standard HTTPS). The installer automatically configures privileged ports (<1024) to run as a root LaunchDaemon, while user ports (≥1024) run as a LaunchAgent. No manual sudo or port forwarding required.
+
+The installer handles all dependencies (Python 3.11+, mkcert, ripgrep, Node.js 18+, Claude Code CLI), HTTPS certs, launchd services, and cron jobs.
 
 ### Manual Setup
 
@@ -79,7 +81,7 @@ python3 server.py
 
 ### First Run
 
-1. Open **https://localhost:7000** (or your configured port)
+1. Open **https://localhost** (or `https://localhost:PORT` if you used a custom port)
 2. **Trust Certificate** (Step 0) — downloads the mkcert root CA for your device
 3. **Create Account** (Step 1) — local admin user, stored locally
    - Or **skip** to run in localhost-only mode (no login required from the host machine)
@@ -89,15 +91,21 @@ python3 server.py
 
 ### Accessing from Other Devices (LAN)
 
-KukuiBot runs HTTPS on port 7000 by default. Other devices on your network can access it at:
+KukuiBot runs HTTPS on port 443 by default. Other devices on your network can access it at:
 
 ```
-https://<your-ip>:7000
+https://<your-ip>
+```
+
+Or if using a custom port:
+
+```
+https://<your-ip>:PORT
 ```
 
 On first visit, they'll see a certificate warning. To fix it permanently:
 
-1. Go to **https://\<your-ip\>:7000/api/cert**
+1. Go to **https://\<your-ip\>/api/cert** (or `https://<your-ip>:PORT/api/cert` for custom ports)
 2. Download and install the root CA:
    - **macOS**: Open file → Keychain Access → double-click cert → Always Trust
    - **iPhone/iPad**: Open file → Install Profile → Settings → General → About → Certificate Trust Settings → enable
@@ -111,7 +119,7 @@ On first visit, they'll see a certificate warning. To fix it permanently:
 # In cloudflared config
 ingress:
   - hostname: kukuibot.yourdomain.com
-    service: https://localhost:7000
+    service: https://localhost:443
     originRequest:
       noTLSVerify: true
 ```
@@ -143,7 +151,7 @@ Environment variables (all optional):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `KUKUIBOT_PORT` | `7000` | Server port (HTTPS) |
+| `KUKUIBOT_PORT` | `443` | Server port (HTTPS) |
 | `KUKUIBOT_HOST` | `0.0.0.0` | Bind address |
 | `KUKUIBOT_HOME` | `~/.kukuibot` | Data directory |
 | `KUKUIBOT_MAX_TOOL_ROUNDS` | `100` | Tool-call safety cap per turn |
