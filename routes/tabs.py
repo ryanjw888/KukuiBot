@@ -111,6 +111,29 @@ def _ensure_tab_meta_schema(db):
     except Exception:
         pass
 
+    # Migrate 'localhost' owner rows to the real admin username so tabs are
+    # consistent regardless of whether the user accesses via localhost or remote login.
+    try:
+        localhost_count = db.execute("SELECT COUNT(*) FROM tab_meta WHERE owner = 'localhost'").fetchone()
+        if localhost_count and localhost_count[0] > 0:
+            admin_row = db.execute("SELECT username FROM users WHERE role = 'admin' LIMIT 1").fetchone()
+            if admin_row and admin_row[0] and str(admin_row[0]).strip().lower() != "localhost":
+                admin_user = str(admin_row[0]).strip().lower()
+                # Delete localhost rows that conflict with existing admin rows (same session_id)
+                db.execute(
+                    "DELETE FROM tab_meta WHERE owner = 'localhost' AND session_id IN "
+                    "(SELECT session_id FROM tab_meta WHERE owner = ?)",
+                    (admin_user,),
+                )
+                # Reassign remaining localhost rows to the admin user
+                db.execute(
+                    "UPDATE tab_meta SET owner = ? WHERE owner = 'localhost'",
+                    (admin_user,),
+                )
+                db.commit()
+    except Exception:
+        pass
+
 
 @router.get("/api/history/sessions")
 async def api_history_sessions(request: Request, limit: int = 20):
