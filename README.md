@@ -204,4 +204,4 @@ Removes services, cron jobs, sudoers rules, data, and logs. Does not remove Home
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+All rights reserved. Source code is viewable but may not be copied, modified, or distributed without explicit permission.
