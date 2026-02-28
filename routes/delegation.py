@@ -209,22 +209,23 @@ async def api_delegate_activity(req: Request):
                 activity["is_active"] = True
 
             # Scan ring buffer backwards for latest tool event
+            # Events are stored as flat dicts: {"type": "tool_use", "name": "Bash", "input": "...", ...}
+            # (no nested "payload" key — fields are at the top level of the envelope)
             ring = _session_event_store._rings.get(target_sid)
             if ring:
                 for envelope, _size in reversed(list(ring)):
                     evt_type = str(envelope.get("type") or "")
-                    payload = envelope.get("payload") or {}
                     if evt_type == "tool_use":
-                        activity["tool_name"] = str(payload.get("name") or "")
-                        activity["tool_detail"] = str(payload.get("input") or "")[:180]
+                        activity["tool_name"] = str(envelope.get("name") or "")
+                        activity["tool_detail"] = str(envelope.get("input") or "")[:180]
                         break
-                    elif evt_type == "ping" and payload.get("tool"):
-                        activity["tool_name"] = str(payload.get("tool") or "")
-                        activity["tool_detail"] = str(payload.get("detail") or "")[:180]
+                    elif evt_type == "ping" and envelope.get("tool"):
+                        activity["tool_name"] = str(envelope.get("tool") or "")
+                        activity["tool_detail"] = str(envelope.get("detail") or "")[:180]
                         break
                     elif evt_type == "subagent_tool_use":
-                        activity["tool_name"] = f"agent:{payload.get('name', '')}"
-                        activity["tool_detail"] = str(payload.get("input") or "")[:180]
+                        activity["tool_name"] = f"agent:{envelope.get('name', '')}"
+                        activity["tool_detail"] = str(envelope.get("input") or "")[:180]
                         break
                     elif evt_type in ("text", "chunk", "thinking", "thinking_start"):
                         # Model is generating text — show that instead
@@ -378,6 +379,19 @@ async def _do_delegation_cleanup(task_id: str):
                     worker=worker,
                     source=f"delegation.{model}" if model else "delegation",
                 )
+
+                # 1b) Broadcast to all browsers for cross-device sync
+                try:
+                    from server import _broadcast_global_event
+                    _broadcast_global_event({
+                        "type": "chatlog_append",
+                        "session_id": base_sid,
+                        "role": "system",
+                        "text": summary_text,
+                        "ts": int(time.time() * 1000),
+                    })
+                except Exception:
+                    pass
 
                 # 2) Also append to tab history so users currently in that tab see
                 # the summary immediately (without waiting for chatlog reload).

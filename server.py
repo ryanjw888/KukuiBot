@@ -435,6 +435,14 @@ def _append_to_chat_log(session_id: str, role: str, content: str):
             worker=worker,
             source=f"chat.{model_key}" if model_key else "chat",
         )
+        # Broadcast to all connected browsers for cross-device sync
+        _broadcast_global_event({
+            "type": "chatlog_append",
+            "session_id": session_id,
+            "role": role.lower(),
+            "text": content,
+            "ts": int(time.time() * 1000),
+        })
     except Exception as e:
         logger.warning(f"Failed to append to chat log: {e}")
 
@@ -2673,6 +2681,61 @@ async def api_anthropic_events(req: Request):
         finally:
             subs = _anthropic_event_subscribers.get(session_id, [])
             _anthropic_event_subscribers[session_id] = [x for x in subs if x is not q]
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# --- Global Broadcast SSE (Cross-Device Sync) ---
+
+def _broadcast_global_event(event: dict):
+    """Broadcast an event to all connected browsers for cross-device sync.
+
+    Events: chatlog_append, tab_updated, tab_deleted, system_message
+    """
+    payload = f"data: {json.dumps(event)}\n\n"
+    dead = []
+    for i, q in enumerate(_app_state.global_broadcast_subscribers):
+        try:
+            q.put_nowait(payload)
+        except Exception:
+            dead.append(i)
+    for i in reversed(dead):
+        try:
+            _app_state.global_broadcast_subscribers.pop(i)
+        except Exception:
+            pass
+
+
+@app.get("/api/events/global")
+async def api_global_events(req: Request):
+    """SSE stream for cross-device sync: tab changes, new chat messages, system events.
+
+    Every browser opens one connection to this endpoint. Events are broadcast
+    to all subscribers so all devices stay in sync with server state.
+    """
+    async def stream():
+        q: asyncio.Queue = asyncio.Queue()
+        _app_state.global_broadcast_subscribers.append(q)
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=float(_SSE_KEEPALIVE_SECONDS))
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                if event is None:
+                    break
+                yield event
+        except (asyncio.CancelledError, GeneratorExit):
+            pass
+        finally:
+            _app_state.global_broadcast_subscribers[:] = [
+                x for x in _app_state.global_broadcast_subscribers if x is not q
+            ]
 
     return StreamingResponse(
         stream(),

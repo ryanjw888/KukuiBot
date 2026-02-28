@@ -105,6 +105,24 @@ def _ensure_tab_meta_schema(db):
         except Exception:
             pass
 
+    if "created_explicitly" not in cols:
+        try:
+            db.execute("ALTER TABLE tab_meta ADD COLUMN created_explicitly INTEGER DEFAULT 0")
+        except Exception:
+            pass
+
+    # Ensure tab_tombstones table exists (tracks deleted tabs for cross-device sync)
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tab_tombstones (
+            owner TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            deleted_at INTEGER DEFAULT 0,
+            PRIMARY KEY (owner, session_id)
+        )
+        """
+    )
+
     # Add index for fast lookups on (owner, session_id)
     try:
         db.execute("CREATE INDEX IF NOT EXISTS idx_tab_meta_owner_session ON tab_meta(owner, session_id)")
@@ -153,7 +171,7 @@ async def api_history_sessions(request: Request, limit: int = 20):
             meta_rows = []
             if owner:
                 meta_rows = db.execute(
-                    "SELECT session_id, tab_id, model_key, label, label_updated_at, updated_at, COALESCE(sort_order, 0), COALESCE(worker_identity, '') FROM tab_meta WHERE owner = ?",
+                    "SELECT session_id, tab_id, model_key, label, label_updated_at, updated_at, COALESCE(sort_order, 0), COALESCE(worker_identity, ''), COALESCE(created_explicitly, 0) FROM tab_meta WHERE owner = ?",
                     (owner,),
                 ).fetchall()
 
@@ -192,6 +210,7 @@ async def api_history_sessions(request: Request, limit: int = 20):
             meta_updated = row[5]
             sort_order_val = int(row[6]) if len(row) > 6 else 0
             worker_identity_val = str(row[7]) if len(row) > 7 else ""
+            created_explicitly_val = bool(int(row[8])) if len(row) > 8 else False
             key = sid
             entry = sessions_map.get(key)
             if not entry:
@@ -206,6 +225,7 @@ async def api_history_sessions(request: Request, limit: int = 20):
                     "label_updated_at": 0,
                     "sort_order": 0,
                     "worker_identity": "",
+                    "created_explicitly": False,
                 }
                 sessions_map[key] = entry
 
@@ -216,6 +236,7 @@ async def api_history_sessions(request: Request, limit: int = 20):
             entry["meta_updated_at"] = int(meta_updated or 0)
             entry["sort_order"] = sort_order_val
             entry["worker_identity"] = worker_identity_val
+            entry["created_explicitly"] = created_explicitly_val
             entry["updated_at"] = max(int(entry.get("updated_at", 0)), int(meta_updated or 0))
 
         sessions = sorted(sessions_map.values(), key=lambda x: int(x.get("updated_at", 0)), reverse=True)[:cap]
@@ -307,6 +328,10 @@ async def api_tabs_sync(req: Request):
                 except Exception:
                     sort_order = 0
                 worker_identity = str(row.get("worker_identity") or "").strip()
+                try:
+                    created_explicitly = 1 if row.get("created_explicitly") else 0
+                except Exception:
+                    created_explicitly = 0
 
                 # Skip if this session was tombstoned (deleted on another device)
                 tomb = db.execute(
@@ -370,8 +395,8 @@ async def api_tabs_sync(req: Request):
 
                 db.execute(
                     """
-                    INSERT INTO tab_meta (owner, session_id, tab_id, model_key, label, label_updated_at, sort_order, worker_identity, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO tab_meta (owner, session_id, tab_id, model_key, label, label_updated_at, sort_order, worker_identity, created_explicitly, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(owner, session_id) DO UPDATE SET
                         tab_id = excluded.tab_id,
                         model_key = excluded.model_key,
@@ -387,9 +412,10 @@ async def api_tabs_sync(req: Request):
                         END,
                         sort_order = excluded.sort_order,
                         worker_identity = excluded.worker_identity,
+                        created_explicitly = MAX(COALESCE(tab_meta.created_explicitly, 0), excluded.created_explicitly),
                         updated_at = excluded.updated_at
                     """,
-                    (owner, session_id, tab_id, model_key, label, label_updated_at, sort_order, worker_identity, now),
+                    (owner, session_id, tab_id, model_key, label, label_updated_at, sort_order, worker_identity, created_explicitly, now),
                 )
                 saved += 1
 
@@ -421,6 +447,14 @@ async def api_tabs_sync(req: Request):
             db.execute("DELETE FROM tab_tombstones WHERE deleted_at < ? AND deleted_at > 0", (cutoff,))
 
             db.commit()
+
+        # Broadcast tab sync to all other browsers for cross-device consistency
+        if saved > 0:
+            try:
+                from server import _broadcast_global_event
+                _broadcast_global_event({"type": "tabs_updated", "saved": saved, "ts": int(time.time() * 1000)})
+            except Exception:
+                pass
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 

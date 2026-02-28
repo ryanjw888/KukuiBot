@@ -497,6 +497,70 @@ function connectAnthropicEvents() {
   if (act && _isAnthropicModel(act.modelKey)) connectAnthropicEventsForTab(act);
 }
 
+// --- Global Broadcast SSE (Cross-Device Sync) ---
+// One connection per browser — receives tab changes, new chat messages, etc.
+// so all devices stay in sync with server state.
+let _globalEvtSource = null;
+let _globalEvtReconnectTimer = null;
+let _globalTabsSyncDebounce = null;
+
+function connectGlobalEvents() {
+  if (_globalEvtSource) return;
+  const es = new EventSource(API + '/api/events/global');
+  es.onopen = () => { _globalEvtSource = es; };
+  es.onmessage = (e) => {
+    try {
+      const evt = JSON.parse(e.data);
+      if (evt.type === 'chatlog_append') {
+        // A new message was persisted to chatlog for a session — append if we have that tab loaded
+        const tab = tabs.find(t => t.sessionId === evt.session_id);
+        if (tab && tab.messages) {
+          // Dedup: skip if we already have this message (by text + role + close timestamp)
+          const isDupe = tab.messages.some(m =>
+            m.role === evt.role && m.text === evt.text && Math.abs((m.timestamp?.getTime?.() || 0) - evt.ts) < 3000
+          );
+          if (!isDupe) {
+            tab.messages.push({
+              id: evt.ts || Date.now(),
+              role: evt.role,
+              text: evt.text,
+              timestamp: new Date(evt.ts || Date.now()),
+              modelLabel: evt.role === 'assistant' ? (MODELS[tab.modelKey]?.shortName || 'Assistant') : undefined,
+            });
+            if (tab.id !== activeTabId) { tab.unread = true; }
+            persistTabs();
+            requestRender({ preserveScroll: tab.id !== activeTabId });
+          }
+        }
+      } else if (evt.type === 'tabs_updated') {
+        // Another device synced tabs — debounce a re-fetch from server
+        if (_globalTabsSyncDebounce) clearTimeout(_globalTabsSyncDebounce);
+        _globalTabsSyncDebounce = setTimeout(async () => {
+          const changed = await syncTabsFromServerSessions(80, { forceServerLabels: true, serverAuthoritative: true });
+          if (changed) requestRender({ preserveScroll: true });
+        }, 1000);
+      }
+    } catch (err) { console.warn('Global SSE parse error:', err); }
+  };
+  es.onerror = () => {
+    _globalEvtSource = null;
+    try { es.close(); } catch {}
+    if (_globalEvtReconnectTimer) clearTimeout(_globalEvtReconnectTimer);
+    _globalEvtReconnectTimer = setTimeout(connectGlobalEvents, 5000);
+  };
+}
+
+function disconnectGlobalEvents() {
+  if (_globalEvtSource) {
+    try { _globalEvtSource.close(); } catch {}
+    _globalEvtSource = null;
+  }
+  if (_globalEvtReconnectTimer) {
+    clearTimeout(_globalEvtReconnectTimer);
+    _globalEvtReconnectTimer = null;
+  }
+}
+
 // --- Connection status indicator for work log toolbar ---
 // Returns 'connected' | 'connecting' | 'disconnected' for the given tab
 function getTabConnectionStatus(tab) {
@@ -1271,6 +1335,7 @@ function parseTabSessionId(sessionId) {
 async function syncTabsFromServerSessions(limit = 60, opts = {}) {
   try {
     const forceServerLabels = !!opts.forceServerLabels;
+    const serverAuthoritative = !!opts.serverAuthoritative;
     const bust = Date.now();
     const url = API + '/api/history/sessions?limit=' + Math.max(1, Math.min(limit, 100)) + '&_=' + bust;
     const res = await fetch(url, {
@@ -1297,6 +1362,9 @@ async function syncTabsFromServerSessions(limit = 60, opts = {}) {
       }
     }
 
+    // Track which session IDs the server knows about for authoritative pruning
+    const serverSids = new Set();
+
     const tabNum = (id) => {
       const m = String(id || '').match(/-(\d+)$/);
       return m ? Number(m[1]) || 0 : 0;
@@ -1312,6 +1380,8 @@ async function syncTabsFromServerSessions(limit = 60, opts = {}) {
       const modelKey = MODELS[fromMetaModel] ? fromMetaModel : (parsed?.modelKey || '');
       const tabId = fromMetaId || (parsed?.id || '');
       if (!modelKey || !tabId || !MODELS[modelKey]) continue;
+
+      serverSids.add(sid);
 
       const savedLabel = String(s?.label || '').trim();
       const savedLabelUpdatedAt = Number(s?.label_updated_at || 0);
@@ -1358,6 +1428,17 @@ async function syncTabsFromServerSessions(limit = 60, opts = {}) {
 
       const n = tabNum(tabId);
       if (Number.isFinite(n) && n > 0) tabCounter = Math.max(tabCounter, n);
+    }
+
+    // Server-authoritative mode: remove local tabs that the server doesn't know about.
+    // This ensures all devices show the same tabs. Tabs that were just created locally
+    // but haven't synced yet will be re-pushed by pushTabsToServer() after boot.
+    if (serverAuthoritative && serverSids.size > 0) {
+      const before = tabs.length;
+      tabs = tabs.filter(t => serverSids.has(t.sessionId));
+      if (tabs.length < before) {
+        changed = true;
+      }
     }
 
     // Apply server sort_order to reorder tabs for cross-device consistency
@@ -3835,6 +3916,9 @@ async function waitForServerReconnect(tab, sentText) {
       disconnectAnthropicEventsForTab(tab);
       connectAnthropicEventsForTab(tab);
     }
+    // Re-establish global broadcast SSE
+    disconnectGlobalEvents();
+    connectGlobalEvents();
   } else {
     tab.messages.push(_sysCard('Could not reconnect — check if the server is running', '❌', 'Connection'));
   }
@@ -5853,16 +5937,17 @@ async function boot() {
     userName = data.user || '';
     isLocalClient = Boolean(data.is_localhost);
     if (authenticated) {
-      const restored = restoreTabsFromStorage();
+      // Fast-paint: restore localStorage cache for instant UI, but server will overwrite.
+      // This prevents a blank screen while the server fetch completes.
+      restoreTabsFromStorage();
+      requestRender();
 
-      // Cross-device sync: always trust server labels on boot so fresh refreshes
-      // (especially mobile Safari) reflect latest names instead of stale local cache.
-      await syncTabsFromServerSessions(80, { forceServerLabels: true });
+      // Server is the sole source of truth for tabs. Overwrite localStorage state.
+      // forceServerLabels + serverAuthoritative ensures server wins on all fields.
+      await syncTabsFromServerSessions(80, { forceServerLabels: true, serverAuthoritative: true });
 
-      // Important: only create a default tab after server sync, otherwise a local
-      // cache miss (or forced refresh) can create a brand-new Codex tab every boot.
-      // That tab then gets pushed to /api/tabs/sync and accumulates as phantom "Codex 1" tabs.
-      if (!restored && tabs.length === 0) {
+      // Only create a default tab if the server returned nothing.
+      if (tabs.length === 0) {
         const dm = _defaultModel();
         if (_isModelAvailable(dm, MODELS[dm])) {
           const tab = createTab(dm, { silent: true, explicit: false });
@@ -5892,6 +5977,8 @@ async function boot() {
       connectClaudeEvents();
       // Persistent Anthropic EventSource (mirrors Claude pattern)
       connectAnthropicEvents();
+      // Global broadcast SSE (cross-device sync: tab changes, new chat messages)
+      connectGlobalEvents();
       // If iOS suspended the tab mid-stream and we reloaded, attempt recovery now.
       recoverActiveStreamFromBackground();
     }

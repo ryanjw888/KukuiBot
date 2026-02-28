@@ -42,6 +42,9 @@ class AppState:
     # Anthropic persistent EventSource subscribers: session_id -> list[asyncio.Queue]
     anthropic_event_subscribers: dict[str, list] = field(default_factory=dict)
 
+    # Global broadcast subscribers: all connected browsers (cross-device sync)
+    global_broadcast_subscribers: list = field(default_factory=list)
+
     # Per-session proactive wake locks (delegation system)
     proactive_wake_locks: dict[str, asyncio.Lock] = field(default_factory=dict)
 
