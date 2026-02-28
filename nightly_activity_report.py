@@ -23,6 +23,12 @@ from pathlib import Path
 
 KUKUIBOT_HOME = Path(os.path.expanduser("~/.kukuibot"))
 REPO_DIR = KUKUIBOT_HOME
+SRC_DIR = KUKUIBOT_HOME / "src"
+
+# Commit subjects that are automated noise, not real work
+_NOISE_SUBJECTS = re.compile(
+    r"^(data-backup|auto-backup|hourly.backup)\b", re.IGNORECASE
+)
 
 # Add src/ to path for log_store import
 _src_dir = str(KUKUIBOT_HOME / "src")
@@ -70,10 +76,6 @@ PROJECT_PATTERNS = [
     r"\badded\b",
     r"\bresolved\b",
 ]
-
-
-def _run(cmd: list[str]) -> str:
-    return subprocess.check_output(cmd, cwd=str(REPO_DIR), text=True).strip()
 
 
 def _parse_chat_window(since: dt.datetime, until: dt.datetime) -> tuple[list[str], list[str]]:
@@ -161,35 +163,64 @@ def _collect_project_highlights(assistant_msgs: list[str], commits: list[tuple[s
     return _dedupe_keep_order(projects, limit=10)
 
 
-def _git_commits(since: dt.datetime, until: dt.datetime) -> list[tuple[str, str]]:
-    out = _run([
-        "git",
-        "log",
-        f"--since={since.strftime('%Y-%m-%d %H:%M:%S')}",
-        f"--until={until.strftime('%Y-%m-%d %H:%M:%S')}",
-        "--pretty=format:%h\t%s",
-    ])
+def _git_commits_from_repo(repo: Path, since: dt.datetime, until: dt.datetime) -> list[tuple[str, str]]:
+    """Get commits from a single repo, filtering out automated noise."""
+    try:
+        out = subprocess.check_output(
+            [
+                "git", "log",
+                f"--since={since.strftime('%Y-%m-%d %H:%M:%S')}",
+                f"--until={until.strftime('%Y-%m-%d %H:%M:%S')}",
+                "--pretty=format:%h\t%s",
+            ],
+            cwd=str(repo),
+            text=True,
+        ).strip()
+    except Exception:
+        return []
     commits: list[tuple[str, str]] = []
     if not out:
         return commits
     for line in out.splitlines():
         if "\t" in line:
             h, s = line.split("\t", 1)
-            commits.append((h.strip(), s.strip()))
+            if not _NOISE_SUBJECTS.match(s.strip()):
+                commits.append((h.strip(), s.strip()))
     return commits
 
 
+def _git_commits(since: dt.datetime, until: dt.datetime) -> list[tuple[str, str]]:
+    """Collect commits from src/ (dev work) first, then root repo, deduped."""
+    src_commits = _git_commits_from_repo(SRC_DIR, since, until)
+    root_commits = _git_commits_from_repo(REPO_DIR, since, until)
+
+    # Dedupe by hash (src takes priority)
+    seen = {h for h, _ in src_commits}
+    for h, s in root_commits:
+        if h not in seen:
+            seen.add(h)
+            src_commits.append((h, s))
+    return src_commits
+
+
 def _git_top_files(since: dt.datetime, until: dt.datetime, limit: int = 8) -> list[tuple[str, int]]:
-    out = _run([
-        "bash",
-        "-lc",
-        (
-            "git log "
-            f"--since='{since.strftime('%Y-%m-%d %H:%M:%S')}' "
-            f"--until='{until.strftime('%Y-%m-%d %H:%M:%S')}' "
-            "--name-only --pretty=format: | sed '/^$/d'"
-        ),
-    ])
+    """Collect top touched files from src/ repo (where dev work happens)."""
+    try:
+        out = subprocess.check_output(
+            [
+                "bash", "-lc",
+                (
+                    "git log "
+                    f"--since='{since.strftime('%Y-%m-%d %H:%M:%S')}' "
+                    f"--until='{until.strftime('%Y-%m-%d %H:%M:%S')}' "
+                    "--name-only --pretty=format: | sed '/^$/d'"
+                ),
+            ],
+            cwd=str(SRC_DIR),
+            text=True,
+        ).strip()
+    except Exception:
+        out = ""
     if not out:
         return []
     counts = Counter(out.splitlines())

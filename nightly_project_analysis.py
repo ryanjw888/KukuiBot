@@ -79,21 +79,30 @@ def _read_text(path: Path, max_chars: int = 0) -> str:
         return ""
 
 
+_NOISE_SUBJECTS = re.compile(
+    r"^(data-backup|auto-backup|hourly.backup)\b", re.IGNORECASE
+)
+
+
 def _git_log_48h() -> str:
-    """Get git log for the last 48 hours."""
+    """Get git log for the last 48 hours from src/ (dev work), filtering noise."""
     try:
         out = subprocess.check_output(
             [
                 "git", "log",
                 "--since=48 hours ago",
                 "--pretty=format:%h %s",
-                "--max-count=20",
+                "--max-count=30",
             ],
-            cwd=str(WORKSPACE),
+            cwd=str(SRC_DIR),
             text=True,
             timeout=10,
         ).strip()
-        return out or "(no commits in the last 48 hours)"
+        if not out:
+            return "(no commits in the last 48 hours)"
+        # Filter out automated noise
+        lines = [l for l in out.splitlines() if not _NOISE_SUBJECTS.match(l.split(" ", 1)[1] if " " in l else "")]
+        return "\n".join(lines[:20]) if lines else "(only automated backup commits in the last 48 hours)"
     except Exception as e:
         return f"(git log failed: {e})"
 
@@ -108,7 +117,7 @@ def _git_diff_stat_48h() -> str:
                 "HEAD~20..HEAD",
                 "--",
             ],
-            cwd=str(WORKSPACE),
+            cwd=str(SRC_DIR),
             text=True,
             timeout=10,
         ).strip()

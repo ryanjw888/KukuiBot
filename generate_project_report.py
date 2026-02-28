@@ -27,6 +27,7 @@ from zoneinfo import ZoneInfo
 from config import KUKUIBOT_HOME, WORKSPACE
 from log_store import log_query
 
+SRC_DIR = KUKUIBOT_HOME / "src"
 MAX_REPORT_CHARS = 5500
 TARGET_MIN_CHARS = 3000
 MAX_PRIORITIES = 5
@@ -121,7 +122,15 @@ def _collect_priorities(roadmap_text: str) -> list[PriorityItem]:
     return items[:MAX_PRIORITIES]
 
 
+_NOISE_SUBJECTS = re.compile(
+    r"^(data-backup|auto-backup|hourly.backup)\b", re.IGNORECASE
+)
+
+
 def _run_git_log_since_48h(repo_dir: Path) -> list[tuple[str, str]]:
+    """Get recent commits from src/ (dev work), filtering automated noise."""
+    # Always prefer src/ for dev commits; fall back to provided repo_dir
+    target = SRC_DIR if SRC_DIR.is_dir() and (SRC_DIR / ".git").exists() else repo_dir
     try:
         out = subprocess.check_output(
             [
@@ -129,9 +138,9 @@ def _run_git_log_since_48h(repo_dir: Path) -> list[tuple[str, str]]:
                 "log",
                 "--since=48 hours ago",
                 "--pretty=format:%h\t%s",
-                f"--max-count={MAX_COMMITS}",
+                f"--max-count={MAX_COMMITS * 3}",  # fetch extra to allow for noise filtering
             ],
-            cwd=str(repo_dir),
+            cwd=str(target),
             text=True,
         ).strip()
     except Exception:
@@ -145,6 +154,9 @@ def _run_git_log_since_48h(repo_dir: Path) -> list[tuple[str, str]]:
         if "\t" not in line:
             continue
         sha, subj = line.split("\t", 1)
+        # Skip automated backup commits
+        if _NOISE_SUBJECTS.match(subj.strip()):
+            continue
         subj = re.sub(
             r"^(feat|fix|chore|docs|refactor|perf|test|ci|build)(\([^)]+\))?:\s*",
             "",
@@ -152,7 +164,9 @@ def _run_git_log_since_48h(repo_dir: Path) -> list[tuple[str, str]]:
             flags=re.IGNORECASE,
         )
         commits.append((sha.strip(), _clean_md(subj)))
-    return commits[:MAX_COMMITS]
+        if len(commits) >= MAX_COMMITS:
+            break
+    return commits
 
 
 def _collect_anti_patterns(lessons_text: str) -> list[str]:
