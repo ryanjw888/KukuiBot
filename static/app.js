@@ -151,6 +151,7 @@ window.addEventListener('beforeunload', (e) => {
 
 // --- Global state ---
 let authenticated = false;
+let _openaiConnected = false;
 let elevatedSession = { enabled: false, remaining_seconds: 0 };
 let reasoningEffort = 'high';
 let showSettings = false;
@@ -2441,7 +2442,7 @@ function _isModelAvailable(key, m) {
   // OpenRouter models require the API key (only loaded if config returned models)
   if (m.model === 'openrouter') return _orModelsLoaded;
   // Codex/Spark — available only when OpenAI is connected
-  if (key === 'codex' || key === 'spark') return authenticated;
+  if (key === 'codex' || key === 'spark') return _openaiConnected;
   return true;
 }
 
@@ -5426,6 +5427,7 @@ async function doLogout() {
   stopAutoNameScheduler();
   try { await fetch(API + '/auth/logout', { method: 'POST' }); } catch {}
   authenticated = false;
+  _openaiConnected = false;
   requestRender({ preserveScroll: true });
   window.location.href = '/login.html';
 }
@@ -5836,6 +5838,7 @@ async function boot() {
     if (!data.setup_complete) { window.location.href = '/setup.html'; return; }
     if (!data.logged_in) { window.location.href = '/login.html'; return; }
     authenticated = data.authenticated;
+    _openaiConnected = Boolean(data.openai_connected);
     userName = data.user || '';
     isLocalClient = Boolean(data.is_localhost);
     if (authenticated) {

@@ -4865,7 +4865,7 @@ async function loadConnectionsOverview() {
     const d = await r.json();
     const dot = document.getElementById('conn-openai-dot');
     const st = document.getElementById('conn-openai-status');
-    if (d.authenticated) {
+    if (d.openai_connected) {
       dot.style.color = 'var(--green)'; st.textContent = 'Connected';
     } else if (d.expired) {
       dot.style.color = 'var(--yellow)'; st.textContent = 'Expired';
