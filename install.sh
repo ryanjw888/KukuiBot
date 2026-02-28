@@ -32,9 +32,15 @@ PORT="${CUSTOM_PORT:-${KUKUIBOT_PORT:-7000}}"
 KUKUIBOT_HOME="${CUSTOM_DIR:-${KUKUIBOT_HOME:-$HOME/.kukuibot}}"
 
 # --- Pre-flight validation ---
-if ! echo "$PORT" | grep -qE '^[0-9]+$' || [ "$PORT" -lt 1024 ] || [ "$PORT" -gt 65535 ]; then
-  echo "❌ Invalid port: $PORT (must be 1024-65535)"
+if ! echo "$PORT" | grep -qE '^[0-9]+$' || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
+  echo "❌ Invalid port: $PORT (must be 1-65535)"
   exit 1
+fi
+
+# Warn about privileged ports (< 1024) but allow them
+if [ "$PORT" -lt 1024 ]; then
+  echo "⚠️  Port $PORT requires root privileges (privileged port < 1024)"
+  echo "   The server will need to run as root or with proper capabilities"
 fi
 
 if lsof -nP -iTCP:${PORT} -sTCP:LISTEN >/dev/null 2>&1; then
