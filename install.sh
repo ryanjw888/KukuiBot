@@ -448,6 +448,10 @@ PFCTL_DAEMON_PLIST="/Library/LaunchDaemons/com.kukuibot.portfwd.plist"
 sudo launchctl bootout system/com.kukuibot.server 2>/dev/null || true
 sudo rm -f /Library/LaunchDaemons/com.kukuibot.server.plist 2>/dev/null || true
 
+# Fix ownership — old root daemon may have created files owned by root
+# (DB, WAL, SHM, logs, etc.). The server now always runs as the user.
+sudo chown -R "$(id -un):$(id -gn)" "$KUKUIBOT_HOME" 2>/dev/null || true
+
 if [ "$PORT" -lt 1024 ]; then
   BIND_PORT=8443
   echo "  Port $PORT → server binds to $BIND_PORT (pfctl forwards $PORT → $BIND_PORT)"
