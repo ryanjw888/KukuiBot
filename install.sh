@@ -31,6 +31,24 @@ done
 PORT="${CUSTOM_PORT:-${KUKUIBOT_PORT:-443}}"
 KUKUIBOT_HOME="${CUSTOM_DIR:-${KUKUIBOT_HOME:-$HOME/.kukuibot}}"
 
+# --- Interactive port selection (if not specified via flags) ---
+if [ -z "$CUSTOM_PORT" ] && [ -t 0 ]; then
+  echo "🧪 KukuiBot Installation"
+  echo ""
+  echo "Select HTTPS port for KukuiBot:"
+  echo "  443   - Standard HTTPS (recommended, requires root daemon)"
+  echo "  8443  - Alternative HTTPS (no root required)"
+  echo "  7000  - Legacy default"
+  echo "  Other - Custom port (1-65535)"
+  echo ""
+  read -p "Enter port [443]: " USER_PORT
+
+  if [ -n "$USER_PORT" ]; then
+    PORT="$USER_PORT"
+  fi
+  echo ""
+fi
+
 # --- Pre-flight validation ---
 if ! echo "$PORT" | grep -qE '^[0-9]+$' || [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
   echo "❌ Invalid port: $PORT (must be 1-65535)"
