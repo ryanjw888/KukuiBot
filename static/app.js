@@ -79,9 +79,10 @@ function cycleTheme() {
 })();
 applyTheme(localStorage.getItem(LS_THEME_KEY) || 'blue');
 
-// --- App Mode (chat vs editor) ---
-let appMode = 'chat'; // 'chat' | 'editor'
+// --- App Mode (chat vs editor vs email) ---
+let appMode = 'chat'; // 'chat' | 'editor' | 'email'
 let editorInitialized = false;
+let emailInitialized = false;
 let _editorModeSwitch = false; // true during the render that switches modes
 
 function setAppMode(mode, initialPath) {
@@ -95,6 +96,11 @@ function setAppMode(mode, initialPath) {
     EditorModule.closeMobileDropdown();
     EditorModule.destroy();
     editorInitialized = false;
+  }
+  // Destroy email module when leaving email mode
+  if (appMode === 'email' && typeof EmailModule !== 'undefined') {
+    EmailModule.destroy();
+    emailInitialized = false;
   }
   appMode = mode;
   showSettings = false;
@@ -118,6 +124,15 @@ function setAppMode(mode, initialPath) {
           EditorModule.loadTree();
         }
         editorInitialized = true;
+      }
+    });
+  }
+  // Init email module after render
+  if (mode === 'email') {
+    requestAnimationFrame(() => {
+      if (typeof EmailModule !== 'undefined') {
+        EmailModule.init();
+        emailInitialized = true;
       }
     });
   }
@@ -1980,10 +1995,18 @@ function render(opts = {}) {
         </div>
         <button class="sidebar-nav-item" onclick="doLogout()"><span class="sidebar-nav-icon">&#128682;</span>Logout</button>
       </div>` : ''}
-      <button class="sidebar-editor-btn" onclick="setAppMode(appMode === 'editor' ? 'chat' : 'editor')"><span class="sidebar-nav-icon">${appMode === 'editor' ? '&#128172;' : '&#128194;'}</span>${appMode === 'editor' ? 'Chat' : 'File Editor'}</button>
+      <div class="sidebar-mode-strip">
+        <button class="sidebar-mode-btn${appMode === 'chat' ? ' active' : ''}" onclick="setAppMode('chat')"><span class="sidebar-nav-icon">&#128172;</span>Chat</button>
+        <button class="sidebar-mode-btn${appMode === 'editor' ? ' active' : ''}" onclick="setAppMode('editor')"><span class="sidebar-nav-icon">&#128194;</span>Files</button>
+        <button class="sidebar-mode-btn${appMode === 'email' ? ' active' : ''}" onclick="setAppMode('email')"><span class="sidebar-nav-icon">&#9993;</span>Email</button>
+      </div>
       ${appMode === 'editor' ? `
       <div class="sidebar-section editor-sidebar-section">
         ${typeof EditorModule !== 'undefined' ? EditorModule.renderFileTreeSidebar() : '<div class="ft-loading">Loading...</div>'}
+      </div>
+      ` : appMode === 'email' ? `
+      <div class="sidebar-section email-sidebar-section">
+        ${typeof EmailModule !== 'undefined' ? EmailModule.renderSidebar() : '<div class="ft-loading">Loading...</div>'}
       </div>
       ` : `
       <div class="sidebar-section">
@@ -2029,6 +2052,11 @@ function render(opts = {}) {
           />
           <button id="mobile-editor-save" class="editor-btn mobile-editor-save" onclick="if(typeof EditorModule!=='undefined')EditorModule.save()" disabled title="Save">Save</button>
         </div>
+        ` : appMode === 'email' ? `
+        <div class="mobile-bar-left">
+          <button class="mobile-menu-btn" onclick="toggleSettings()" title="Menu"><img class="mobile-logo" src="/favicon-64.png?v=20260215-2240" alt="${APP_NAME}" /></button>
+          <span class="mobile-email-title">Email Drafter</span>
+        </div>
         ` : `
         <div class="mobile-bar-left">
           <button class="mobile-menu-btn" onclick="toggleSettings()" title="Menu"><img class="mobile-logo" src="/favicon-64.png?v=20260215-2240" alt="${APP_NAME}" /></button>
@@ -2070,6 +2098,10 @@ function render(opts = {}) {
       ${appMode === 'editor' ? `
       <div class="editor-panel">
         ${typeof EditorModule !== 'undefined' ? EditorModule.renderEditorPanel() : '<div class="editor-loading">Loading editor...</div>'}
+      </div>
+      ` : appMode === 'email' ? `
+      <div class="email-panel">
+        ${typeof EmailModule !== 'undefined' ? EmailModule.renderPanel() : '<div class="email-loading">Loading email module...</div>'}
       </div>
       ` : `
       <div class="messages" id="messages" onscroll="onMessagesScroll(event)">${renderMessagesInner(tab, def)}</div>

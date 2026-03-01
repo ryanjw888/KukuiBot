@@ -159,6 +159,7 @@ from routes.bridge import (
     _stop_bridge,
     shutdown_bridges,
 )
+from routes.email_drafter import router as drafter_router
 from routes.delegation import (
     router as delegation_router,
     init_delegation_routes,
@@ -223,6 +224,7 @@ app.include_router(integrations_router)
 app.include_router(tabs_router)
 app.include_router(bridge_router)
 app.include_router(delegation_router)
+app.include_router(drafter_router)
 
 # --- Logging ---
 

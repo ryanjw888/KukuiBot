@@ -42,6 +42,7 @@ SMTP_PORT = 587
 ALL_PERMS = [
     "read_inbox", "read_sent", "create_drafts",
     "send_owner_only", "send_within_org", "send_anyone", "trash",
+    "auto_draft",
 ]
 
 # --- Helpers ---
