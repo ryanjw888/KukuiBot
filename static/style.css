@@ -1088,10 +1088,19 @@ body {
   z-index: 1000; font-size: 11px;
 }
 .skills-popup-title {
+  display: flex; align-items: center; justify-content: space-between;
   padding: 4px 12px 6px; font-size: 10px; font-weight: 600;
   color: var(--muted, #8892b0); text-transform: uppercase; letter-spacing: 0.5px;
   border-bottom: 1px solid var(--border, #1c2333);
 }
+.skills-edit-btn {
+  font-size: 10px; font-weight: 500; font-family: inherit;
+  padding: 2px 8px; border-radius: 4px; border: none;
+  background: rgba(94,181,247,0.15); color: var(--accent, #5eb5f7);
+  cursor: pointer; text-transform: none; letter-spacing: 0;
+  transition: background 0.12s;
+}
+.skills-edit-btn:hover { background: rgba(94,181,247,0.3); }
 .skills-popup-item {
   display: flex; flex-direction: column; gap: 2px;
   padding: 6px 12px; cursor: pointer;
@@ -1337,11 +1346,22 @@ body {
   padding: 2px 4px 0; text-align: center;
 }
 /* Pending message badge (queued user messages) */
+.msg.user.pending { position: relative; }
 .msg.user.pending .bubble { opacity: 0.6; }
 .pending-badge {
   display: inline-block; font-size: 10px; font-weight: 600;
   color: #f59e0b; margin-top: 2px; padding: 0 12px;
 }
+.pending-dismiss {
+  position: absolute; top: 4px; right: 4px;
+  width: 20px; height: 20px; border-radius: 50%; border: none;
+  background: rgba(255,255,255,0.08); color: var(--muted, #8892b0);
+  font-size: 14px; line-height: 1; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.12s, color 0.12s;
+  padding: 0;
+}
+.pending-dismiss:hover { background: rgba(239,68,68,0.25); color: #f87171; }
 
 /* Login screen (full page) */
 .login-screen { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 24px; }

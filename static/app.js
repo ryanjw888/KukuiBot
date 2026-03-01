@@ -2328,14 +2328,17 @@ const _skillDisplayOrder = {
   'network-audit-execution': 1,
 };
 
+let _skillsDir = '';  // populated from API response
+
 async function _fetchSkillsForWorker(workerKey) {
   const cached = _skillsCache[workerKey];
-  if (cached && Date.now() - cached.ts < 60000) return cached.skills;
+  if (cached && Date.now() - cached.ts < 60000) { _skillsDir = cached.skillsDir || ''; return cached.skills; }
   try {
     const res = await fetch(API + '/api/skills/' + encodeURIComponent(workerKey));
     const data = await res.json();
     const skills = data.skills || [];
-    _skillsCache[workerKey] = { skills, ts: Date.now() };
+    _skillsDir = data.skills_dir || '';
+    _skillsCache[workerKey] = { skills, skillsDir: _skillsDir, ts: Date.now() };
     return skills;
   } catch { return []; }
 }
@@ -2361,10 +2364,19 @@ async function _toggleSkillsPopup(ev) {
   popup.style.position = 'fixed';
   popup.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
   popup.style.right = (window.innerWidth - rect.right) + 'px';
-  const title = document.createElement('div');
-  title.className = 'skills-popup-title';
-  title.textContent = 'Skills';
-  popup.appendChild(title);
+  const titleRow = document.createElement('div');
+  titleRow.className = 'skills-popup-title';
+  const titleLabel = document.createElement('span');
+  titleLabel.textContent = 'Skills';
+  titleRow.appendChild(titleLabel);
+  if (_skillsDir) {
+    const editBtn = document.createElement('button');
+    editBtn.className = 'skills-edit-btn';
+    editBtn.textContent = 'Edit';
+    editBtn.onclick = (e) => { e.stopPropagation(); document.getElementById('skills-popup')?.remove(); setAppMode('editor', _skillsDir); };
+    titleRow.appendChild(editBtn);
+  }
+  popup.appendChild(titleRow);
   skills.forEach(s => {
     const row = document.createElement('div');
     row.className = 'skills-popup-item';
@@ -2968,7 +2980,8 @@ function renderMessage(m, def, tabId = null, msgIdx = -1) {
   const pendingCls = m._pending ? ' pending' : '';
   const bubbleCls = hasChoiceBtns ? 'bubble has-choice-buttons' : 'bubble';
   const pendingBadge = m._pending ? '<div class="pending-badge">Pending — will send when ready</div>' : '';
-  return `<div class="msg ${cls}${pendingCls}"${streamingAttr}><div class="label">${label}</div><div class="${bubbleCls}">${content}${choiceBtnsHtml}</div>${thinkingHtml}${time ? `<div class="time">${time}${tokenStr}</div>` : ''}${pendingBadge}</div>`;
+  const pendingDismiss = m._pending ? `<button class="pending-dismiss" onclick="_cancelQueuedMessage(${m.id})" title="Remove from queue">&times;</button>` : '';
+  return `<div class="msg ${cls}${pendingCls}"${streamingAttr}>${pendingDismiss}<div class="label">${label}</div><div class="${bubbleCls}">${content}${choiceBtnsHtml}</div>${thinkingHtml}${time ? `<div class="time">${time}${tokenStr}</div>` : ''}${pendingBadge}</div>`;
 }
 
 function renderMessagesInner(tab, def) {
@@ -4482,6 +4495,19 @@ function quickSend(text) {
   send();
 }
 // --- Message Queue Helpers ---
+function _cancelQueuedMessage(msgId) {
+  const tab = activeTab();
+  if (!tab) return;
+  // Remove from queue
+  const qIdx = _messageQueue.findIndex(q => q.pendingMsgId === msgId);
+  if (qIdx !== -1) _messageQueue.splice(qIdx, 1);
+  // Remove from chat messages
+  const mIdx = (tab.messages || []).findIndex(m => m.id === msgId);
+  if (mIdx !== -1) tab.messages.splice(mIdx, 1);
+  persistTabs();
+  requestRender({ preserveScroll: true });
+}
+
 function _queueCountForTab(tab) {
   if (!tab) return 0;
   return _messageQueue.filter(q => q.tabId === tab.id).length;

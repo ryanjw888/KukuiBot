@@ -2482,7 +2482,7 @@ async def api_skills_for_worker(worker_key: str):
         matched.sort(key=lambda s: next(
             (sk.get("priority", 99) for sk in all_skills if sk["id"] == s["id"]), 99
         ))
-        return {"ok": True, "skills": matched}
+        return {"ok": True, "skills": matched, "skills_dir": str(SKILLS_DIR)}
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
