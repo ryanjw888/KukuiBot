@@ -53,7 +53,8 @@ async def api_gmail_connect(req: Request):
     if not email_addr or not app_password:
         return JSONResponse({"error": "Email and app password are required"}, status_code=400)
     save_gmail_credentials(email_addr, app_password)
-    result = test_gmail_connection()
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, test_gmail_connection)
     if not result["ok"]:
         # Credentials are saved but test failed — warn but don't clear
         return {"ok": True, "email": email_addr, "warning": result["error"]}
@@ -64,7 +65,8 @@ async def api_gmail_connect(req: Request):
 async def api_gmail_test():
     """Test the saved Gmail connection."""
     from gmail_bridge import test_gmail_connection
-    return test_gmail_connection()
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, test_gmail_connection)
 
 
 @router.post("/api/gmail/send-test")
@@ -87,7 +89,7 @@ async def api_gmail_send_test():
             send_to = oe
             break
 
-    try:
+    def _do_send():
         msg = MIMEText(
             "This is a test email sent from KukuiBot.\n\n"
             "If you received this, your Gmail integration is working correctly.\n\n"
@@ -104,6 +106,9 @@ async def api_gmail_send_test():
             server.login(email_addr, app_password)
             server.sendmail(email_addr, [send_to], msg.as_string())
 
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _do_send)
         logger.info(f"Gmail test email sent to {send_to}")
         return {"ok": True, "to": send_to}
     except Exception as e:
@@ -128,12 +133,14 @@ async def api_gmail_search(req: Request):
     max_results = min(int(body.get("max_results", 20)), 50)
     search = body.get("search", "")
     use_cache = body.get("cache", True)
+    loop = asyncio.get_event_loop()
 
     # When user is actively searching, always go to IMAP to find older emails
     # not in the local cache. Cache is only used for browsing (no search query).
     if search:
         try:
-            messages = list_messages(folder=folder, max_results=max_results, search=search)
+            messages = await loop.run_in_executor(
+                None, lambda: list_messages(folder=folder, max_results=max_results, search=search))
             # Cache the results
             try:
                 import email_cache
@@ -174,7 +181,8 @@ async def api_gmail_search(req: Request):
 
     # IMAP fallback
     try:
-        messages = list_messages(folder=folder, max_results=max_results, search=search)
+        messages = await loop.run_in_executor(
+            None, lambda: list_messages(folder=folder, max_results=max_results, search=search))
         # Cache the results in background
         try:
             import email_cache
@@ -241,7 +249,8 @@ async def api_gmail_message(req: Request):
 
     # IMAP fallback
     try:
-        message = get_message(folder, uid)
+        loop = asyncio.get_event_loop()
+        message = await loop.run_in_executor(None, lambda: get_message(folder, uid))
         # Cache the full message for next time
         try:
             import email_cache
@@ -261,7 +270,8 @@ async def api_gmail_folders():
     """List available Gmail IMAP folders."""
     from gmail_bridge import list_folders
     try:
-        folders = list_folders()
+        loop = asyncio.get_event_loop()
+        folders = await loop.run_in_executor(None, list_folders)
         return {"ok": True, "folders": folders}
     except PermissionError as e:
         return JSONResponse({"error": str(e)}, status_code=403)
@@ -281,7 +291,8 @@ async def api_gmail_draft(req: Request):
     if not to or not subject:
         return JSONResponse({"error": "to and subject are required"}, status_code=400)
     try:
-        result = create_draft(to, subject, email_body)
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, lambda: create_draft(to, subject, email_body))
         return {"ok": True, **result}
     except PermissionError as e:
         return JSONResponse({"error": str(e)}, status_code=403)
@@ -303,7 +314,8 @@ async def api_gmail_send(req: Request):
     if not to or not subject:
         return JSONResponse({"error": "to and subject are required"}, status_code=400)
     try:
-        result = send_email(to, subject, email_body)
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, lambda: send_email(to, subject, email_body))
         return {"ok": True, **result}
     except PermissionError as e:
         return JSONResponse({"error": str(e)}, status_code=403)
@@ -327,7 +339,8 @@ async def api_gmail_trash(req: Request):
     if not str(uid).isdigit():
         return JSONResponse({"error": "uid must be a single numeric message ID — bulk trash is not allowed"}, status_code=400)
     try:
-        result = trash_message(folder, uid)
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, lambda: trash_message(folder, uid))
         # Also remove from cache
         try:
             import email_cache
@@ -355,7 +368,8 @@ async def api_gmail_flags(req: Request):
     if not str(uid).isdigit():
         return JSONResponse({"error": "uid must be a single numeric message ID"}, status_code=400)
     try:
-        result = set_message_flags(folder, uid, flags)
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, lambda: set_message_flags(folder, uid, flags))
         # Also update cache
         try:
             import email_cache
@@ -380,7 +394,9 @@ async def api_gmail_attachment(folder: str = "", uid: str = "", filename: str = 
     if not str(uid).isdigit():
         return JSONResponse({"error": "uid must be numeric"}, status_code=400)
     try:
-        content_bytes, content_type, fname = get_attachment(folder, uid, filename)
+        loop = asyncio.get_event_loop()
+        content_bytes, content_type, fname = await loop.run_in_executor(
+            None, lambda: get_attachment(folder, uid, filename))
         return Response(
             content=content_bytes,
             media_type=content_type,
@@ -417,7 +433,8 @@ async def api_gmail_send_report(req: Request):
     if not to or not html_path:
         return JSONResponse({"error": "to and html_path are required"}, status_code=400)
     try:
-        result = send_html_report(to, subject, html_path)
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, lambda: send_html_report(to, subject, html_path))
         return {"ok": True, **result}
     except PermissionError as e:
         return JSONResponse({"error": str(e)}, status_code=403)
@@ -439,7 +456,8 @@ async def api_gmail_draft_report(req: Request):
     if not to or not html_path:
         return JSONResponse({"error": "to and html_path are required"}, status_code=400)
     try:
-        result = draft_html_report(to, subject, html_path)
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, lambda: draft_html_report(to, subject, html_path))
         return {"ok": True, **result}
     except PermissionError as e:
         return JSONResponse({"error": str(e)}, status_code=403)

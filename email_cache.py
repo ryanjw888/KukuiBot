@@ -35,7 +35,7 @@ def _get_db() -> sqlite3.Connection:
 
 
 def _ensure_schema(db: sqlite3.Connection):
-    """Create table and indexes if not exists."""
+    """Create table, indexes, FTS5 virtual table, and triggers if not exists."""
     db.executescript("""
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,6 +60,37 @@ def _ensure_schema(db: sqlite3.Connection):
         CREATE INDEX IF NOT EXISTS idx_messages_folder_uid ON messages(folder, uid);
         CREATE INDEX IF NOT EXISTS idx_messages_synced ON messages(synced_at);
     """)
+    # FTS5 virtual table for fast full-text search
+    # content= links it to the messages table (content-sync mode)
+    # content_rowid= maps FTS rowid to messages.id
+    try:
+        db.executescript("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                from_addr, to_addr, subject, snippet, body_text,
+                content='messages', content_rowid='id'
+            );
+
+            -- Triggers to keep FTS in sync with the messages table
+            CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+                INSERT INTO messages_fts(rowid, from_addr, to_addr, subject, snippet, body_text)
+                VALUES (new.id, new.from_addr, new.to_addr, new.subject, new.snippet, new.body_text);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+                INSERT INTO messages_fts(messages_fts, rowid, from_addr, to_addr, subject, snippet, body_text)
+                VALUES ('delete', old.id, old.from_addr, old.to_addr, old.subject, old.snippet, old.body_text);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+                INSERT INTO messages_fts(messages_fts, rowid, from_addr, to_addr, subject, snippet, body_text)
+                VALUES ('delete', old.id, old.from_addr, old.to_addr, old.subject, old.snippet, old.body_text);
+                INSERT INTO messages_fts(rowid, from_addr, to_addr, subject, snippet, body_text)
+                VALUES (new.id, new.from_addr, new.to_addr, new.subject, new.snippet, new.body_text);
+            END;
+        """)
+    except Exception as e:
+        # FTS5 may not be available on all SQLite builds — fall back gracefully
+        logger.warning(f"email_cache: FTS5 setup failed (will use LIKE fallback): {e}")
 
 
 def _parse_date_ts(date_str: str) -> int:
@@ -101,12 +132,41 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     return d
 
 
+def _fts_available(db: sqlite3.Connection) -> bool:
+    """Check if the FTS5 virtual table exists."""
+    try:
+        db.execute("SELECT 1 FROM messages_fts LIMIT 0")
+        return True
+    except Exception:
+        return False
+
+
 def get_cached_messages(folder: str, max_results: int = 50, search: str = "") -> list[dict]:
-    """Get messages from cache. If search provided, LIKE match on from/to/subject/snippet."""
+    """Get messages from cache. Uses FTS5 for search when available, LIKE as fallback."""
     try:
         db = _get_db()
         try:
             if search:
+                # Try FTS5 first for fast full-text search
+                if _fts_available(db):
+                    try:
+                        # Escape FTS5 special characters and build query
+                        # Use double-quotes to treat search as a phrase/token match
+                        safe_search = search.replace('"', '""')
+                        rows = db.execute(
+                            """SELECT m.uid, m.folder, m.message_id, m.from_addr, m.to_addr,
+                                      m.subject, m.date, m.date_ts, m.snippet, m.is_read,
+                                      m.has_attachments, m.attachment_info, m.synced_at
+                               FROM messages m
+                               JOIN messages_fts fts ON m.id = fts.rowid
+                               WHERE m.folder = ? AND messages_fts MATCH ?
+                               ORDER BY m.date_ts DESC LIMIT ?""",
+                            (folder, f'"{safe_search}"', max_results),
+                        ).fetchall()
+                        return [_row_to_dict(r) for r in rows]
+                    except Exception as e:
+                        logger.warning(f"FTS5 search failed, falling back to LIKE: {e}")
+                # LIKE fallback
                 like = f"%{search}%"
                 rows = db.execute(
                     """SELECT uid, folder, message_id, from_addr, to_addr, subject, date,
@@ -171,13 +231,13 @@ def upsert_messages(messages: list[dict], folder: str):
                                             date, date_ts, snippet, is_read, synced_at)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                        ON CONFLICT(uid, folder) DO UPDATE SET
-                           message_id = excluded.message_id,
-                           from_addr = excluded.from_addr,
-                           to_addr = excluded.to_addr,
-                           subject = excluded.subject,
-                           date = excluded.date,
-                           date_ts = excluded.date_ts,
-                           snippet = excluded.snippet,
+                           message_id = CASE WHEN excluded.message_id != '' THEN excluded.message_id ELSE messages.message_id END,
+                           from_addr = CASE WHEN excluded.from_addr != '' THEN excluded.from_addr ELSE messages.from_addr END,
+                           to_addr = CASE WHEN excluded.to_addr != '' THEN excluded.to_addr ELSE messages.to_addr END,
+                           subject = CASE WHEN excluded.subject != '' AND excluded.subject != '(no subject)' THEN excluded.subject ELSE messages.subject END,
+                           date = CASE WHEN excluded.date != '' THEN excluded.date ELSE messages.date END,
+                           date_ts = CASE WHEN excluded.date_ts > 0 THEN excluded.date_ts ELSE messages.date_ts END,
+                           snippet = CASE WHEN excluded.snippet != '' THEN excluded.snippet ELSE messages.snippet END,
                            is_read = excluded.is_read,
                            synced_at = excluded.synced_at""",
                     (
@@ -334,10 +394,15 @@ def cleanup_old_messages(days: int = 30):
 
 
 def clear_cache():
-    """Drop and recreate the messages table."""
+    """Drop and recreate the messages table and FTS index."""
     try:
         db = _get_db()
         try:
+            # Drop triggers first (they reference messages)
+            db.execute("DROP TRIGGER IF EXISTS messages_ai")
+            db.execute("DROP TRIGGER IF EXISTS messages_ad")
+            db.execute("DROP TRIGGER IF EXISTS messages_au")
+            db.execute("DROP TABLE IF EXISTS messages_fts")
             db.execute("DROP TABLE IF EXISTS messages")
             _ensure_schema(db)
             db.commit()

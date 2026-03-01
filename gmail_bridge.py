@@ -23,10 +23,13 @@ Security:
 
 import base64
 import email
+import email.header
 import email.utils
 import imaplib
 import logging
+import re as _re_module
 import smtplib
+import threading
 import time
 from email.mime.text import MIMEText
 
@@ -195,10 +198,16 @@ def test_gmail_connection() -> dict:
         return {"ok": False, "error": str(e)}
 
 
-# --- IMAP helpers ---
+# --- IMAP Connection Pool ---
 
-def _imap_connect() -> imaplib.IMAP4_SSL:
-    """Return an authenticated IMAP connection."""
+_pool_lock = threading.Lock()
+_pool: list[tuple[imaplib.IMAP4_SSL, float]] = []  # [(conn, created_at), ...]
+_POOL_MAX_SIZE = 2
+_POOL_MAX_AGE = 300  # 5 minutes
+
+
+def _imap_connect_raw() -> imaplib.IMAP4_SSL:
+    """Create a fresh authenticated IMAP connection (no pooling)."""
     email_addr = _get_config("gmail.email", "")
     app_password = _get_config("gmail.app_password", "")
     if not email_addr or not app_password:
@@ -206,6 +215,68 @@ def _imap_connect() -> imaplib.IMAP4_SSL:
     imap = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
     imap.login(email_addr, app_password)
     return imap
+
+
+def _get_imap() -> imaplib.IMAP4_SSL:
+    """Get an IMAP connection from the pool, or create a new one.
+
+    The returned connection must be returned via _return_imap() after use,
+    or discarded via _discard_imap() on error.
+    """
+    with _pool_lock:
+        now = time.time()
+        while _pool:
+            conn, created_at = _pool.pop()
+            if now - created_at > _POOL_MAX_AGE:
+                # Too old, close and skip
+                try:
+                    conn.logout()
+                except Exception:
+                    pass
+                continue
+            # Check if connection is still alive
+            try:
+                status, _ = conn.noop()
+                if status == "OK":
+                    return conn
+            except Exception:
+                pass
+            # Dead connection, discard
+            try:
+                conn.logout()
+            except Exception:
+                pass
+    # No pooled connection available — create new
+    return _imap_connect_raw()
+
+
+def _return_imap(conn: imaplib.IMAP4_SSL):
+    """Return a connection to the pool for reuse."""
+    with _pool_lock:
+        if len(_pool) < _POOL_MAX_SIZE:
+            _pool.append((conn, time.time()))
+        else:
+            try:
+                conn.logout()
+            except Exception:
+                pass
+
+
+def _discard_imap(conn: imaplib.IMAP4_SSL):
+    """Discard a connection that errored (don't return to pool)."""
+    try:
+        conn.logout()
+    except Exception:
+        pass
+
+
+# Legacy name kept for test_gmail_connection which needs a throwaway connection
+def _imap_connect() -> imaplib.IMAP4_SSL:
+    """Return an authenticated IMAP connection (not pooled, caller must logout)."""
+    return _imap_connect_raw()
+
+
+# --- IMAP helpers ---
 
 
 def _parse_email_headers(msg: email.message.Message) -> dict:
@@ -471,7 +542,8 @@ def list_messages(folder: str = "INBOX", max_results: int = 20, search: str = ""
         check_permission("read_inbox")
 
     max_results = min(max_results, 50)
-    imap = _imap_connect()
+    imap = _get_imap()
+    errored = False
 
     try:
         # Select folder
@@ -484,7 +556,6 @@ def list_messages(folder: str = "INBOX", max_results: int = 20, search: str = ""
         # Search — convert user query to IMAP criteria
         criteria = _build_imap_search(search)
         if isinstance(criteria, tuple):
-            # X-GM-RAW returns (key, value) for imap.search()
             status, data = imap.search(None, *criteria)
         else:
             status, data = imap.search(None, criteria)
@@ -501,54 +572,131 @@ def list_messages(folder: str = "INBOX", max_results: int = 20, search: str = ""
 
         from injection_guard import scan_and_filter
 
+        # Batch fetch: headers + flags only (one BODY section = reliable imaplib parsing)
+        # BODY.PEEK does NOT set \Seen flag (critical for inbox listing)
+        # Snippets come from cache or are left empty — avoids imaplib multi-section bugs
+        msg_set = b",".join(msg_nums)
+        fetch_spec = "(BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT DATE MESSAGE-ID)] FLAGS)"
+        status, batch_data = imap.fetch(msg_set, fetch_spec)
+        if status != "OK":
+            return []
+
+        # Parse batch response — with single BODY section, each message is one tuple:
+        #   (b'NUM (FLAGS (...) BODY[HEADER.FIELDS ...] {size}', b'header data')
         summaries = []
-        for num in msg_nums:
+        parsed = _parse_batch_fetch(batch_data, msg_nums)
+
+        # Load cached snippets so we don't need TEXT in the batch fetch
+        snippet_map = {}
+        try:
+            import email_cache
+            db = email_cache._get_db()
             try:
-                status, msg_data = imap.fetch(num, "(RFC822 FLAGS)")
-                if status != "OK" or not msg_data:
-                    continue
-                # IMAP response with FLAGS: msg_data may contain multiple parts
-                # Typically: [(b'num (FLAGS (...) RFC822 {size}', raw_bytes), b')']
-                raw = None
-                flags_str = b""
-                for part in msg_data:
-                    if isinstance(part, tuple):
-                        flags_str = part[0]  # contains FLAGS info
-                        raw = part[1]
-                        break
-                if raw is None:
-                    continue
-                # Parse FLAGS — look for \Seen
-                is_read = b"\\Seen" in flags_str
-                msg = email.message_from_bytes(raw)
+                placeholders = ",".join("?" for _ in msg_nums)
+                uid_strs = [n.decode() for n in msg_nums]
+                rows = db.execute(
+                    f"SELECT uid, snippet FROM messages WHERE folder = ? AND uid IN ({placeholders})",
+                    [folder] + uid_strs,
+                ).fetchall()
+                for r in rows:
+                    snippet_map[str(r[0])] = r[1] or ""
+            finally:
+                db.close()
+        except Exception:
+            pass  # No cache available — snippets will be empty
+
+        for num in msg_nums:
+            num_str = num.decode()
+            entry = parsed.get(num_str)
+            if not entry:
+                continue
+            try:
+                header_bytes = entry.get("headers", b"")
+                flags_str = entry.get("flags_str", b"")
+
+                # Parse headers
+                msg = email.message_from_bytes(header_bytes)
                 headers = _parse_email_headers(msg)
-                headers["uid"] = num.decode()
+                headers["uid"] = num_str
                 headers["folder"] = folder
-                headers["is_read"] = is_read
-                # Extract snippet from body
-                try:
-                    body_text = _extract_body(msg)
-                    snippet = body_text[:120].replace("\n", " ").strip() if body_text else ""
-                except Exception:
-                    snippet = ""
-                headers["snippet"] = snippet
+                headers["is_read"] = b"\\Seen" in flags_str
+                headers["is_starred"] = b"\\Flagged" in flags_str
+                headers["snippet"] = snippet_map.get(num_str, "")
+
                 # Scan subject for injection attempts
                 original_subject = headers.get("subject", "")
                 headers["subject"] = scan_and_filter(original_subject, source="email_subject")
                 if headers["subject"] != original_subject:
                     headers["injection_filtered"] = True
-                    logger.warning(f"Gmail list: injection filtered in subject of msg {num.decode()}")
+                    logger.warning(f"Gmail list: injection filtered in subject of msg {num_str}")
                 summaries.append(headers)
             except Exception as e:
-                logger.warning(f"Failed to fetch message {num}: {e}")
+                logger.warning(f"Failed to parse message {num_str}: {e}")
                 continue
 
         return summaries
+    except Exception:
+        errored = True
+        raise
     finally:
-        try:
-            imap.logout()
-        except Exception:
-            pass
+        if errored:
+            _discard_imap(imap)
+        else:
+            _return_imap(imap)
+
+
+def _parse_batch_fetch(batch_data: list, msg_nums: list[bytes]) -> dict:
+    """Parse the flat batch response from imap.fetch() into per-message dicts.
+
+    Returns: {msg_num_str: {"headers": bytes, "flags_str": bytes}}
+
+    With a single BODY section fetch (HEADER.FIELDS + FLAGS), each message
+    produces one tuple: (b'NUM (FLAGS (...) BODY[HEADER.FIELDS ...] {size}', b'data')
+    followed by b')'.
+
+    The descriptor contains the message sequence number, FLAGS, and the BODY spec.
+    We track the "current message number" to handle continuation tuples that
+    don't start with a message number (e.g. multi-section responses).
+    """
+    result = {}
+    valid_nums = {num.decode() for num in msg_nums}
+
+    # Pre-initialize entries for all requested message numbers
+    for num_str in valid_nums:
+        result[num_str] = {"headers": b"", "flags_str": b""}
+
+    current_msg = None  # track current message for continuation tuples
+
+    for item in batch_data:
+        if not isinstance(item, tuple) or len(item) < 2:
+            continue
+        descriptor = item[0]
+        payload = item[1]
+
+        # Extract message number from start of descriptor
+        desc_str = descriptor.decode("ascii", errors="replace")
+        parts = desc_str.split(None, 1)
+        if not parts:
+            continue
+
+        # Check if first token is a message number (digits only)
+        first_token = parts[0]
+        if first_token.isdigit() and first_token in valid_nums:
+            current_msg = first_token
+        elif current_msg is None:
+            continue  # can't associate this tuple with a message
+
+        msg_num = current_msg
+        desc_upper = desc_str.upper()
+
+        # Store the full descriptor for FLAGS parsing (contains FLAGS inline)
+        if "FLAGS" in desc_upper:
+            result[msg_num]["flags_str"] = descriptor
+
+        if "HEADER.FIELDS" in desc_upper or (first_token.isdigit() and b"BODY[" in descriptor):
+            result[msg_num]["headers"] = payload
+
+    return result
 
 
 def get_message(folder: str, uid: str) -> dict:
@@ -559,7 +707,8 @@ def get_message(folder: str, uid: str) -> dict:
     """
     check_permission("read_inbox")
 
-    imap = _imap_connect()
+    imap = _get_imap()
+    errored = False
     try:
         imap_folder = _resolve_folder(folder)
 
@@ -607,18 +756,22 @@ def get_message(folder: str, uid: str) -> dict:
             "attachments": attachments,
             "has_attachments": bool(attachments),
         }
+    except Exception:
+        errored = True
+        raise
     finally:
-        try:
-            imap.logout()
-        except Exception:
-            pass
+        if errored:
+            _discard_imap(imap)
+        else:
+            _return_imap(imap)
 
 
 def list_folders() -> list[str]:
     """List available IMAP folders."""
     check_permission("read_inbox")
 
-    imap = _imap_connect()
+    imap = _get_imap()
+    errored = False
     try:
         status, folders = imap.list()
         if status != "OK":
@@ -631,11 +784,14 @@ def list_folders() -> list[str]:
                 name = parts[1].strip('"')
                 result.append(name)
         return result
+    except Exception:
+        errored = True
+        raise
     finally:
-        try:
-            imap.logout()
-        except Exception:
-            pass
+        if errored:
+            _discard_imap(imap)
+        else:
+            _return_imap(imap)
 
 
 def get_attachment(folder: str, uid: str, filename: str) -> tuple[bytes, str, str]:
@@ -647,7 +803,8 @@ def get_attachment(folder: str, uid: str, filename: str) -> tuple[bytes, str, st
     """
     check_permission("read_inbox")
 
-    imap = _imap_connect()
+    imap = _get_imap()
+    errored = False
     try:
         imap_folder = _resolve_folder(folder)
 
@@ -672,11 +829,14 @@ def get_attachment(folder: str, uid: str, filename: str) -> tuple[bytes, str, st
                 return payload, content_type, filename
 
         raise RuntimeError(f"Attachment '{filename}' not found in message {uid}")
+    except Exception:
+        errored = True
+        raise
     finally:
-        try:
-            imap.logout()
-        except Exception:
-            pass
+        if errored:
+            _discard_imap(imap)
+        else:
+            _return_imap(imap)
 
 
 # --- Write Operations ---
@@ -739,7 +899,8 @@ def create_draft(to: str, subject: str, body: str) -> dict:
     msg["To"] = to
     msg["Subject"] = subject
 
-    imap = _imap_connect()
+    imap = _get_imap()
+    errored = False
     try:
         status, _ = imap.append(
             '"[Gmail]/Drafts"', "\\Draft",
@@ -750,11 +911,14 @@ def create_draft(to: str, subject: str, body: str) -> dict:
             raise RuntimeError("Failed to create draft")
         logger.info(f"Gmail draft created: to={to} subject={subject[:50]}")
         return {"ok": True, "to": to, "subject": subject}
+    except Exception:
+        errored = True
+        raise
     finally:
-        try:
-            imap.logout()
-        except Exception:
-            pass
+        if errored:
+            _discard_imap(imap)
+        else:
+            _return_imap(imap)
 
 
 def send_email(to: str, subject: str, body: str) -> dict:
@@ -884,7 +1048,8 @@ def draft_html_report(to: str, subject: str, html_path: str) -> dict:
     msg["To"] = to
     msg["Subject"] = subject
 
-    imap = _imap_connect()
+    imap = _get_imap()
+    errored = False
     try:
         status, _ = imap.append(
             '"[Gmail]/Drafts"', "\\Draft",
@@ -895,11 +1060,14 @@ def draft_html_report(to: str, subject: str, html_path: str) -> dict:
             raise RuntimeError("Failed to create draft")
         logger.info(f"Gmail HTML draft created: to={to} subject={subject[:50]}")
         return {"ok": True, "to": to, "subject": subject}
+    except Exception:
+        errored = True
+        raise
     finally:
-        try:
-            imap.logout()
-        except Exception:
-            pass
+        if errored:
+            _discard_imap(imap)
+        else:
+            _return_imap(imap)
 
 
 # --- Trash Operations ---
@@ -908,7 +1076,8 @@ def trash_message(folder: str, uid: str) -> dict:
     """Move a message to trash via IMAP. Requires trash permission."""
     check_permission("trash")
 
-    imap = _imap_connect()
+    imap = _get_imap()
+    errored = False
     try:
         imap_folder = _resolve_folder(folder)
 
@@ -926,11 +1095,14 @@ def trash_message(folder: str, uid: str) -> dict:
 
         logger.info(f"Gmail message trashed: {uid} from {folder}")
         return {"ok": True, "uid": uid}
+    except Exception:
+        errored = True
+        raise
     finally:
-        try:
-            imap.logout()
-        except Exception:
-            pass
+        if errored:
+            _discard_imap(imap)
+        else:
+            _return_imap(imap)
 
 
 def set_message_flags(folder: str, uid: str, flags: dict) -> dict:
@@ -945,7 +1117,8 @@ def set_message_flags(folder: str, uid: str, flags: dict) -> dict:
     """
     check_permission("read_inbox")
 
-    imap = _imap_connect()
+    imap = _get_imap()
+    errored = False
     try:
         imap_folder = _resolve_folder(folder)
 
@@ -959,10 +1132,19 @@ def set_message_flags(folder: str, uid: str, flags: dict) -> dict:
             else:
                 imap.store(uid.encode(), "-FLAGS", "\\Seen")
 
+        if "flagged" in flags:
+            if flags["flagged"]:
+                imap.store(uid.encode(), "+FLAGS", "\\Flagged")
+            else:
+                imap.store(uid.encode(), "-FLAGS", "\\Flagged")
+
         logger.info(f"Gmail flags updated: uid={uid} folder={folder} flags={flags}")
         return {"ok": True, "uid": uid}
+    except Exception:
+        errored = True
+        raise
     finally:
-        try:
-            imap.logout()
-        except Exception:
-            pass
+        if errored:
+            _discard_imap(imap)
+        else:
+            _return_imap(imap)

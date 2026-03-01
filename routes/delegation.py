@@ -1035,10 +1035,10 @@ async def _system_wake():
     """Post-startup: reconcile stale tasks, re-dispatch orphaned dispatches, and wake coordinator sessions.
 
     Called once as an asyncio.create_task() during server startup.
-    Waits 5 seconds for the server to finish binding before running.
+    Waits briefly for the server to finish binding before running.
     """
     # Brief delay to let the server finish binding and accept requests
-    await asyncio.sleep(5)
+    await asyncio.sleep(1)
     logger.info("System wake: checking for in-flight tasks and coordinator sessions")
 
     try:

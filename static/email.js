@@ -29,6 +29,7 @@ const EmailModule = (function () {
   let inboxFolder = 'INBOX';    // current folder
   let inboxSearch = '';          // IMAP search query
   let inboxLoading = false;
+  let searchLoading = false;     // true while a search query is in-flight
   let selectedMessage = null;   // full message object from /api/gmail/message
   let selectedUid = null;       // uid of currently selected message
   let messageLoading = false;
@@ -140,6 +141,10 @@ const EmailModule = (function () {
       inboxLoading = true;
       rerender();
     }
+    if (inboxSearch) {
+      searchLoading = true;
+      patchInboxList();
+    }
     const payload = { folder: inboxFolder, max_results: 50, search: inboxSearch };
     if (skipCache) payload.cache = false;
     const resp = await apiFetch('/api/gmail/search', {
@@ -153,6 +158,7 @@ const EmailModule = (function () {
       console.error('fetchInbox error:', resp.error);
     }
     inboxLoading = false;
+    searchLoading = false;
     patchInboxList();
   }
 
@@ -892,9 +898,14 @@ const EmailModule = (function () {
   // --- Inbox DOM patching (prevents full-page blink) ---
 
   function buildListHtml() {
+    const clearBtn = inboxSearch ? `<button class="inbox-search-clear" onclick="EmailModule.clearSearch()" title="Clear search">&times;</button>` : '';
+    const dotsHtml = searchLoading ? '<span class="inbox-search-dots"><span>.</span><span>.</span><span>.</span></span>' : '';
     let html = `<div class="inbox-search-bar">
-      <input class="inbox-search" type="text" placeholder="Search Gmail..." value="${escHtml(inboxSearch)}"
-        onkeydown="if(event.key==='Enter'){EmailModule.setInboxSearch(this.value)}" />
+      <div class="inbox-search-wrap">
+        <input class="inbox-search" type="text" placeholder="Search Gmail..." value="${escHtml(inboxSearch)}"
+          onkeydown="if(event.key==='Enter'){EmailModule.setInboxSearch(this.value)}" />
+        ${dotsHtml}${clearBtn}
+      </div>
     </div>`;
     if (inboxLoading && inboxMessages.length === 0) {
       html += '<div class="inbox-empty"><span class="email-spinner"></span><div>Loading...</div></div>';
@@ -905,10 +916,15 @@ const EmailModule = (function () {
         const isSelected = String(m.uid) === String(selectedUid);
         const unreadCls = m.is_read ? '' : ' unread';
         const selectedCls = isSelected ? ' selected' : '';
+        const starCls = m.is_starred ? ' starred' : '';
+        const starChar = m.is_starred ? '\u2605' : '\u2606';
         return `<div class="inbox-msg-row${unreadCls}${selectedCls}" onclick="EmailModule.selectMessage('${escHtml(m.folder || inboxFolder)}', '${escHtml(String(m.uid))}')">
-          <div class="inbox-msg-sender">${escHtml(parseSender(m.from))}</div>
-          <div class="inbox-msg-subject">${escHtml(m.subject || '(no subject)')}</div>
-          <div class="inbox-msg-snippet">${escHtml(m.snippet || '')}</div>
+          <span class="inbox-msg-star${starCls}" onclick="EmailModule.toggleStar('${escHtml(m.folder || inboxFolder)}', '${escHtml(String(m.uid))}', event)" title="${m.is_starred ? 'Unstar' : 'Star'}">${starChar}</span>
+          <div class="inbox-msg-content">
+            <div class="inbox-msg-sender">${escHtml(parseSender(m.from))}</div>
+            <div class="inbox-msg-subject">${escHtml(m.subject || '(no subject)')}</div>
+            <div class="inbox-msg-snippet">${escHtml(m.snippet || '')}</div>
+          </div>
           <div class="inbox-msg-date">${fmtInboxDate(m.date)}</div>
         </div>`;
       }).join('');
@@ -943,8 +959,15 @@ const EmailModule = (function () {
         bodyContent = `<pre class="inbox-preview-text">${escHtml(sm.body || '(empty)')}</pre>`;
       }
       const attachmentsHtml = (sm.attachments && sm.attachments.length) ? renderAttachments(sm.attachments) : '';
+      const listMsg = inboxMessages.find(m => String(m.uid) === String(sm.uid || selectedUid));
+      const isStarred = listMsg ? listMsg.is_starred : false;
+      const previewStarCls = isStarred ? ' starred' : '';
+      const previewStarChar = isStarred ? '\u2605' : '\u2606';
       html = `<div class="inbox-preview-header">
-          <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:4px">${escHtml(sm.subject || '(no subject)')}</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <span class="inbox-preview-star${previewStarCls}" onclick="EmailModule.toggleStar('${escHtml(sm.folder || inboxFolder)}', '${escHtml(String(sm.uid || selectedUid))}')" title="${isStarred ? 'Unstar' : 'Star'}">${previewStarChar}</span>
+            <div style="font-size:15px;font-weight:600;color:var(--text)">${escHtml(sm.subject || '(no subject)')}</div>
+          </div>
           <div style="font-size:12px;color:var(--muted);margin-bottom:2px">From: ${escHtml(sm.from || '')}</div>
           <div style="font-size:12px;color:var(--muted);margin-bottom:2px">To: ${escHtml(sm.to || '')}</div>
           <div style="font-size:12px;color:var(--muted)">Date: ${escHtml(sm.date || '')}</div>
@@ -1016,9 +1039,16 @@ const EmailModule = (function () {
       }
 
       const attachmentsHtml = (sm.attachments && sm.attachments.length) ? renderAttachments(sm.attachments) : '';
+      const listMsg2 = inboxMessages.find(m => String(m.uid) === String(sm.uid || selectedUid));
+      const isStarred2 = listMsg2 ? listMsg2.is_starred : false;
+      const previewStarCls2 = isStarred2 ? ' starred' : '';
+      const previewStarChar2 = isStarred2 ? '\u2605' : '\u2606';
 
       previewHtml = `<div class="inbox-preview-header">
-          <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:4px">${escHtml(sm.subject || '(no subject)')}</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <span class="inbox-preview-star${previewStarCls2}" onclick="EmailModule.toggleStar('${escHtml(sm.folder || inboxFolder)}', '${escHtml(String(sm.uid || selectedUid))}')" title="${isStarred2 ? 'Unstar' : 'Star'}">${previewStarChar2}</span>
+            <div style="font-size:15px;font-weight:600;color:var(--text)">${escHtml(sm.subject || '(no subject)')}</div>
+          </div>
           <div style="font-size:12px;color:var(--muted);margin-bottom:2px">From: ${escHtml(sm.from || '')}</div>
           <div style="font-size:12px;color:var(--muted);margin-bottom:2px">To: ${escHtml(sm.to || '')}</div>
           <div style="font-size:12px;color:var(--muted)">Date: ${escHtml(sm.date || '')}</div>
@@ -1117,6 +1147,31 @@ const EmailModule = (function () {
   function setInboxSearch(query) {
     inboxSearch = query;
     fetchInbox();
+  }
+
+  function clearSearch() {
+    inboxSearch = '';
+    fetchInbox();
+  }
+
+  async function toggleStar(folder, uid, event) {
+    if (event) event.stopPropagation();
+    const msg = inboxMessages.find(m => String(m.uid) === String(uid));
+    if (!msg) return;
+    const newFlagged = !msg.is_starred;
+    // Optimistic UI update
+    msg.is_starred = newFlagged;
+    patchInboxList();
+    const resp = await apiFetch('/api/gmail/flags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder, uid: String(uid), flags: { flagged: newFlagged } }),
+    });
+    if (!resp.ok) {
+      // Revert on failure
+      msg.is_starred = !newFlagged;
+      patchInboxList();
+    }
   }
 
   function refreshInbox() {
@@ -1721,6 +1776,8 @@ const EmailModule = (function () {
     aiReply,
     setInboxFolder,
     setInboxSearch,
+    clearSearch,
+    toggleStar,
     refreshInbox,
     sidebarSelectFolder,
     sidebarCompose,

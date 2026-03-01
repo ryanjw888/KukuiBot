@@ -3599,7 +3599,7 @@ async def api_restart(req: Request):
     _RESTART_TIMESTAMPS.append(time.time())
 
     async def _delayed_exit():
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(0.3)
         logger.info("Restart requested — exiting (launchd will respawn)")
         os._exit(0)
 
@@ -3971,7 +3971,7 @@ async def update_apply(req: Request):
         _RESTART_TIMESTAMPS.append(time.time())
 
         async def _delayed_restart():
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.3)
             os._exit(0)
 
         asyncio.create_task(_delayed_restart())
@@ -4206,7 +4206,7 @@ async def _email_sync_loop():
         try:
             if first_run:
                 first_run = False
-                await asyncio.sleep(5)  # Brief delay to let server finish init
+                await asyncio.sleep(1)  # Brief delay to let server finish init
             else:
                 interval = max(30, min(600, int(get_config("gmail.sync_interval_sec", "180"))))
                 await asyncio.sleep(interval)

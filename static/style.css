@@ -165,8 +165,8 @@ body {
   border-radius: 10px; padding: 3px;
 }
 .sidebar-mode-btn {
-  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
-  padding: 8px 4px 6px; border-radius: 8px; border: none;
+  flex: 1 1 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  padding: 7px 4px 5px; border-radius: 8px; border: none;
   background: transparent; color: var(--muted);
   cursor: pointer; font-size: 12.5px; font-family: inherit;
   transition: all 0.15s; white-space: nowrap;
@@ -178,8 +178,14 @@ body {
   box-shadow: 0 1px 4px rgba(0,0,0,0.25);
   font-weight: 500;
 }
-.sidebar-mode-btn .sidebar-nav-icon { font-size: 18px; flex-shrink: 0; line-height: 1; }
-.sidebar-mode-label { font-size: 10px; line-height: 1; }
+.sidebar-mode-btn .sidebar-nav-icon {
+  display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; flex-shrink: 0;
+}
+.sidebar-mode-btn .sidebar-nav-icon svg {
+  width: 18px; height: 18px; flex-shrink: 0;
+}
+.sidebar-mode-label { font-size: 10px; line-height: 1; letter-spacing: 0.3px; }
 
 .sidebar-section { flex: 1; overflow-y: auto; padding: 0 6px; }
 .sidebar-section::-webkit-scrollbar { width: 3px; }
@@ -2423,15 +2429,37 @@ body {
   padding: 6px 8px; border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
+.inbox-search-wrap {
+  position: relative; display: flex; align-items: center;
+}
 .inbox-search-bar .inbox-search {
   width: 100%; box-sizing: border-box;
-  padding: 5px 10px; border-radius: 6px;
+  padding: 5px 50px 5px 10px; border-radius: 6px;
   border: 1px solid var(--border-light);
   background: var(--bg); color: var(--text);
   font-size: 12px; font-family: inherit;
   outline: none;
 }
 .inbox-search-bar .inbox-search:focus { border-color: var(--accent); }
+.inbox-search-clear {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  background: none; border: none; color: var(--muted); cursor: pointer;
+  font-size: 16px; line-height: 1; padding: 2px 4px; border-radius: 3px;
+  transition: color 0.15s, background 0.15s;
+}
+.inbox-search-clear:hover { color: var(--text); background: var(--surface-hover); }
+.inbox-search-dots {
+  position: absolute; right: 26px; top: 50%; transform: translateY(-50%);
+  display: inline-flex; gap: 1px; font-size: 16px; font-weight: 700;
+  color: var(--accent);
+}
+.inbox-search-dots span { animation: searchDot 1.2s infinite; opacity: 0.2; }
+.inbox-search-dots span:nth-child(2) { animation-delay: 0.2s; }
+.inbox-search-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes searchDot {
+  0%, 60%, 100% { opacity: 0.2; }
+  30% { opacity: 1; }
+}
 .email-sidebar-sync {
   padding: 8px 14px; display: flex; align-items: center; gap: 8px;
 }
@@ -2464,9 +2492,24 @@ body {
 .inbox-preview::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
 .inbox-msg-row {
   padding: 10px 12px; border-bottom: 1px solid var(--border);
-  cursor: pointer; display: flex; flex-direction: column; gap: 2px;
+  cursor: pointer; display: flex; flex-direction: row; align-items: flex-start; gap: 8px;
   position: relative; transition: background 0.12s;
 }
+.inbox-msg-content {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px;
+}
+.inbox-msg-star {
+  flex-shrink: 0; font-size: 16px; line-height: 1; cursor: pointer;
+  color: var(--muted); transition: color 0.15s; padding-top: 1px;
+}
+.inbox-msg-star:hover { color: #f5c518; }
+.inbox-msg-star.starred { color: #f5c518; }
+.inbox-preview-star {
+  flex-shrink: 0; font-size: 20px; line-height: 1; cursor: pointer;
+  color: var(--muted); transition: color 0.15s;
+}
+.inbox-preview-star:hover { color: #f5c518; }
+.inbox-preview-star.starred { color: #f5c518; }
 .inbox-msg-row:hover { background: var(--surface-hover); }
 .inbox-msg-row.selected { background: rgba(var(--accent-rgb, 100,149,237), 0.15); }
 .inbox-msg-row.unread .inbox-msg-sender,
@@ -2474,7 +2517,6 @@ body {
 .inbox-msg-sender {
   font-size: 13px; color: var(--text);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  padding-right: 60px;
 }
 .inbox-msg-subject {
   font-size: 12px; color: var(--muted);

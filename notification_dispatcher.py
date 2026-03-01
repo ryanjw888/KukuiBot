@@ -307,7 +307,7 @@ class NotificationDispatcher:
         and triggers dispatch for them.
         """
         # Initial delay to let startup complete
-        await asyncio.sleep(10)
+        await asyncio.sleep(3)
         logger.info("NotificationDispatcher: reconciler started (45s interval)")
 
         while not self._stopped:

@@ -2003,9 +2003,9 @@ function render(opts = {}) {
         <button class="sidebar-nav-item" onclick="doLogout()"><span class="sidebar-nav-icon">&#128682;</span>Logout</button>
       </div>` : ''}
       <div class="sidebar-mode-strip">
-        <button class="sidebar-mode-btn${appMode === 'chat' ? ' active' : ''}" onclick="setAppMode('chat')"><span class="sidebar-nav-icon">&#128172;</span><span class="sidebar-mode-label">AI</span></button>
-        <button class="sidebar-mode-btn${appMode === 'editor' ? ' active' : ''}" onclick="setAppMode('editor')"><span class="sidebar-nav-icon">&#128194;</span><span class="sidebar-mode-label">Files</span></button>
-        <button class="sidebar-mode-btn${appMode === 'email' ? ' active' : ''}" onclick="setAppMode('email')"><span class="sidebar-nav-icon">&#128231;</span><span class="sidebar-mode-label">Email</span></button>
+        <button class="sidebar-mode-btn${appMode === 'chat' ? ' active' : ''}" onclick="setAppMode('chat')"><span class="sidebar-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><circle cx="9" cy="10" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="10" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="10" r="1" fill="currentColor" stroke="none"/></svg></span><span class="sidebar-mode-label">AI</span></button>
+        <button class="sidebar-mode-btn${appMode === 'editor' ? ' active' : ''}" onclick="setAppMode('editor')"><span class="sidebar-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span><span class="sidebar-mode-label">Files</span></button>
+        <button class="sidebar-mode-btn${appMode === 'email' ? ' active' : ''}" onclick="setAppMode('email')"><span class="sidebar-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></span><span class="sidebar-mode-label">Email</span></button>
       </div>
       ${appMode === 'editor' ? `
       <div class="sidebar-section editor-sidebar-section">
