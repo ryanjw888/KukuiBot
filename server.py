@@ -3548,6 +3548,27 @@ async def api_privileged_run(req: Request):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=503)
 
 
+# --- Restart rate limiter (prevents crash loops) ---
+_RESTART_TIMESTAMPS: list[float] = []
+_RESTART_MAX_IN_WINDOW = 3        # max restarts allowed in the window
+_RESTART_WINDOW_SECONDS = 300     # 5-minute sliding window
+_RESTART_COOLDOWN_SECONDS = 120   # cooldown after hitting limit
+
+
+def _restart_rate_limited() -> tuple[bool, str]:
+    """Check if restart is rate-limited. Returns (is_limited, reason)."""
+    now = time.time()
+    # Prune timestamps outside the window
+    while _RESTART_TIMESTAMPS and _RESTART_TIMESTAMPS[0] < now - _RESTART_WINDOW_SECONDS:
+        _RESTART_TIMESTAMPS.pop(0)
+    if len(_RESTART_TIMESTAMPS) >= _RESTART_MAX_IN_WINDOW:
+        oldest = _RESTART_TIMESTAMPS[0]
+        cooldown_remaining = int(_RESTART_COOLDOWN_SECONDS - (now - oldest))
+        if cooldown_remaining > 0:
+            return True, f"Restart rate limited: {len(_RESTART_TIMESTAMPS)} restarts in {_RESTART_WINDOW_SECONDS}s. Cooldown: {cooldown_remaining}s remaining."
+    return False, ""
+
+
 @app.post("/api/restart")
 async def api_restart(req: Request):
     """Restart the server. Launchd KeepAlive will respawn automatically."""
@@ -3568,6 +3589,14 @@ async def api_restart(req: Request):
             {"error": "Server restart is not allowed from delegated sessions. The Dev Manager will coordinate restarts."},
             status_code=403,
         )
+
+    # Rate limit restarts to prevent crash loops
+    limited, reason = _restart_rate_limited()
+    if limited:
+        logger.warning(f"Restart blocked by rate limiter: {reason}")
+        return JSONResponse({"error": reason}, status_code=429)
+
+    _RESTART_TIMESTAMPS.append(time.time())
 
     async def _delayed_exit():
         await asyncio.sleep(1.0)
@@ -3933,6 +3962,14 @@ async def update_apply(req: Request):
 
         summary = result.stdout.strip().split("\n")[-1] if result.stdout.strip() else "Updated"
 
+        # Rate limit restarts to prevent crash loops
+        limited, reason = _restart_rate_limited()
+        if limited:
+            logger.warning(f"Update restart blocked by rate limiter: {reason}")
+            return JSONResponse({"ok": True, "summary": summary, "restart_blocked": reason}, status_code=200)
+
+        _RESTART_TIMESTAMPS.append(time.time())
+
         async def _delayed_restart():
             await asyncio.sleep(1.0)
             os._exit(0)
@@ -4191,13 +4228,19 @@ async def _email_sync_loop():
                         email_cache.upsert_messages(messages, folder)
                         total_cached += len(messages)
 
-                        # Pre-fetch full bodies for messages that don't have them cached (INBOX only, batch 5)
+                        # Pre-fetch full bodies for messages not cached or with
+                        # uninlined images (INBOX only, batch 5)
                         if folder == "INBOX":
+                            import re as _re
                             unfetched = []
                             for m in messages[:20]:
                                 cached = email_cache.get_cached_message(folder, str(m.get("uid", "")))
                                 if not cached:
                                     unfetched.append(m)
+                                elif cached.get("body_html"):
+                                    bh = cached["body_html"]
+                                    if "cid:" in bh.lower() or _re.search(r'<img\b[^>]+src\s*=\s*["\']https?://', bh):
+                                        unfetched.append(m)
                             for m in unfetched[:5]:
                                 try:
                                     uid = str(m.get("uid", ""))

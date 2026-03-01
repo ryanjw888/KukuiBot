@@ -186,6 +186,16 @@ async def api_gmail_message(req: Request):
         import email_cache
         cached = email_cache.get_cached_message(folder, uid)
         if cached:
+            body_html = cached.get("body_html") or ""
+            # Skip cache if HTML has unresolved cid: or external image URLs
+            # (srcdoc iframes can't load external images — they must be data URIs)
+            import re
+            has_stale = ("cid:" in body_html.lower()
+                         or re.search(r'<img\b[^>]+src\s*=\s*["\']https?://', body_html, re.IGNORECASE))
+            if has_stale:
+                logger.info(f"Gmail cache: uninlined images in {uid}, re-fetching from IMAP")
+                cached = None
+        if cached:
             from injection_guard import scan_and_filter
             body_text = scan_and_filter(cached.get("body_text", ""), source="email")
             body_html = cached.get("body_html")

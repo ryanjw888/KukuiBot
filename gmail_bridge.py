@@ -292,6 +292,46 @@ def _resolve_cid_images(html: str, msg: email.message.Message) -> str:
     return html
 
 
+def _inline_external_images(html: str) -> str:
+    """Fetch external http(s) images in <img> tags and replace with data: URIs.
+    srcdoc iframes have a null origin and cannot load external images directly."""
+    import re
+    import urllib.request
+
+    img_pattern = re.compile(
+        r'(<img\b[^>]*\bsrc\s*=\s*["\'])(https?://[^"\']+)(["\'])',
+        re.IGNORECASE,
+    )
+    urls = set(m.group(2) for m in img_pattern.finditer(html))
+    if not urls:
+        return html
+
+    url_map: dict[str, str] = {}
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "KukuiBot/1.0"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                ct = resp.headers.get("Content-Type", "")
+                if not ct.startswith("image/"):
+                    continue
+                data = resp.read(2 * 1024 * 1024)  # cap 2MB per image
+                if len(data) >= 2 * 1024 * 1024:
+                    continue  # too large, skip
+                b64 = base64.b64encode(data).decode("ascii")
+                url_map[url] = f"data:{ct.split(';')[0]};base64,{b64}"
+        except Exception:
+            continue  # network error — leave original URL
+
+    if not url_map:
+        return html
+
+    def _replace_url(match):
+        pre, url, post = match.group(1), match.group(2), match.group(3)
+        return pre + url_map.get(url, url) + post
+
+    return img_pattern.sub(_replace_url, html)
+
+
 def _extract_body_both(msg: email.message.Message) -> tuple[str, str | None]:
     """Extract both plain text and HTML body from email.
     Returns (plain_text, html_or_none). Resolves cid: inline images to data URIs."""
@@ -308,9 +348,10 @@ def _extract_body_both(msg: email.message.Message) -> tuple[str, str | None]:
                 payload = part.get_payload(decode=True)
                 if payload:
                     html = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
-        # Resolve cid: inline images in HTML
+        # Resolve cid: inline images, then fetch external images as data URIs
         if html:
             html = _resolve_cid_images(html, msg)
+            html = _inline_external_images(html)
         if plain:
             return plain, html or None
         if html:
@@ -322,6 +363,7 @@ def _extract_body_both(msg: email.message.Message) -> tuple[str, str | None]:
             return "", None
         text = payload.decode(msg.get_content_charset() or "utf-8", errors="replace")
         if msg.get_content_type() == "text/html":
+            text = _inline_external_images(text)
             return _strip_html(text), text
         return text, None
 

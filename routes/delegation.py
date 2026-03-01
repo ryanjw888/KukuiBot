@@ -1032,7 +1032,7 @@ async def _delegation_monitor(poll_interval: float = 120.0, _app_state=None):
 # ============================================================================
 
 async def _system_wake():
-    """Post-startup: reconcile stale tasks and wake coordinator sessions.
+    """Post-startup: reconcile stale tasks, re-dispatch orphaned dispatches, and wake coordinator sessions.
 
     Called once as an asyncio.create_task() during server startup.
     Waits 5 seconds for the server to finish binding before running.
@@ -1042,7 +1042,10 @@ async def _system_wake():
     logger.info("System wake: checking for in-flight tasks and coordinator sessions")
 
     try:
-        from delegation import _deleg_db_connection
+        from delegation import (
+            _deleg_db_connection, _load_task, _dispatch_message,
+            _verify_delivery_via_log, _save_task,
+        )
         from claude_bridge import get_claude_pool
         from routes.tabs import _ensure_tab_meta_schema
 
@@ -1056,6 +1059,7 @@ async def _system_wake():
 
         stale_count = 0
         active_count = 0
+        redispatched_count = 0
         parent_sessions: dict[str, list[str]] = {}  # parent_sid -> [task_ids]
 
         for task_id, parent_sid, worker, model, status, created_at in rows:
@@ -1072,11 +1076,58 @@ async def _system_wake():
                     stale_count += 1
                 except Exception:
                     pass
+            elif status in ("dispatched", "dispatch_failed") and age_s < 3600:
+                # --- Re-dispatch orphaned tasks ---
+                # These tasks were saved to DB but the server died before delivery
+                # was confirmed. Re-dispatch them now that the server is back up.
+                try:
+                    task = _load_task(task_id)
+                    if task and task.get("dispatched_prompt") and task.get("target_session_id"):
+                        target_sid = task["target_session_id"]
+                        task_token = task.get("task_token", "")
+
+                        # Check if it was actually delivered before the crash
+                        already_delivered = False
+                        if task_token:
+                            already_delivered = _verify_delivery_via_log(target_sid, task_token, max_wait=2)
+
+                        if already_delivered:
+                            # Delivery was confirmed — promote to running
+                            task["status"] = "running"
+                            task["updated_at"] = int(time.time())
+                            _save_task(task)
+                            logger.info(f"System wake: {task_id} delivery confirmed post-restart, promoted to running")
+                            active_count += 1
+                            parent_sessions.setdefault(parent_sid, []).append(task_id)
+                        else:
+                            # Re-dispatch the tagged prompt
+                            logger.info(f"System wake: re-dispatching orphaned task {task_id} (was {status}, age={int(age_s)}s)")
+                            dispatch_result = _dispatch_message(
+                                target_sid, task["dispatched_prompt"],
+                                task_token=task_token, task_id=task_id,
+                            )
+                            if dispatch_result.get("error"):
+                                task["status"] = "dispatch_failed"
+                                task["result_summary"] = f"Re-dispatch failed after restart: {dispatch_result['error']}"
+                            else:
+                                task["status"] = "dispatched"
+                                redispatched_count += 1
+                            task["updated_at"] = int(time.time())
+                            _save_task(task)
+                            active_count += 1
+                            parent_sessions.setdefault(parent_sid, []).append(task_id)
+                    else:
+                        active_count += 1
+                        parent_sessions.setdefault(parent_sid, []).append(task_id)
+                except Exception as e:
+                    logger.warning(f"System wake: re-dispatch failed for {task_id}: {e}")
+                    active_count += 1
+                    parent_sessions.setdefault(parent_sid, []).append(task_id)
             else:
                 active_count += 1
                 parent_sessions.setdefault(parent_sid, []).append(task_id)
 
-        logger.info(f"System wake: {active_count} active tasks, {stale_count} timed out")
+        logger.info(f"System wake: {active_count} active tasks, {stale_count} timed out, {redispatched_count} re-dispatched")
 
         # --- 2. Find coordinator/dev-manager sessions to wake ---
         # Two categories of sessions need wake notifications:

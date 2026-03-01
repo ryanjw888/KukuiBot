@@ -1006,7 +1006,7 @@ const EmailModule = (function () {
       const sm = selectedMessage;
       let bodyContent = '';
       if (sm.body_html) {
-        // Render HTML with CSP that allows remote images but blocks scripts
+        // Render HTML email in sandboxed iframe
         const cspMeta = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src * data: blob:; style-src * \'unsafe-inline\'; font-src *;">';
         const wrappedHtml = '<!DOCTYPE html><html><head>' + cspMeta + '<style>body{margin:0;padding:8px;font-family:sans-serif;color:#333;}</style></head><body>' + sm.body_html + '</body></html>';
         const safeHtml = wrappedHtml.replace(/"/g, '&quot;');
