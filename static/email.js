@@ -893,7 +893,7 @@ const EmailModule = (function () {
 
   function buildListHtml() {
     let html = `<div class="inbox-search-bar">
-      <input class="inbox-search" type="text" placeholder="Search mail..." value="${escHtml(inboxSearch)}"
+      <input class="inbox-search" type="text" placeholder="Search Gmail..." value="${escHtml(inboxSearch)}"
         onkeydown="if(event.key==='Enter'){EmailModule.setInboxSearch(this.value)}" />
     </div>`;
     if (inboxLoading && inboxMessages.length === 0) {
@@ -1094,9 +1094,11 @@ const EmailModule = (function () {
       rerender();
       return;
     }
-    // Open compose overlay pre-filled with the AI-generated reply
+    // Open compose overlay pre-filled as a proper reply: AI text above quoted original
     const reSubject = resp.subject || ('Re: ' + (sm.subject || ''));
-    composeData = { to: sm.from || '', subject: reSubject, body: resp.reply_text || '' };
+    const aiText = (resp.reply_text || '').trimEnd();
+    const quotedOriginal = '\n\n--- Original Message ---\nFrom: ' + (sm.from || '') + '\nDate: ' + (sm.date || '') + '\n\n' + (sm.body || '');
+    composeData = { to: sm.from || '', subject: reSubject, body: aiText + quotedOriginal };
     showCompose = true;
     rerender();
   }

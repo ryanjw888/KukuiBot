@@ -121,7 +121,7 @@ async def api_gmail_disconnect():
 
 @router.post("/api/gmail/search")
 async def api_gmail_search(req: Request):
-    """Search Gmail messages — cache-first, IMAP fallback."""
+    """Search Gmail messages — cache-first for browsing, IMAP-direct for search queries."""
     from gmail_bridge import list_messages
     body = await req.json()
     folder = body.get("folder", "INBOX")
@@ -129,7 +129,25 @@ async def api_gmail_search(req: Request):
     search = body.get("search", "")
     use_cache = body.get("cache", True)
 
-    # Try cache first
+    # When user is actively searching, always go to IMAP to find older emails
+    # not in the local cache. Cache is only used for browsing (no search query).
+    if search:
+        try:
+            messages = list_messages(folder=folder, max_results=max_results, search=search)
+            # Cache the results
+            try:
+                import email_cache
+                email_cache.upsert_messages(messages, folder)
+            except Exception:
+                pass
+            return {"ok": True, "messages": messages, "count": len(messages), "source": "imap"}
+        except PermissionError as e:
+            return JSONResponse({"error": str(e)}, status_code=403)
+        except Exception as e:
+            logger.warning(f"Gmail search failed: {e}")
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    # No search query — try cache first for fast browsing
     if use_cache:
         try:
             import email_cache

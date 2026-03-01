@@ -419,6 +419,39 @@ def _resolve_folder(folder: str) -> str:
     return folder
 
 
+def _build_imap_search(query: str) -> str | tuple:
+    """Convert a user-friendly search string into IMAP search criteria.
+
+    Uses Gmail's X-GM-RAW extension which accepts the same query syntax as
+    Gmail web search (full-text across all headers and body, supports
+    operators like from:, to:, subject:, has:attachment, before:, after:, etc).
+
+    Returns a tuple for imap.search() when using X-GM-RAW, or a string
+    for standard IMAP criteria.
+
+    Examples:
+      "daniel"          -> X-GM-RAW "daniel"         (full Gmail search)
+      "from:alice"      -> X-GM-RAW "from:alice"     (Gmail operator)
+      "UNSEEN"          -> UNSEEN                    (raw IMAP pass-through)
+    """
+    if not query or not query.strip():
+        return "ALL"
+    q = query.strip()
+
+    # If it already looks like raw IMAP criteria (starts with known keyword), pass through
+    imap_keywords = ("FROM", "SUBJECT", "BODY", "TO", "CC", "BCC", "TEXT",
+                     "SINCE", "BEFORE", "ON", "SEEN", "UNSEEN", "ALL",
+                     "FLAGGED", "UNFLAGGED", "OR", "NOT", "HEADER")
+    first_word = q.split()[0].upper()
+    if first_word in imap_keywords:
+        return q
+
+    # Use Gmail X-GM-RAW for full-text search (same as Gmail web search bar)
+    # Escape internal double quotes
+    safe = q.replace('\\', '\\\\').replace('"', '\\"')
+    return ("X-GM-RAW", f'"{safe}"')
+
+
 # --- Read Operations ---
 
 def list_messages(folder: str = "INBOX", max_results: int = 20, search: str = "") -> list[dict]:
@@ -448,9 +481,13 @@ def list_messages(folder: str = "INBOX", max_results: int = 20, search: str = ""
         if status != "OK":
             raise RuntimeError(f"Could not open folder: {imap_folder}")
 
-        # Search
-        criteria = search if search else "ALL"
-        status, data = imap.search(None, criteria)
+        # Search — convert user query to IMAP criteria
+        criteria = _build_imap_search(search)
+        if isinstance(criteria, tuple):
+            # X-GM-RAW returns (key, value) for imap.search()
+            status, data = imap.search(None, *criteria)
+        else:
+            status, data = imap.search(None, criteria)
         if status != "OK":
             return []
 
