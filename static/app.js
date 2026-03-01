@@ -5679,47 +5679,140 @@ async function checkForUpdates() {
   showSettings = false;
   requestRender({ preserveScroll: true });
   const tab = activeTab();
-  const chatEl = document.getElementById('messages');
 
-  // Show checking message
   if (tab) tab.messages.push(_sysCard('Checking for updates...', '📦', 'Update'));
   requestRender({ forceStickBottom: true });
 
   try {
     const r = await fetch(API + '/api/update/check', { method: 'POST' });
     const d = await r.json();
-    if (tab) tab.messages.pop(); // remove "checking" message
+    if (tab) tab.messages.pop();
 
     if (d.error) {
       if (tab) tab.messages.push(_sysCard('Update check failed: ' + d.error, '❌', 'Update'));
     } else if (d.up_to_date) {
-      if (tab) tab.messages.push(_sysCard(APP_NAME + ' is up to date. (' + (d.commit || '').substring(0, 7) + ')', '✅', 'Update'));
-    } else {
-      const count = d.behind || 0;
-      if (tab) tab.messages.push(_sysCard(count + ' update' + (count === 1 ? '' : 's') + ' available. Applying...', '📦', 'Update'));
-      requestRender({ forceStickBottom: true });
-
-      const ur = await fetch(API + '/api/update/apply', { method: 'POST' });
-      const ud = await ur.json();
-      if (tab) tab.messages.pop();
-
-      if (ud.error) {
-        if (tab) tab.messages.push(_sysCard('Update failed: ' + ud.error, '❌', 'Update'));
-      } else {
-        // Clear update banner state so it doesn't reappear after reload
-        _updateAvailable = false;
-        _updateBehindCount = 0;
-        localStorage.setItem('kukuibot.updateAvailable', '0');
-        localStorage.setItem('kukuibot.updateBehind', '0');
-        localStorage.removeItem('kukuibot.lastUpdateCheck'); // force fresh check next load
-        if (tab) tab.messages.push(_sysCard('Updated! ' + (ud.summary || '') + '\n\nReloading in 3 seconds...', '✅', 'Update'));
-        requestRender({ forceStickBottom: true });
-        setTimeout(() => forceRefreshApp(), 3000);
+      // Show rollback button if a previous update can be rolled back
+      let msg = APP_NAME + ' is up to date. (' + (d.commit || '').substring(0, 7) + ')';
+      if (d.rollback_available) {
+        msg += '\n\n<button onclick="rollbackUpdate()" style="margin-top:8px;padding:6px 16px;border-radius:8px;border:1px solid var(--border);background:var(--surface);cursor:pointer;color:var(--text)">↩ Rollback Last Update</button>';
       }
+      if (tab) tab.messages.push(_sysCard(msg, '✅', 'Update'));
+    } else {
+      // Fetch changelog before showing apply prompt
+      const count = d.behind || 0;
+      let changelogText = count + ' update' + (count === 1 ? '' : 's') + ' available.\n\n';
+
+      try {
+        const clr = await fetch(API + '/api/update/changelog');
+        const cld = await clr.json();
+        if (cld.commits && cld.commits.length > 0) {
+          changelogText += '**Changelog** (' + cld.from_commit + ' → ' + cld.to_commit + '):\n';
+          for (const c of cld.commits.slice(0, 20)) {
+            changelogText += '- `' + c.hash + '` ' + c.message + '\n';
+          }
+          if (cld.commits.length > 20) {
+            changelogText += '- ... and ' + (cld.commits.length - 20) + ' more\n';
+          }
+          changelogText += '\n';
+        }
+      } catch {}
+
+      changelogText += '<div style="display:flex;gap:8px;margin-top:8px">';
+      changelogText += '<button onclick="applyUpdate()" style="padding:6px 16px;border-radius:8px;border:none;background:var(--accent, #007AFF);color:white;cursor:pointer;font-weight:600">Apply Update</button>';
+      changelogText += '<button onclick="skipUpdate()" style="padding:6px 16px;border-radius:8px;border:1px solid var(--border);background:var(--surface);cursor:pointer;color:var(--text)">Skip</button>';
+      changelogText += '</div>';
+
+      if (tab) tab.messages.push(_sysCard(changelogText, '📦', 'Update Available'));
     }
   } catch (e) {
     if (tab) tab.messages.pop();
     if (tab) tab.messages.push(_sysCard('Network error: ' + e.message, '❌', 'Update'));
+  }
+  requestRender({ forceStickBottom: true });
+}
+
+function skipUpdate() {
+  const tab = activeTab();
+  if (tab && tab.messages.length) {
+    // Remove the changelog card (last system message)
+    for (let i = tab.messages.length - 1; i >= 0; i--) {
+      if (tab.messages[i]._card && tab.messages[i]._card.title === 'Update Available') {
+        tab.messages.splice(i, 1);
+        break;
+      }
+    }
+  }
+  requestRender({ preserveScroll: true });
+}
+
+async function applyUpdate() {
+  const tab = activeTab();
+
+  // Replace changelog card with applying message
+  if (tab) {
+    for (let i = tab.messages.length - 1; i >= 0; i--) {
+      if (tab.messages[i]._card && tab.messages[i]._card.title === 'Update Available') {
+        tab.messages.splice(i, 1);
+        break;
+      }
+    }
+    tab.messages.push(_sysCard('Applying update...', '📦', 'Update'));
+    requestRender({ forceStickBottom: true });
+  }
+
+  try {
+    const ur = await fetch(API + '/api/update/apply', { method: 'POST' });
+    const ud = await ur.json();
+    if (tab) tab.messages.pop();
+
+    if (ud.error) {
+      if (tab) tab.messages.push(_sysCard('Update failed: ' + ud.error, '❌', 'Update'));
+    } else {
+      _updateAvailable = false;
+      _updateBehindCount = 0;
+      localStorage.setItem('kukuibot.updateAvailable', '0');
+      localStorage.setItem('kukuibot.updateBehind', '0');
+      localStorage.removeItem('kukuibot.lastUpdateCheck');
+
+      let msg = 'Updated! ' + (ud.pre_update_commit || '') + ' → ' + (ud.new_commit || '');
+      if (ud.nuclear) {
+        msg += '\n\n⚠️ **Update required a full reset.** Local changes may have been lost.';
+      }
+      msg += '\n\n↩ <button onclick="rollbackUpdate()" style="padding:6px 16px;border-radius:8px;border:1px solid var(--border);background:var(--surface);cursor:pointer;color:var(--text)">Rollback</button>';
+      msg += '\n\nReloading in 5 seconds...';
+
+      if (tab) tab.messages.push(_sysCard(msg, '✅', 'Update'));
+      requestRender({ forceStickBottom: true });
+      setTimeout(() => forceRefreshApp(), 5000);
+    }
+  } catch (e) {
+    if (tab) tab.messages.pop();
+    if (tab) tab.messages.push(_sysCard('Network error: ' + e.message, '❌', 'Update'));
+  }
+  requestRender({ forceStickBottom: true });
+}
+
+async function rollbackUpdate() {
+  const tab = activeTab();
+  if (tab) tab.messages.push(_sysCard('Rolling back update...', '↩', 'Rollback'));
+  requestRender({ forceStickBottom: true });
+
+  try {
+    const r = await fetch(API + '/api/update/rollback', { method: 'POST' });
+    const d = await r.json();
+    if (tab) tab.messages.pop();
+
+    if (d.error) {
+      if (tab) tab.messages.push(_sysCard('Rollback failed: ' + d.error, '❌', 'Rollback'));
+    } else {
+      localStorage.removeItem('kukuibot.lastUpdateCheck');
+      if (tab) tab.messages.push(_sysCard('Rolled back to ' + (d.rolled_back_to || 'previous version') + '.\n\nReloading in 3 seconds...', '✅', 'Rollback'));
+      requestRender({ forceStickBottom: true });
+      setTimeout(() => forceRefreshApp(), 3000);
+    }
+  } catch (e) {
+    if (tab) tab.messages.pop();
+    if (tab) tab.messages.push(_sysCard('Network error: ' + e.message, '❌', 'Rollback'));
   }
   requestRender({ forceStickBottom: true });
 }

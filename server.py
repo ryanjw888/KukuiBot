@@ -3930,108 +3930,198 @@ async def health():
 
 
 # =============================================
-# UPDATE CHECK / APPLY
+# UPDATE CHECK / APPLY / CHANGELOG / ROLLBACK
 # =============================================
+
+_UPDATE_ROLLBACK_FILE = KUKUIBOT_HOME / ".update-rollback"
+
+
+def _git(src_dir: str, *args, timeout: int = 15) -> subprocess.CompletedProcess:
+    """Run a git command in src_dir and return the CompletedProcess."""
+    return subprocess.run(
+        ["git", "-C", src_dir] + list(args),
+        capture_output=True, text=True, timeout=timeout,
+    )
+
+
+def _git_branch(src_dir: str) -> str:
+    return _git(src_dir, "symbolic-ref", "--quiet", "--short", "HEAD", timeout=5).stdout.strip() or "main"
+
+
+def _git_head(src_dir: str) -> str:
+    return _git(src_dir, "rev-parse", "HEAD", timeout=5).stdout.strip()
+
+
+def _schedule_restart():
+    """Rate-limited delayed restart. Returns (scheduled: bool, reason: str|None)."""
+    limited, reason = _restart_rate_limited()
+    if limited:
+        logger.warning(f"Restart blocked by rate limiter: {reason}")
+        return False, reason
+    _RESTART_TIMESTAMPS.append(time.time())
+
+    async def _delayed():
+        await asyncio.sleep(0.3)
+        os._exit(0)
+
+    asyncio.create_task(_delayed())
+    return True, None
+
 
 @app.post("/api/update/check")
 async def update_check(req: Request):
     """Check if there are updates available on the remote."""
     src_dir = str(KUKUIBOT_HOME / "src")
     try:
-        result = subprocess.run(
-            ["git", "-C", src_dir, "fetch", "origin", "--quiet"],
-            capture_output=True, text=True, timeout=15,
-        )
+        result = _git(src_dir, "fetch", "origin", "--quiet")
         if result.returncode != 0:
             return JSONResponse({"error": f"Fetch failed: {result.stderr.strip()}"}, status_code=500)
 
-        branch = subprocess.run(
-            ["git", "-C", src_dir, "symbolic-ref", "--quiet", "--short", "HEAD"],
-            capture_output=True, text=True, timeout=5,
-        ).stdout.strip() or "master"
+        branch = _git_branch(src_dir)
 
-        behind = subprocess.run(
-            ["git", "-C", src_dir, "rev-list", "--count", f"HEAD..origin/{branch}"],
-            capture_output=True, text=True, timeout=5,
-        ).stdout.strip()
-        behind_count = int(behind) if behind.isdigit() else 0
+        behind_s = _git(src_dir, "rev-list", "--count", f"HEAD..origin/{branch}", timeout=5).stdout.strip()
+        behind_count = int(behind_s) if behind_s.isdigit() else 0
 
-        # Detect diverged history (local commits not on origin) and auto-rebase
-        ahead = subprocess.run(
-            ["git", "-C", src_dir, "rev-list", "--count", f"origin/{branch}..HEAD"],
-            capture_output=True, text=True, timeout=5,
-        ).stdout.strip()
-        ahead_count = int(ahead) if ahead.isdigit() else 0
+        ahead_s = _git(src_dir, "rev-list", "--count", f"origin/{branch}..HEAD", timeout=5).stdout.strip()
+        ahead_count = int(ahead_s) if ahead_s.isdigit() else 0
 
+        # Auto-rebase if local and remote have diverged
         if ahead_count > 0 and behind_count > 0:
-            # Diverged — rebase local commits on top of origin so update can fast-forward
-            subprocess.run(["git", "-C", src_dir, "stash", "--quiet"], capture_output=True, timeout=5)
-            rebase = subprocess.run(
-                ["git", "-C", src_dir, "pull", "origin", branch, "--rebase"],
-                capture_output=True, text=True, timeout=60,
-            )
-            subprocess.run(["git", "-C", src_dir, "stash", "pop", "--quiet"], capture_output=True, timeout=5)
+            _git(src_dir, "stash", "--quiet", timeout=5)
+            rebase = _git(src_dir, "pull", "origin", branch, "--rebase", timeout=60)
+            _git(src_dir, "stash", "pop", "--quiet", timeout=5)
             if rebase.returncode == 0:
-                # Recount after rebase
-                behind = subprocess.run(
-                    ["git", "-C", src_dir, "rev-list", "--count", f"HEAD..origin/{branch}"],
-                    capture_output=True, text=True, timeout=5,
-                ).stdout.strip()
-                behind_count = int(behind) if behind.isdigit() else 0
+                behind_s = _git(src_dir, "rev-list", "--count", f"HEAD..origin/{branch}", timeout=5).stdout.strip()
+                behind_count = int(behind_s) if behind_s.isdigit() else 0
+                ahead_count = 0
 
-        commit = subprocess.run(
-            ["git", "-C", src_dir, "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=5,
-        ).stdout.strip()
+        commit = _git_head(src_dir)
+        rollback_available = _UPDATE_ROLLBACK_FILE.is_file()
 
-        return {"up_to_date": behind_count == 0, "behind": behind_count, "commit": commit, "branch": branch}
+        return {
+            "up_to_date": behind_count == 0,
+            "behind": behind_count,
+            "ahead": ahead_count,
+            "commit": commit,
+            "branch": branch,
+            "rollback_available": rollback_available,
+        }
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/update/changelog")
+async def update_changelog(req: Request):
+    """Return commit log between HEAD and origin (what would be pulled)."""
+    src_dir = str(KUKUIBOT_HOME / "src")
+    try:
+        branch = _git_branch(src_dir)
+        from_commit = _git_head(src_dir)
+        to_commit = _git(src_dir, "rev-parse", f"origin/{branch}", timeout=5).stdout.strip()
+
+        log = _git(src_dir, "log", "--oneline", "--format=%h %s", f"HEAD..origin/{branch}", timeout=10)
+        commits = []
+        for line in log.stdout.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(" ", 1)
+            commits.append({"hash": parts[0], "message": parts[1] if len(parts) > 1 else ""})
+
+        return {
+            "commits": commits,
+            "count": len(commits),
+            "from_commit": from_commit[:7],
+            "to_commit": to_commit[:7],
+        }
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.post("/api/update/apply")
 async def update_apply(req: Request):
-    """Pull latest updates and restart."""
+    """Pull latest updates and restart. Saves rollback state before updating."""
     src_dir = str(KUKUIBOT_HOME / "src")
     try:
-        subprocess.run(["git", "-C", src_dir, "stash", "--quiet"], capture_output=True, timeout=5)
+        branch = _git_branch(src_dir)
+        pre_commit = _git_head(src_dir)
 
-        branch = subprocess.run(
-            ["git", "-C", src_dir, "symbolic-ref", "--quiet", "--short", "HEAD"],
-            capture_output=True, text=True, timeout=5,
-        ).stdout.strip() or "master"
+        # Save rollback state before touching anything
+        rollback_state = {
+            "pre_update_commit": pre_commit,
+            "timestamp": datetime.now().isoformat(),
+            "branch": branch,
+        }
+        _UPDATE_ROLLBACK_FILE.write_text(json.dumps(rollback_state))
 
-        # Try fast-forward first; fall back to rebase if local commits diverged
-        result = subprocess.run(
-            ["git", "-C", src_dir, "pull", "origin", branch, "--ff-only"],
-            capture_output=True, text=True, timeout=30,
-        )
+        _git(src_dir, "stash", "--quiet", timeout=5)
+
+        # Strategy 1: fast-forward
+        nuclear = False
+        result = _git(src_dir, "pull", "origin", branch, "--ff-only", timeout=30)
+
+        # Strategy 2: rebase
         if result.returncode != 0:
-            result = subprocess.run(
-                ["git", "-C", src_dir, "pull", "origin", branch, "--rebase"],
-                capture_output=True, text=True, timeout=60,
-            )
+            result = _git(src_dir, "pull", "origin", branch, "--rebase", timeout=60)
+
+        # Strategy 3: nuclear reset
         if result.returncode != 0:
-            return JSONResponse({"error": f"Pull failed: {result.stderr.strip()}"}, status_code=500)
+            _git(src_dir, "rebase", "--abort", timeout=10)  # clean up failed rebase
+            result = _git(src_dir, "reset", "--hard", f"origin/{branch}", timeout=30)
+            nuclear = True
 
-        subprocess.run(["git", "-C", src_dir, "stash", "pop", "--quiet"], capture_output=True, timeout=5)
+        if result.returncode != 0:
+            return JSONResponse({"error": f"Update failed (all strategies): {result.stderr.strip()}"}, status_code=500)
 
+        _git(src_dir, "stash", "pop", "--quiet", timeout=5)
+
+        new_commit = _git_head(src_dir)
         summary = result.stdout.strip().split("\n")[-1] if result.stdout.strip() else "Updated"
 
-        # Rate limit restarts to prevent crash loops
-        limited, reason = _restart_rate_limited()
-        if limited:
-            logger.warning(f"Update restart blocked by rate limiter: {reason}")
-            return JSONResponse({"ok": True, "summary": summary, "restart_blocked": reason}, status_code=200)
+        scheduled, reason = _schedule_restart()
+        resp = {
+            "ok": True,
+            "summary": summary,
+            "nuclear": nuclear,
+            "pre_update_commit": pre_commit[:7],
+            "new_commit": new_commit[:7],
+        }
+        if not scheduled:
+            resp["restart_blocked"] = reason
+        return resp
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
-        _RESTART_TIMESTAMPS.append(time.time())
 
-        async def _delayed_restart():
-            await asyncio.sleep(0.3)
-            os._exit(0)
+@app.post("/api/update/rollback")
+async def update_rollback(req: Request):
+    """Roll back to the pre-update commit."""
+    src_dir = str(KUKUIBOT_HOME / "src")
+    try:
+        if not _UPDATE_ROLLBACK_FILE.is_file():
+            return JSONResponse({"error": "No rollback available"}, status_code=400)
 
-        asyncio.create_task(_delayed_restart())
-        return {"ok": True, "summary": summary}
+        state = json.loads(_UPDATE_ROLLBACK_FILE.read_text())
+        target = state.get("pre_update_commit")
+        branch = state.get("branch", "main")
+        if not target:
+            return JSONResponse({"error": "Rollback state is corrupt"}, status_code=500)
+
+        _git(src_dir, "stash", "--quiet", timeout=5)
+        _git(src_dir, "branch", "-f", branch, target, timeout=10)
+        result = _git(src_dir, "checkout", branch, timeout=10)
+        _git(src_dir, "stash", "pop", "--quiet", timeout=5)
+
+        if result.returncode != 0:
+            return JSONResponse({"error": f"Rollback failed: {result.stderr.strip()}"}, status_code=500)
+
+        _UPDATE_ROLLBACK_FILE.unlink(missing_ok=True)
+
+        scheduled, reason = _schedule_restart()
+        resp = {"ok": True, "rolled_back_to": target[:7]}
+        if not scheduled:
+            resp["restart_blocked"] = reason
+        return resp
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
