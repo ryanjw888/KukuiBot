@@ -135,8 +135,11 @@ const EmailModule = (function () {
   // --- Inbox data fetching ---
 
   async function fetchInbox(skipCache) {
-    inboxLoading = true;
-    rerender();
+    const hadMessages = inboxMessages.length > 0;
+    if (!hadMessages) {
+      inboxLoading = true;
+      rerender();
+    }
     const payload = { folder: inboxFolder, max_results: 50, search: inboxSearch };
     if (skipCache) payload.cache = false;
     const resp = await apiFetch('/api/gmail/search', {
@@ -150,13 +153,13 @@ const EmailModule = (function () {
       console.error('fetchInbox error:', resp.error);
     }
     inboxLoading = false;
-    rerender();
+    patchInboxList();
   }
 
   async function fetchMessageDetail(folder, uid) {
     messageLoading = true;
     selectedUid = uid;
-    rerender();
+    patchPreview();
     const resp = await apiFetch('/api/gmail/message', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -168,6 +171,7 @@ const EmailModule = (function () {
       const msg = inboxMessages.find(m => String(m.uid) === String(uid));
       if (msg && !msg.is_read) {
         msg.is_read = true;
+        patchInboxList(); // update bold/unread styling
         apiFetch('/api/gmail/flags', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -178,7 +182,7 @@ const EmailModule = (function () {
       console.error('fetchMessageDetail error:', resp.error);
     }
     messageLoading = false;
-    rerender();
+    patchPreview();
   }
 
   async function fetchFolders() {
@@ -201,7 +205,8 @@ const EmailModule = (function () {
         selectedMessage = null;
         selectedUid = null;
       }
-      rerender();
+      patchInboxList();
+      patchPreview();
     } else if (resp.error) {
       alert('Trash error: ' + resp.error);
     }
@@ -218,7 +223,7 @@ const EmailModule = (function () {
     });
     if (resp.ok) {
       msg.is_read = newSeen;
-      rerender();
+      patchInboxList();
     }
   }
 
@@ -884,6 +889,82 @@ const EmailModule = (function () {
     </div>`;
   }
 
+  // --- Inbox DOM patching (prevents full-page blink) ---
+
+  function buildListHtml() {
+    let html = `<div class="inbox-search-bar">
+      <input class="inbox-search" type="text" placeholder="Search mail..." value="${escHtml(inboxSearch)}"
+        onkeydown="if(event.key==='Enter'){EmailModule.setInboxSearch(this.value)}" />
+    </div>`;
+    if (inboxLoading && inboxMessages.length === 0) {
+      html += '<div class="inbox-empty"><span class="email-spinner"></span><div>Loading...</div></div>';
+    } else if (inboxMessages.length === 0) {
+      html += '<div class="inbox-empty"><div style="font-size:32px;opacity:0.3">&#128235;</div><div>No messages</div></div>';
+    } else {
+      html += inboxMessages.map(m => {
+        const isSelected = String(m.uid) === String(selectedUid);
+        const unreadCls = m.is_read ? '' : ' unread';
+        const selectedCls = isSelected ? ' selected' : '';
+        return `<div class="inbox-msg-row${unreadCls}${selectedCls}" onclick="EmailModule.selectMessage('${escHtml(m.folder || inboxFolder)}', '${escHtml(String(m.uid))}')">
+          <div class="inbox-msg-sender">${escHtml(parseSender(m.from))}</div>
+          <div class="inbox-msg-subject">${escHtml(m.subject || '(no subject)')}</div>
+          <div class="inbox-msg-snippet">${escHtml(m.snippet || '')}</div>
+          <div class="inbox-msg-date">${fmtInboxDate(m.date)}</div>
+        </div>`;
+      }).join('');
+    }
+    return html;
+  }
+
+  function patchInboxList() {
+    if (activeTab !== 'inbox') return rerender();
+    const el = document.querySelector('.inbox-list');
+    if (!el) return rerender();
+    el.innerHTML = buildListHtml();
+  }
+
+  function patchPreview() {
+    if (activeTab !== 'inbox') return rerender();
+    const el = document.querySelector('.inbox-preview');
+    if (!el) return rerender();
+    // Re-use renderInboxTab's preview logic by rebuilding just the preview portion
+    let html = '';
+    if (messageLoading) {
+      html = '<div class="inbox-empty"><span class="email-spinner"></span><div>Loading message...</div></div>';
+    } else if (selectedMessage) {
+      const sm = selectedMessage;
+      let bodyContent = '';
+      if (sm.body_html) {
+        const cspMeta = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src * data: blob:; style-src * \'unsafe-inline\'; font-src *;">';
+        const wrappedHtml = '<!DOCTYPE html><html><head>' + cspMeta + '<style>body{margin:0;padding:8px;font-family:sans-serif;color:#333;}</style></head><body>' + sm.body_html + '</body></html>';
+        const safeHtml = wrappedHtml.replace(/"/g, '&quot;');
+        bodyContent = `<iframe class="inbox-preview-iframe" srcdoc="${safeHtml}" onload="this.style.height=this.contentDocument.body.scrollHeight+'px'"></iframe>`;
+      } else {
+        bodyContent = `<pre class="inbox-preview-text">${escHtml(sm.body || '(empty)')}</pre>`;
+      }
+      const attachmentsHtml = (sm.attachments && sm.attachments.length) ? renderAttachments(sm.attachments) : '';
+      html = `<div class="inbox-preview-header">
+          <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:4px">${escHtml(sm.subject || '(no subject)')}</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:2px">From: ${escHtml(sm.from || '')}</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:2px">To: ${escHtml(sm.to || '')}</div>
+          <div style="font-size:12px;color:var(--muted)">Date: ${escHtml(sm.date || '')}</div>
+          <div class="inbox-preview-actions">
+            <button class="email-action-btn primary" onclick="EmailModule.aiReply()" ${aiReplyLoading ? 'disabled' : ''}>
+              ${aiReplyLoading ? '<span class="email-spinner"></span> Generating...' : 'AI Reply'}
+            </button>
+            <button class="email-action-btn" onclick="EmailModule.replyTo()">Reply</button>
+            <button class="email-action-btn danger" onclick="EmailModule.trashMessage('${escHtml(sm.folder || inboxFolder)}', '${escHtml(String(sm.uid || selectedUid))}')">Trash</button>
+            <button class="email-action-btn" onclick="EmailModule.toggleReadStatus('${escHtml(sm.folder || inboxFolder)}', '${escHtml(String(sm.uid || selectedUid))}')">Mark Unread</button>
+          </div>
+          ${attachmentsHtml}
+        </div>
+        <div class="inbox-preview-body">${bodyContent}</div>`;
+    } else {
+      html = '<div class="inbox-empty"><div style="font-size:32px;opacity:0.3">&#9993;</div><div>Select a message to read</div></div>';
+    }
+    el.innerHTML = html;
+  }
+
   // --- Render: Inbox Tab ---
 
   function renderInboxTab() {
@@ -914,40 +995,8 @@ const EmailModule = (function () {
       </div>`;
     }
 
-    // Folder dropdown options
-    const folderOpts = (inboxFolders.length ? inboxFolders : ['INBOX']).map(f =>
-      `<option value="${escHtml(f)}" ${f === inboxFolder ? 'selected' : ''}>${escHtml(f)}</option>`
-    ).join('');
-
-    // Toolbar
-    const toolbarHtml = `<div class="inbox-toolbar">
-      <select class="inbox-folder-select" onchange="EmailModule.setInboxFolder(this.value)">${folderOpts}</select>
-      <input class="inbox-search" type="text" placeholder="Search mail..." value="${escHtml(inboxSearch)}"
-        onkeydown="if(event.key==='Enter'){EmailModule.setInboxSearch(this.value)}" />
-      <button class="email-action-btn" onclick="EmailModule.openCompose()" title="Compose">Compose</button>
-      <button class="email-action-btn" onclick="EmailModule.refreshInbox()" title="Refresh">Refresh</button>
-      ${syncStatus && syncStatus.last_sync_ago_str ? '<span class="inbox-sync-status">Synced ' + escHtml(syncStatus.last_sync_ago_str) + '</span>' : ''}
-    </div>`;
-
-    // Message list
-    let listHtml = '';
-    if (inboxLoading) {
-      listHtml = '<div class="inbox-empty"><span class="email-spinner"></span><div>Loading...</div></div>';
-    } else if (inboxMessages.length === 0) {
-      listHtml = '<div class="inbox-empty"><div style="font-size:32px;opacity:0.3">&#128235;</div><div>No messages</div></div>';
-    } else {
-      listHtml = inboxMessages.map(m => {
-        const isSelected = String(m.uid) === String(selectedUid);
-        const unreadCls = m.is_read ? '' : ' unread';
-        const selectedCls = isSelected ? ' selected' : '';
-        return `<div class="inbox-msg-row${unreadCls}${selectedCls}" onclick="EmailModule.selectMessage('${escHtml(m.folder || inboxFolder)}', '${escHtml(String(m.uid))}')">
-          <div class="inbox-msg-sender">${escHtml(parseSender(m.from))}</div>
-          <div class="inbox-msg-subject">${escHtml(m.subject || '(no subject)')}</div>
-          <div class="inbox-msg-snippet">${escHtml(m.snippet || '')}</div>
-          <div class="inbox-msg-date">${fmtInboxDate(m.date)}</div>
-        </div>`;
-      }).join('');
-    }
+    // Message list (with search bar at top)
+    const listHtml = buildListHtml();
 
     // Preview pane
     let previewHtml = '';
@@ -957,9 +1006,11 @@ const EmailModule = (function () {
       const sm = selectedMessage;
       let bodyContent = '';
       if (sm.body_html) {
-        // Render HTML in sandboxed iframe
-        const safeHtml = sm.body_html.replace(/"/g, '&quot;');
-        bodyContent = `<iframe class="inbox-preview-iframe" sandbox="allow-same-origin" srcdoc="${safeHtml}"></iframe>`;
+        // Render HTML with CSP that allows remote images but blocks scripts
+        const cspMeta = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src * data: blob:; style-src * \'unsafe-inline\'; font-src *;">';
+        const wrappedHtml = '<!DOCTYPE html><html><head>' + cspMeta + '<style>body{margin:0;padding:8px;font-family:sans-serif;color:#333;}</style></head><body>' + sm.body_html + '</body></html>';
+        const safeHtml = wrappedHtml.replace(/"/g, '&quot;');
+        bodyContent = `<iframe class="inbox-preview-iframe" srcdoc="${safeHtml}" onload="this.style.height=this.contentDocument.body.scrollHeight+'px'"></iframe>`;
       } else {
         bodyContent = `<pre class="inbox-preview-text">${escHtml(sm.body || '(empty)')}</pre>`;
       }
@@ -979,14 +1030,14 @@ const EmailModule = (function () {
             <button class="email-action-btn danger" onclick="EmailModule.trashMessage('${escHtml(sm.folder || inboxFolder)}', '${escHtml(String(sm.uid || selectedUid))}')">Trash</button>
             <button class="email-action-btn" onclick="EmailModule.toggleReadStatus('${escHtml(sm.folder || inboxFolder)}', '${escHtml(String(sm.uid || selectedUid))}')">Mark Unread</button>
           </div>
+          ${attachmentsHtml}
         </div>
-        <div class="inbox-preview-body">${bodyContent}${attachmentsHtml}</div>`;
+        <div class="inbox-preview-body">${bodyContent}</div>`;
     } else {
       previewHtml = '<div class="inbox-empty"><div style="font-size:32px;opacity:0.3">&#9993;</div><div>Select a message to read</div></div>';
     }
 
     return `<div class="inbox-container">
-      ${toolbarHtml}
       <div class="inbox-split">
         <div class="inbox-list">${listHtml}</div>
         <div class="inbox-preview">${previewHtml}</div>
@@ -1073,7 +1124,20 @@ const EmailModule = (function () {
   // --- Render: Drafts Tab ---
 
   function renderDraftsTab() {
+    const isRunning = runningOp === 'run' || runningOp === 'dry-run';
+    const canRun = status && status.gmail_connected && status.has_api_key && status.has_auto_draft_perm;
+
     let html = renderStatusBanner();
+
+    // Run controls
+    html += `<div class="email-drafts-toolbar">
+      <button class="email-action-btn" onclick="EmailModule.runDrafter(true)" ${!canRun || isRunning ? 'disabled' : ''} title="Preview what would be drafted">
+        ${runningOp === 'dry-run' ? '<span class="email-spinner"></span> Checking...' : 'Dry Run'}
+      </button>
+      <button class="email-action-btn primary" onclick="EmailModule.runDrafter(false)" ${!canRun || isRunning ? 'disabled' : ''} title="Check inbox and create drafts">
+        ${runningOp === 'run' ? '<span class="email-spinner"></span> Running...' : 'Run Now'}
+      </button>
+    </div>`;
 
     if (loading) {
       html += '<div class="email-empty"><span class="email-spinner"></span><div>Loading drafts...</div></div>';
@@ -1515,28 +1579,7 @@ const EmailModule = (function () {
   // --- Main Render ---
 
   function renderPanel() {
-    const isRunning = runningOp === 'run' || runningOp === 'dry-run';
-    const canRun = status && status.gmail_connected && status.has_api_key && status.has_auto_draft_perm;
-
-    return `<div class="email-toolbar">
-      <div class="email-toolbar-left">
-        <button class="email-tab${activeTab === 'inbox' ? ' active' : ''}" onclick="EmailModule.setTab('inbox')">Inbox</button>
-        <button class="email-tab${activeTab === 'drafts' ? ' active' : ''}" onclick="EmailModule.setTab('drafts')">Drafts${drafts.length ? ' (' + drafts.length + ')' : ''}</button>
-        <button class="email-tab${activeTab === 'history' ? ' active' : ''}" onclick="EmailModule.setTab('history')">History</button>
-        <button class="email-tab${activeTab === 'spam' ? ' active' : ''}" onclick="EmailModule.setTab('spam')">Spam</button>
-        <button class="email-tab${activeTab === 'settings' ? ' active' : ''}" onclick="EmailModule.setTab('settings')">Settings</button>
-        <button class="email-tab${activeTab === 'profile' ? ' active' : ''}" onclick="EmailModule.setTab('profile')">Profile</button>
-      </div>
-      <div class="email-toolbar-right">
-        <button class="email-action-btn" onclick="EmailModule.runDrafter(true)" ${!canRun || isRunning ? 'disabled' : ''} title="Preview what would be drafted">
-          ${runningOp === 'dry-run' ? '<span class="email-spinner"></span> Checking...' : 'Dry Run'}
-        </button>
-        <button class="email-action-btn primary" onclick="EmailModule.runDrafter(false)" ${!canRun || isRunning ? 'disabled' : ''} title="Check inbox and create drafts">
-          ${runningOp === 'run' ? '<span class="email-spinner"></span> Running...' : 'Run Now'}
-        </button>
-      </div>
-    </div>
-    <div class="email-split">
+    return `<div class="email-split">
       <div class="email-split-top${activeTab === 'inbox' ? '' : ' email-content'}">
         ${activeTab === 'inbox' ? renderInboxTab() : ''}
         ${activeTab === 'drafts' ? renderDraftsTab() : ''}
@@ -1544,9 +1587,6 @@ const EmailModule = (function () {
         ${activeTab === 'spam' ? renderSpamTab() : ''}
         ${activeTab === 'settings' ? renderSettingsTab() : ''}
         ${activeTab === 'profile' ? renderProfileTab() : ''}
-      </div>
-      <div class="email-split-bottom">
-        ${renderChatPane()}
       </div>
     </div>`;
   }
@@ -1623,6 +1663,14 @@ const EmailModule = (function () {
         <span class="email-sidebar-folder-label">${t.label}</span>
         ${t.count > 0 ? `<span class="email-sidebar-folder-count">${t.count}</span>` : ''}
       </button>`;
+    }
+    html += '</div>';
+
+    // Sync status + button
+    html += '<div class="email-sidebar-sync">';
+    html += `<button class="email-sidebar-sync-btn" onclick="EmailModule.refreshInbox()" title="Force refresh from Gmail">Sync Now</button>`;
+    if (syncStatus && syncStatus.last_sync_ago_str) {
+      html += `<span class="email-sidebar-sync-status">Synced ${escHtml(syncStatus.last_sync_ago_str)}</span>`;
     }
     html += '</div>';
 

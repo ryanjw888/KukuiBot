@@ -252,9 +252,49 @@ def _extract_body(msg: email.message.Message) -> str:
         return text
 
 
+def _resolve_cid_images(html: str, msg: email.message.Message) -> str:
+    """Replace cid: references in HTML with inline data: URIs from MIME parts."""
+    import re
+
+    if not msg.is_multipart() or "cid:" not in html.lower():
+        return html
+
+    # Build map of Content-ID -> data URI
+    cid_map: dict[str, str] = {}
+    for part in msg.walk():
+        content_id = part.get("Content-ID")
+        if not content_id:
+            continue
+        ct = part.get_content_type() or ""
+        if not ct.startswith("image/"):
+            continue
+        # Strip angle brackets: <image001.png@01DA1234> -> image001.png@01DA1234
+        cid = content_id.strip("<>").strip()
+        payload = part.get_payload(decode=True)
+        if not payload:
+            continue
+        # Cap at 2MB per image to avoid bloating the response
+        if len(payload) > 2 * 1024 * 1024:
+            continue
+        b64 = base64.b64encode(payload).decode("ascii")
+        cid_map[cid] = f"data:{ct};base64,{b64}"
+
+    if not cid_map:
+        return html
+
+    # Replace cid: references (handles both quoted and unquoted, case-insensitive)
+    def _replace_cid(match):
+        cid_ref = match.group(1)
+        return cid_map.get(cid_ref, match.group(0))
+
+    # Match src="cid:xxx", src='cid:xxx', and bare cid:xxx in url()
+    html = re.sub(r'cid:([^\s"\'<>]+)', _replace_cid, html, flags=re.IGNORECASE)
+    return html
+
+
 def _extract_body_both(msg: email.message.Message) -> tuple[str, str | None]:
     """Extract both plain text and HTML body from email.
-    Returns (plain_text, html_or_none)."""
+    Returns (plain_text, html_or_none). Resolves cid: inline images to data URIs."""
     if msg.is_multipart():
         plain = ""
         html = ""
@@ -268,6 +308,9 @@ def _extract_body_both(msg: email.message.Message) -> tuple[str, str | None]:
                 payload = part.get_payload(decode=True)
                 if payload:
                     html = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+        # Resolve cid: inline images in HTML
+        if html:
+            html = _resolve_cid_images(html, msg)
         if plain:
             return plain, html or None
         if html:
