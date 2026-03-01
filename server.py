@@ -3978,10 +3978,16 @@ async def update_apply(req: Request):
             capture_output=True, text=True, timeout=5,
         ).stdout.strip() or "master"
 
+        # Try fast-forward first; fall back to rebase if local commits diverged
         result = subprocess.run(
             ["git", "-C", src_dir, "pull", "origin", branch, "--ff-only"],
             capture_output=True, text=True, timeout=30,
         )
+        if result.returncode != 0:
+            result = subprocess.run(
+                ["git", "-C", src_dir, "pull", "origin", branch, "--rebase"],
+                capture_output=True, text=True, timeout=60,
+            )
         if result.returncode != 0:
             return JSONResponse({"error": f"Pull failed: {result.stderr.strip()}"}, status_code=500)
 
