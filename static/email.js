@@ -40,6 +40,9 @@ const EmailModule = (function () {
   let aiReplyLoading = false;
   let syncStatus = null;      // {total_cached, last_sync_ts, last_sync_ago_str, folders}
   let syncTimer = null;
+  let showRedirect = false;   // redirect dialog visible
+  let redirectData = { to: '', subject: '' };
+  let redirectSending = false;
 
   // Chat state
   let chatMessages = []; // [{role, text, ts}]
@@ -981,6 +984,7 @@ const EmailModule = (function () {
               ${aiReplyLoading ? '<span class="email-spinner"></span> Generating...' : 'AI Reply'}
             </button>
             <button class="email-action-btn" onclick="EmailModule.replyTo()">Reply</button>
+            <button class="email-action-btn" onclick="EmailModule.openRedirect()">Redirect</button>
             <button class="email-action-btn danger" onclick="EmailModule.trashMessage('${escHtml(sm.folder || inboxFolder)}', '${escHtml(String(sm.uid || selectedUid))}')">Trash</button>
             <button class="email-action-btn" onclick="EmailModule.toggleReadStatus('${escHtml(sm.folder || inboxFolder)}', '${escHtml(String(sm.uid || selectedUid))}')">Mark Unread</button>
           </div>
@@ -1062,6 +1066,7 @@ const EmailModule = (function () {
               ${aiReplyLoading ? '<span class="email-spinner"></span> Generating...' : 'AI Reply'}
             </button>
             <button class="email-action-btn" onclick="EmailModule.replyTo()">Reply</button>
+            <button class="email-action-btn" onclick="EmailModule.openRedirect()">Redirect</button>
             <button class="email-action-btn danger" onclick="EmailModule.trashMessage('${escHtml(sm.folder || inboxFolder)}', '${escHtml(String(sm.uid || selectedUid))}')">Trash</button>
             <button class="email-action-btn" onclick="EmailModule.toggleReadStatus('${escHtml(sm.folder || inboxFolder)}', '${escHtml(String(sm.uid || selectedUid))}')">Mark Unread</button>
           </div>
@@ -1072,12 +1077,40 @@ const EmailModule = (function () {
       previewHtml = '<div class="inbox-empty"><div style="font-size:32px;opacity:0.3">&#9993;</div><div>Select a message to read</div></div>';
     }
 
+    // Redirect dialog (similar to compose overlay but simpler)
+    let redirectHtml = '';
+    if (showRedirect) {
+      redirectHtml = `<div class="inbox-compose-overlay" style="max-height:200px">
+        <div class="inbox-compose-titlebar">
+          <span class="inbox-compose-title">Redirect Email</span>
+          <button class="inbox-compose-close" onclick="EmailModule.closeRedirect()" title="Close">&times;</button>
+        </div>
+        <div class="inbox-compose-form">
+          <input id="redirect-to-input" class="inbox-compose-field" type="email" placeholder="Recipient email address"
+            value="${escHtml(redirectData.to)}"
+            oninput="EmailModule.updateRedirect('to', this.value)"
+            onkeydown="if(event.key==='Enter'){event.preventDefault();EmailModule.sendRedirect()}" />
+          <input class="inbox-compose-field" type="text" placeholder="Subject (leave as-is or edit)"
+            value="${escHtml(redirectData.subject)}"
+            oninput="EmailModule.updateRedirect('subject', this.value)"
+            onkeydown="if(event.key==='Enter'){event.preventDefault();EmailModule.sendRedirect()}" />
+        </div>
+        <div class="inbox-compose-footer">
+          <button class="email-action-btn primary" onclick="EmailModule.sendRedirect()" ${redirectSending ? 'disabled' : ''}>
+            ${redirectSending ? '<span class="email-spinner"></span> Sending...' : 'Redirect'}
+          </button>
+          <button class="email-action-btn danger" onclick="EmailModule.closeRedirect()" style="margin-left:auto">Cancel</button>
+        </div>
+      </div>`;
+    }
+
     return `<div class="inbox-container">
       <div class="inbox-split">
         <div class="inbox-list">${listHtml}</div>
         <div class="inbox-preview">${previewHtml}</div>
       </div>
       ${composeHtml}
+      ${redirectHtml}
     </div>`;
   }
 
@@ -1136,6 +1169,63 @@ const EmailModule = (function () {
     composeData = { to: sm.from || '', subject: reSubject, body: aiText + quotedOriginal };
     showCompose = true;
     rerender();
+  }
+
+  function openRedirect() {
+    if (!selectedMessage) return;
+    redirectData = { to: '', subject: selectedMessage.subject || '' };
+    showRedirect = true;
+    redirectSending = false;
+    rerender();
+    // Focus the To field after render
+    requestAnimationFrame(() => {
+      const el = document.getElementById('redirect-to-input');
+      if (el) el.focus();
+    });
+  }
+
+  function closeRedirect() {
+    showRedirect = false;
+    redirectSending = false;
+    rerender();
+  }
+
+  function updateRedirect(field, value) {
+    redirectData[field] = value;
+  }
+
+  async function sendRedirect() {
+    if (!redirectData.to || !selectedMessage) {
+      alert('Recipient address is required.');
+      return;
+    }
+    redirectSending = true;
+    rerender();
+    const resp = await apiFetch('/api/gmail/redirect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        folder: selectedMessage.folder || inboxFolder,
+        uid: String(selectedMessage.uid || selectedUid),
+        to: redirectData.to,
+        subject: redirectData.subject || undefined,
+      }),
+    });
+    redirectSending = false;
+    if (resp.error) {
+      alert('Redirect error: ' + resp.error);
+      rerender();
+    } else {
+      showRedirect = false;
+      rerender();
+      // Toast feedback
+      const toast = document.createElement('div');
+      toast.className = 'inbox-compose-success';
+      toast.textContent = 'Redirected to ' + redirectData.to;
+      toast.style.cssText = 'position:fixed;bottom:20px;right:20px;background:var(--green,#22c55e);color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;z-index:9999;opacity:1;transition:opacity 0.5s';
+      document.body.appendChild(toast);
+      setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 500); }, 2500);
+    }
   }
 
   function selectMessage(folder, uid) {
@@ -1797,6 +1887,10 @@ const EmailModule = (function () {
     updateCompose,
     replyTo,
     aiReply,
+    openRedirect,
+    closeRedirect,
+    updateRedirect,
+    sendRedirect,
     setInboxFolder,
     setInboxSearch,
     clearSearch,

@@ -1105,6 +1105,66 @@ def trash_message(folder: str, uid: str) -> dict:
             _return_imap(imap)
 
 
+def redirect_email(folder: str, uid: str, to: str, subject_override: str | None = None) -> dict:
+    """
+    Redirect (bounce) an email to a new recipient as-is.
+
+    Fetches the original raw message, rewrites From/To/Subject headers,
+    and sends via SMTP preserving the full MIME structure (HTML, attachments).
+    No permission checks. No sanitization. Intended for forwarding reports intact.
+    """
+    email_addr = _get_config("gmail.email", "")
+    app_password = _get_config("gmail.app_password", "")
+    if not email_addr or not app_password:
+        raise RuntimeError("No Gmail credentials — add email + app password in Settings")
+
+    imap = _get_imap()
+    errored = False
+    try:
+        imap_folder = _resolve_folder(folder)
+        status, _ = imap.select(f'"{imap_folder}"', readonly=True)
+        if status != "OK":
+            raise RuntimeError(f"Could not open folder: {imap_folder}")
+
+        status, msg_data = imap.fetch(uid.encode(), "(RFC822)")
+        if status != "OK" or not msg_data or not msg_data[0]:
+            raise RuntimeError(f"Message {uid} not found in {folder}")
+
+        raw = msg_data[0][1]
+        msg = email.message_from_bytes(raw)
+
+        # Rewrite headers — delete originals, set new ones
+        del msg["To"]
+        del msg["Cc"]
+        del msg["Bcc"]
+        del msg["From"]
+        del msg["Reply-To"]
+        msg["From"] = email_addr
+        msg["To"] = to
+
+        if subject_override is not None and subject_override.strip():
+            del msg["Subject"]
+            msg["Subject"] = subject_override
+
+        # Send via SMTP with full MIME intact
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(email_addr, app_password)
+            server.sendmail(email_addr, [to], msg.as_bytes())
+
+        original_subject = msg.get("Subject", "(no subject)")
+        logger.info(f"Gmail redirect: to={to} subject={original_subject[:50]}")
+        return {"ok": True, "to": to, "subject": original_subject}
+    except Exception:
+        errored = True
+        raise
+    finally:
+        if errored:
+            _discard_imap(imap)
+        else:
+            _return_imap(imap)
+
+
 def set_message_flags(folder: str, uid: str, flags: dict) -> dict:
     """Set IMAP flags on a message. Requires read_inbox permission.
 

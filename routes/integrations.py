@@ -326,6 +326,32 @@ async def api_gmail_send(req: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@router.post("/api/gmail/redirect")
+async def api_gmail_redirect(req: Request):
+    """Redirect (bounce) an email to a new recipient as-is.
+    Preserves full MIME (HTML, attachments). No permission checks, no sanitization."""
+    from gmail_bridge import redirect_email
+    body = await req.json()
+    folder = body.get("folder", "INBOX")
+    uid = body.get("uid", "")
+    to = body.get("to", "")
+    subject = body.get("subject")  # None means keep original
+    if not uid or not to:
+        return JSONResponse({"error": "uid and to are required"}, status_code=400)
+    if not str(uid).isdigit():
+        return JSONResponse({"error": "uid must be a single numeric message ID"}, status_code=400)
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, lambda: redirect_email(folder, uid, to, subject))
+        return {"ok": True, **result}
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    except Exception as e:
+        logger.warning(f"Gmail redirect failed: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @router.post("/api/gmail/trash")
 async def api_gmail_trash(req: Request):
     """Move a message to trash via IMAP. One message at a time only."""
