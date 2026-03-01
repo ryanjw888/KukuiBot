@@ -39,11 +39,8 @@ logger = logging.getLogger("kukuibot.drafter")
 STYLE_PROFILE_PATH = KUKUIBOT_HOME / "email_style_profile.md"
 STATE_PATH = KUKUIBOT_HOME / "var" / "email_drafter_state.json"
 
-DRAFTER_MODEL = "claude-haiku-4-5-20251001"
-
 MAX_EMAILS_PER_RUN = 10
-MAX_SENT_FOR_PROFILE = 1000
-PROFILE_SAMPLE_SIZE = 100
+MAX_SENT_FOR_PROFILE = 100
 PROFILE_MAX_AGE_DAYS = 7
 MAX_BODY_CHARS = 3000
 MAX_PROCESSED_IDS = 1000
@@ -68,6 +65,72 @@ _BULK_HEADERS = ["List-Unsubscribe", "List-Id", "X-Mailer-Daemon", "X-Auto-Respo
 # Default signature (can be overridden via config)
 DEFAULT_SIGNATURE_HTML = ""
 
+# ---------------------------------------------------------------------------
+# Default filters — each has an id, name, description, enabled flag, and type.
+# "builtin" filters run hardcoded logic. "exclusion" filters use pattern matching.
+# ---------------------------------------------------------------------------
+
+DEFAULT_FILTERS = [
+    {
+        "id": "automated_senders",
+        "name": "Skip automated/noreply senders",
+        "description": "Filters noreply@, mailer-daemon, GitHub/GitLab notifications, Jira, Zendesk, etc.",
+        "enabled": True,
+        "type": "builtin",
+    },
+    {
+        "id": "bulk_mail",
+        "name": "Skip mailing lists & bulk mail",
+        "description": "Filters emails with List-Unsubscribe, List-Id headers, or Precedence: bulk/list/junk.",
+        "enabled": True,
+        "type": "builtin",
+    },
+    {
+        "id": "empty_body",
+        "name": "Skip emails with empty body",
+        "description": "Filters emails with no body text or fewer than 10 characters.",
+        "enabled": True,
+        "type": "builtin",
+    },
+    {
+        "id": "from_self",
+        "name": "Skip emails from yourself",
+        "description": "Filters emails sent from your own Gmail address.",
+        "enabled": True,
+        "type": "builtin",
+    },
+    {
+        "id": "cc_only",
+        "name": "Skip emails where you're only CC'd",
+        "description": "Only draft replies when you're in the To field, not just CC or BCC.",
+        "enabled": True,
+        "type": "builtin",
+    },
+    {
+        "id": "spam_detection",
+        "name": "AI spam/phishing detection",
+        "description": "Uses AI to classify emails as spam or phishing. Detected spam gets 'SPAM:' prepended to the subject.",
+        "enabled": True,
+        "type": "builtin",
+    },
+    {
+        "id": "exclude_senders",
+        "name": "Excluded senders",
+        "description": "Skip emails from specific senders. Use * as wildcard (e.g. *@noreply.github.com).",
+        "enabled": True,
+        "type": "exclusion",
+        "patterns": [],
+    },
+    {
+        "id": "exclude_subjects",
+        "name": "Excluded subjects",
+        "description": "Skip emails matching subject patterns. Use * as wildcard (e.g. *newsletter*).",
+        "enabled": True,
+        "type": "exclusion",
+        "patterns": [],
+    },
+]
+
 
 # ---------------------------------------------------------------------------
 # Config helpers (reuse existing auth module)
@@ -81,6 +144,66 @@ def _get_config(key: str, default: str = "") -> str:
 def _set_config(key: str, value: str):
     from auth import set_config
     set_config(key, value)
+
+
+def _get_filters() -> list[dict]:
+    """Load filters from config, merging with defaults for any missing builtin filters."""
+    raw = _get_config("drafter.filters", "")
+    saved: list[dict] = []
+    if raw:
+        try:
+            saved = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            saved = []
+
+    # Build a lookup of saved filters by id
+    saved_by_id = {f["id"]: f for f in saved if isinstance(f, dict) and "id" in f}
+
+    # Merge: use saved state if it exists, otherwise use default
+    merged = []
+    for default in DEFAULT_FILTERS:
+        if default["id"] in saved_by_id:
+            # Preserve saved enabled/patterns state but update name/description from defaults
+            s = saved_by_id[default["id"]]
+            entry = {**default, "enabled": s.get("enabled", default["enabled"])}
+            if "patterns" in s:
+                entry["patterns"] = s["patterns"]
+            merged.append(entry)
+        else:
+            merged.append({**default})
+
+    # Also include any user-added custom filters not in defaults
+    default_ids = {d["id"] for d in DEFAULT_FILTERS}
+    for s in saved:
+        if isinstance(s, dict) and s.get("id") and s["id"] not in default_ids:
+            merged.append(s)
+
+    return merged
+
+
+def _save_filters(filters: list[dict]):
+    """Save filters to config."""
+    _set_config("drafter.filters", json.dumps(filters))
+
+
+def _migrate_exclusions_to_filters():
+    """One-time migration: move old exclusions config into the new filter format."""
+    raw_excl = _get_config("drafter.exclusions", "")
+    raw_filters = _get_config("drafter.filters", "")
+    if not raw_excl or raw_filters:
+        return  # nothing to migrate, or already migrated
+    try:
+        excl = json.loads(raw_excl)
+    except (json.JSONDecodeError, TypeError):
+        return
+    filters = _get_filters()
+    for f in filters:
+        if f["id"] == "exclude_senders" and excl.get("senders"):
+            f["patterns"] = excl["senders"]
+        if f["id"] == "exclude_subjects" and excl.get("subjects"):
+            f["patterns"] = excl["subjects"]
+    _save_filters(filters)
+    logger.info("Migrated old exclusions to new filter format")
 
 
 def _get_api_key() -> str:
@@ -244,71 +367,321 @@ def _parse_header(raw_header: str) -> str:
     return " ".join(decoded)
 
 
-def _is_automated(msg: email.message.Message) -> bool:
-    """Check if an email is from an automated/noreply sender."""
+def _is_automated_sender(msg: email.message.Message) -> bool:
+    """Check if an email is from an automated/noreply sender (address patterns only)."""
     from_addr = msg.get("From", "")
-    if _AUTOMATED_PATTERNS.search(from_addr):
-        return True
+    return bool(_AUTOMATED_PATTERNS.search(from_addr))
+
+
+def _is_bulk_mail(msg: email.message.Message) -> bool:
+    """Check if an email has mailing list / bulk mail headers."""
     for header in _BULK_HEADERS:
         if msg.get(header):
             return True
     precedence = (msg.get("Precedence") or "").lower()
-    if precedence in ("bulk", "list", "junk"):
-        return True
-    return False
+    return precedence in ("bulk", "list", "junk")
 
 
-def _matches_exclusion(addr: str, subject: str) -> str | None:
-    """Check user-configured exclusion patterns. Returns reason or None."""
-    raw = _get_config("drafter.exclusions", "")
-    if not raw:
-        return None
+def _is_cc_only(msg: email.message.Message, my_email: str) -> bool:
+    """Check if we're only in CC/BCC, not the To field."""
+    to_raw = msg.get("To", "")
+    if not my_email:
+        return False
+    my_lower = my_email.lower()
+    # Parse all To addresses
+    to_addrs = [addr.lower() for _, addr in email.utils.getaddresses([to_raw])]
+    return my_lower not in to_addrs
+
+
+async def _classify_spam(from_addr: str, subject: str, body: str) -> dict:
+    """Classify an email as spam/phishing or legitimate using AI.
+
+    Returns {"is_spam": bool, "confidence": float, "reason": str}.
+    Auto-classifies as spam if injection is detected in the content.
+    Defaults to legitimate on parse errors or ambiguity.
+    """
+    # Pre-check: if injection guard already replaced content, treat as spam
+    if "[CONTENT BLOCKED]" in subject or "[CONTENT BLOCKED]" in body:
+        return {"is_spam": True, "confidence": 0.95,
+                "reason": "injection/manipulation detected in email content"}
+
+    truncated_body = body[:MAX_BODY_CHARS] if body else ""
+
+    system_text = (
+        "You are an email spam and phishing classifier. Analyze the email and respond "
+        "with ONLY a JSON object, no other text. Format: "
+        '{"classification": "spam"|"phishing"|"legitimate", "confidence": 0.0-1.0, "reason": "brief explanation"}\n\n'
+        "Classification criteria:\n"
+        "PHISHING signals: urgency tactics, credential/password/payment requests, suspicious links, "
+        "sender impersonation, mismatched display name vs address, threats of account closure.\n"
+        "SPAM signals: unsolicited commercial offers, mass-marketing language, excessive promotions, "
+        "too-good-to-be-true offers, unknown sender with sales pitch.\n"
+        "LEGITIMATE signals: expected correspondence, personal context, known sender patterns, "
+        "professional tone from real organizations, replies to previous threads.\n\n"
+        "When uncertain, ALWAYS classify as legitimate. False negatives are safer than false positives."
+    )
+
+    prompt = (
+        f"Classify this email:\n\n"
+        f"From: {from_addr}\n"
+        f"Subject: {subject}\n\n"
+        f"Body:\n{truncated_body}"
+    )
+
+    response = await _ai_call(prompt, system_text=system_text, timeout=30)
+
+    # Extract JSON from response (model may wrap in markdown code block)
+    json_str = response.strip()
+    if json_str.startswith("```"):
+        # Strip markdown code fences
+        lines = json_str.split("\n")
+        lines = [l for l in lines if not l.strip().startswith("```")]
+        json_str = "\n".join(lines).strip()
+
     try:
-        exclusions = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return None
-    addr_lower = addr.lower()
-    for pattern in exclusions.get("senders", []):
-        p = pattern.lower().replace("*", ".*")
-        if re.match(p, addr_lower):
-            return f"excluded sender: {pattern}"
-    for pattern in exclusions.get("subjects", []):
-        p = pattern.lower().replace("*", ".*")
-        if re.search(p, subject.lower()):
-            return f"excluded subject: {pattern}"
+        parsed = json.loads(json_str)
+    except json.JSONDecodeError:
+        logger.warning(f"Spam classifier returned non-JSON: {response[:100]}")
+        return {"is_spam": False, "confidence": 0.0, "reason": "classification parse error"}
+
+    classification = parsed.get("classification", "legitimate").lower()
+    confidence = float(parsed.get("confidence", 0.0))
+    reason = str(parsed.get("reason", ""))[:200]
+
+    return {
+        "is_spam": classification in ("spam", "phishing"),
+        "confidence": confidence,
+        "reason": reason,
+    }
+
+
+def _imap_rewrite_subject(raw_bytes: bytes, new_subject: str, original_msg_num: bytes) -> bool:
+    """Rewrite an email's subject via IMAP copy-and-replace.
+
+    Opens a separate read-write IMAP connection. Parses the original message,
+    replaces the Subject header, APPENDs the modified copy back to INBOX,
+    then DELETEs and EXPUNGEs the original. Preserves all other headers,
+    body, attachments, and MIME structure.
+
+    Returns True on success, False on failure.
+    """
+    # Idempotency guard
+    try:
+        orig_msg = email.message_from_bytes(raw_bytes)
+        orig_subject = _parse_header(orig_msg.get("Subject", ""))
+        if orig_subject.upper().startswith("SPAM:"):
+            return True
+    except Exception:
+        pass
+
+    imap = None
+    try:
+        imap = _imap_connect()
+        status, _ = imap.select("INBOX")  # read-write
+        if status != "OK":
+            logger.warning("IMAP rewrite: could not open INBOX read-write")
+            return False
+
+        # Parse and modify subject
+        msg = email.message_from_bytes(raw_bytes)
+        del msg["Subject"]
+        msg["Subject"] = new_subject
+
+        # Fetch original flags (exclude \Recent and \Deleted)
+        status, flag_data = imap.fetch(original_msg_num, "(FLAGS)")
+        flags_str = ""
+        if status == "OK" and flag_data and flag_data[0]:
+            import re as _re
+            m = _re.search(rb"\(([^)]*)\)", flag_data[0] if isinstance(flag_data[0], bytes) else flag_data[0][0] if flag_data[0] else b"")
+            if m:
+                raw_flags = m.group(1).decode("utf-8", errors="replace")
+                cleaned = [f for f in raw_flags.split() if f not in ("\\Recent", "\\Deleted")]
+                flags_str = " ".join(cleaned)
+
+        # APPEND modified copy
+        status, resp = imap.append(
+            "INBOX",
+            flags_str if flags_str else None,
+            imaplib.Time2Internaldate(time.time()),
+            msg.as_bytes(),
+        )
+        if status != "OK":
+            logger.warning(f"IMAP rewrite: APPEND failed: {resp}")
+            return False
+
+        # DELETE original
+        imap.store(original_msg_num, "+FLAGS", "\\Deleted")
+        imap.expunge()
+
+        logger.info(f"IMAP subject rewritten to: {new_subject[:60]}")
+        return True
+
+    except Exception as e:
+        logger.warning(f"IMAP rewrite failed: {e}")
+        return False
+    finally:
+        if imap:
+            try:
+                imap.logout()
+            except Exception:
+                pass
+
+
+def _matches_patterns(value: str, patterns: list[str]) -> str | None:
+    """Check if value matches any wildcard pattern. Returns matched pattern or None."""
+    val_lower = value.lower()
+    for pattern in patterns:
+        p = pattern.strip().lower().replace("*", ".*")
+        if not p:
+            continue
+        try:
+            if re.search(p, val_lower):
+                return pattern
+        except re.error:
+            continue
+    return None
+
+
+def _check_filters(msg: email.message.Message, from_addr: str, subject: str,
+                   body: str, my_email: str, filters: list[dict]) -> tuple[str, str] | None:
+    """Run all enabled filters against a message.
+
+    Returns (action, reason) if the message should be skipped, or None to proceed.
+    The action string is used for history recording.
+    """
+    filters_by_id = {f["id"]: f for f in filters}
+
+    # --- Builtin filters ---
+
+    f = filters_by_id.get("automated_senders", {})
+    if f.get("enabled", True) and _is_automated_sender(msg):
+        return ("skipped_auto", "automated sender")
+
+    f = filters_by_id.get("bulk_mail", {})
+    if f.get("enabled", True) and _is_bulk_mail(msg):
+        return ("skipped_auto", "bulk/mailing list")
+
+    f = filters_by_id.get("empty_body", {})
+    if f.get("enabled", True) and (not body or len(body.strip()) < 10):
+        return ("skipped_empty", "empty body")
+
+    f = filters_by_id.get("from_self", {})
+    if f.get("enabled", True) and from_addr == my_email.lower():
+        return ("skipped_auto", "from self")
+
+    f = filters_by_id.get("cc_only", {})
+    if f.get("enabled", True) and _is_cc_only(msg, my_email):
+        return ("skipped_auto", "CC only (not in To)")
+
+    # --- Exclusion pattern filters ---
+
+    f = filters_by_id.get("exclude_senders", {})
+    if f.get("enabled", True):
+        matched = _matches_patterns(from_addr, f.get("patterns", []))
+        if matched:
+            return ("skipped_excluded", f"excluded sender: {matched}")
+
+    f = filters_by_id.get("exclude_subjects", {})
+    if f.get("enabled", True):
+        matched = _matches_patterns(subject, f.get("patterns", []))
+        if matched:
+            return ("skipped_excluded", f"excluded subject: {matched}")
+
     return None
 
 
 # ---------------------------------------------------------------------------
-# AI call (async — uses anthropic_bridge.anthropic_chat)
+# AI call — routes through the app's /api/chat endpoint so it uses
+# whichever provider is actually connected (Claude Code, Anthropic API,
+# OpenRouter, etc.) — same routing as the chat pane and new-worker tabs.
 # ---------------------------------------------------------------------------
 
+def _resolve_drafter_session_id() -> str:
+    """Pick a session ID that routes to the best available model.
+
+    Uses the same provider-detection logic the main app uses:
+      - Claude Code bridge up  → tab-claude_sonnet-drafter
+      - Anthropic API key      → tab-anthropic_...-drafter
+      - OpenRouter models      → tab-openrouter_...-drafter
+      - Fallback               → tab-codex-drafter (OpenAI)
+    """
+    # Check Claude Code bridge
+    try:
+        from claude_bridge import get_claude_pool
+        pool = get_claude_pool()
+        if pool is not None:
+            return "tab-claude_sonnet-drafter"
+    except Exception:
+        pass
+    # Check Anthropic API
+    if _get_api_key():
+        return "tab-anthropic-drafter"
+    # Fallback
+    return "tab-codex-drafter"
+
+
 async def _ai_call(prompt: str, system_text: str = "", timeout: int = 120) -> str:
-    """Non-streaming AI call via Anthropic Messages API."""
-    from anthropic_bridge import anthropic_chat
+    """AI call routed through the app's /api/chat endpoint.
 
-    api_key = _get_api_key()
-    if not api_key:
-        raise RuntimeError("No Anthropic API key configured — add one in Settings > Anthropic API")
+    Sends a message to /api/chat, consumes the SSE stream, and returns
+    the concatenated response text. Uses whichever AI provider is connected.
+    """
+    import httpx
 
-    messages = [{"role": "user", "content": prompt}]
-    system = [{"type": "text", "text": system_text}] if system_text else None
+    from config import PORT
 
-    result = await anthropic_chat(
-        messages=messages,
-        system=system,
-        model=DRAFTER_MODEL,
-        api_key=api_key,
-        max_tokens=4096,
-        temperature=0.7,
-        timeout_s=timeout,
-        use_prompt_caching=False,
-    )
+    session_id = _resolve_drafter_session_id()
+    # Prepend system context to the prompt if provided
+    full_prompt = prompt
+    if system_text:
+        full_prompt = f"[System: {system_text}]\n\n{prompt}"
 
-    if not result.get("ok"):
-        raise RuntimeError(f"AI error: {result.get('error', 'unknown')}")
+    url = f"https://localhost:{PORT}/api/chat"
+    payload = {"message": full_prompt, "session_id": session_id, "_internal": True}
 
-    text = result.get("text", "").strip()
+    collected_text = []
+    try:
+        async with httpx.AsyncClient(
+            verify=False,
+            timeout=httpx.Timeout(timeout, connect=10),
+        ) as client:
+            async with client.stream("POST", url, json=payload) as resp:
+                if resp.status_code == 409:
+                    raise RuntimeError("AI backend busy — another request in progress on drafter session")
+                if resp.status_code != 200:
+                    body = await resp.aread()
+                    raise RuntimeError(f"AI call failed (HTTP {resp.status_code}): {body.decode('utf-8', errors='replace')[:200]}")
+
+                buf = ""
+                async for chunk in resp.aiter_text():
+                    buf += chunk
+                    # Parse SSE frames
+                    while "\n\n" in buf:
+                        frame, buf = buf.split("\n\n", 1)
+                        data_lines = []
+                        for line in frame.split("\n"):
+                            if line.startswith("data: "):
+                                data_lines.append(line[6:])
+                            elif line.startswith("data:"):
+                                data_lines.append(line[5:])
+                        if not data_lines:
+                            continue
+                        try:
+                            evt = json.loads("\n".join(data_lines))
+                            if evt.get("type") in ("text", "chunk"):
+                                collected_text.append(evt.get("text", ""))
+                            if evt.get("type") == "error":
+                                raise RuntimeError(f"AI error: {evt.get('text', 'unknown')}")
+                            if evt.get("type") == "done":
+                                break
+                        except json.JSONDecodeError:
+                            continue
+    except httpx.TimeoutException:
+        raise RuntimeError(f"AI call timed out after {timeout}s")
+    except httpx.ConnectError:
+        raise RuntimeError("Could not connect to local server for AI call")
+
+    text = "".join(collected_text).strip()
     if not text or len(text) < 5:
         raise RuntimeError("AI returned empty response")
     return text
@@ -332,7 +705,7 @@ async def build_style_profile(force: bool = False) -> str:
     from gmail_bridge import check_permission
     check_permission("read_sent")
 
-    logger.info(f"Building style profile from last {MAX_SENT_FOR_PROFILE} sent emails...")
+    logger.info(f"Building style profile from last {MAX_SENT_FOR_PROFILE} sent emails (fetching only recent)...")
 
     imap = _imap_connect()
     sent_bodies = []
@@ -382,30 +755,14 @@ async def build_style_profile(force: bool = False) -> str:
     if len(sent_bodies) < 5:
         raise RuntimeError(f"Only found {len(sent_bodies)} sent emails — need at least 5")
 
-    # Sample for the AI prompt
-    if len(sent_bodies) > PROFILE_SAMPLE_SIZE:
-        step = len(sent_bodies) // (PROFILE_SAMPLE_SIZE // 2)
-        evenly_spaced = sent_bodies[::max(step, 1)][:PROFILE_SAMPLE_SIZE // 2]
-        recent_extra = sent_bodies[:PROFILE_SAMPLE_SIZE // 2]
-        seen = set()
-        samples = []
-        for s in recent_extra + evenly_spaced:
-            key = (s["subject"], s["body"][:100])
-            if key not in seen:
-                seen.add(key)
-                samples.append(s)
-        samples = samples[:PROFILE_SAMPLE_SIZE]
-    else:
-        samples = sent_bodies
-
-    logger.info(f"Sending {len(samples)} samples to AI for style analysis...")
+    logger.info(f"Sending {len(sent_bodies)} emails to AI for style analysis...")
 
     sample_text = ""
-    for i, s in enumerate(samples, 1):
+    for i, s in enumerate(sent_bodies, 1):
         sample_text += f"\n--- Email {i} ---\n"
         sample_text += f"To: {s['to']}\nSubject: {s['subject']}\nBody:\n{s['body']}\n"
 
-    prompt = f"""Analyze these {len(samples)} sent emails and produce a concise writing style profile.
+    prompt = f"""Analyze these {len(sent_bodies)} sent emails and produce a concise writing style profile.
 Be very specific — quote actual phrases. This profile will be used to draft emails that sound exactly like the author.
 
 Cover: tone, greetings, sign-offs, sentence style, common phrases, punctuation habits, typical response length.
@@ -533,22 +890,23 @@ async def check_and_draft(dry_run: bool = False) -> dict:
     # Ensure history table exists
     _ensure_history_table()
 
-    # Load or build style profile
+    # Load style profile (must be pre-built via Profile tab)
     style_profile = _get_style_profile()
     if not style_profile:
-        style_profile = await build_style_profile()
+        raise RuntimeError("No writing style profile — go to Profile tab and click 'Build Now' first")
 
     state = _load_state()
     processed_ids = set(state.get("processed_ids", []))
     from_email = _get_config("gmail.email", "")
     signature_html = _get_config("drafter.signature_html", DEFAULT_SIGNATURE_HTML)
+    filters = _get_filters()
 
     max_per_run = int(_get_config("drafter.max_per_run", str(MAX_EMAILS_PER_RUN)))
 
     logger.info("Checking inbox for new unread emails...")
 
     imap = _imap_connect()
-    results = {"drafted": 0, "skipped": 0, "errors": 0, "details": []}
+    results = {"drafted": 0, "skipped": 0, "spam": 0, "errors": 0, "details": []}
 
     try:
         status, _ = imap.select("INBOX", readonly=True)
@@ -591,47 +949,51 @@ async def check_and_draft(dry_run: bool = False) -> dict:
                 subject = _parse_header(msg.get("Subject", "(no subject)"))
                 body = _extract_body(msg)
 
-                # Skip automated senders
-                if _is_automated(msg):
+                # Injection guard — scan subject + body before passing to AI
+                try:
+                    from injection_guard import scan_and_filter
+                    subject = scan_and_filter(subject, source="email_subject")
+                    body = scan_and_filter(body, source="email")
+                except Exception as e:
+                    logger.warning(f"Injection guard failed for {message_id}: {e}")
+
+                # Run all enabled filters
+                skip = _check_filters(msg, from_addr_parsed, subject, body, from_email, filters)
+                if skip:
+                    action, reason = skip
                     results["skipped"] += 1
                     results["details"].append({
                         "from": from_addr_parsed, "subject": subject[:80],
-                        "action": "skipped", "reason": "automated sender",
+                        "action": "skipped", "reason": reason,
                     })
-                    _record_history(message_id, from_addr_parsed, subject,
-                                    "skipped_auto", "automated sender")
+                    _record_history(message_id, from_addr_parsed, subject, action, reason)
                     processed_ids.add(message_id)
                     continue
 
-                # Skip user-configured exclusions
-                exclusion_reason = _matches_exclusion(from_addr_parsed, subject)
-                if exclusion_reason:
-                    results["skipped"] += 1
-                    results["details"].append({
-                        "from": from_addr_parsed, "subject": subject[:80],
-                        "action": "skipped", "reason": exclusion_reason,
-                    })
-                    _record_history(message_id, from_addr_parsed, subject,
-                                    "skipped_excluded", exclusion_reason)
-                    processed_ids.add(message_id)
-                    continue
-
-                # Skip empty bodies
-                if not body or len(body.strip()) < 10:
-                    results["skipped"] += 1
-                    results["details"].append({
-                        "from": from_addr_parsed, "subject": subject[:80],
-                        "action": "skipped", "reason": "empty body",
-                    })
-                    _record_history(message_id, from_addr_parsed, subject,
-                                    "skipped_empty", "empty body")
-                    processed_ids.add(message_id)
-                    continue
-
-                # Skip emails from self
-                if from_addr_parsed == from_email.lower():
-                    processed_ids.add(message_id)
-                    continue
+                # Spam/phishing detection (if enabled)
+                spam_filter_enabled = any(
+                    f["id"] == "spam_detection" and f.get("enabled", True) for f in filters
+                )
+                if spam_filter_enabled:
+                    try:
+                        classification = await _classify_spam(from_addr_parsed, subject, body)
+                        if classification["is_spam"]:
+                            new_subject = subject if subject.upper().startswith("SPAM:") else f"SPAM: {subject}"
+                            if not dry_run:
+                                _imap_rewrite_subject(raw, new_subject, num)
+                            results["spam"] += 1
+                            reason = f"spam detected ({classification['confidence']:.0%}): {classification['reason']}"
+                            results["details"].append({
+                                "from": from_addr_parsed, "subject": subject[:80],
+                                "action": "spam_detected", "reason": reason,
+                            })
+                            _record_history(message_id, from_addr_parsed, subject,
+                                            "spam_detected", reason)
+                            processed_ids.add(message_id)
+                            continue
+                    except Exception as e:
+                        logger.warning(f"Spam classification failed for {subject[:40]}: {e}")
+                        # Fail open — proceed with normal drafting
 
                 logger.info(f"  Drafting reply to: {subject[:60]} (from {from_addr_parsed})")
 
@@ -720,7 +1082,7 @@ async def check_and_draft(dry_run: bool = False) -> dict:
         _set_config("drafter.last_run_at", str(int(time.time())))
         _set_config("drafter.last_drafts_count", str(results["drafted"]))
 
-    logger.info(f"Done — {results['drafted']} drafted, {results['skipped']} skipped, {results['errors']} errors")
+    logger.info(f"Done — {results['drafted']} drafted, {results['skipped']} skipped, {results['spam']} spam, {results['errors']} errors")
     return results
 
 
@@ -943,18 +1305,12 @@ def get_status() -> dict:
 
 def get_config_dict() -> dict:
     """Return drafter configuration."""
-    exclusions_raw = _get_config("drafter.exclusions", "")
-    try:
-        exclusions = json.loads(exclusions_raw) if exclusions_raw else {"senders": [], "subjects": []}
-    except (json.JSONDecodeError, TypeError):
-        exclusions = {"senders": [], "subjects": []}
-
     return {
         "enabled": _get_config("drafter.enabled", "0") == "1",
         "check_interval_min": int(_get_config("drafter.check_interval_min", "15")),
         "max_per_run": int(_get_config("drafter.max_per_run", str(MAX_EMAILS_PER_RUN))),
         "signature_html": _get_config("drafter.signature_html", DEFAULT_SIGNATURE_HTML),
-        "exclusions": exclusions,
+        "filters": _get_filters(),
     }
 
 
@@ -970,9 +1326,10 @@ def save_config_dict(cfg: dict):
         _set_config("drafter.max_per_run", str(val))
     if "signature_html" in cfg:
         _set_config("drafter.signature_html", cfg["signature_html"])
-    if "exclusions" in cfg:
-        _set_config("drafter.exclusions", json.dumps(cfg["exclusions"]))
+    if "filters" in cfg:
+        _save_filters(cfg["filters"])
 
 
-# Init history table on import
+# Init history table and migrate old exclusions on import
 _ensure_history_table()
+_migrate_exclusions_to_filters()

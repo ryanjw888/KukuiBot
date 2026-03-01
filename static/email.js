@@ -15,6 +15,9 @@ const EmailModule = (function () {
   let history = [];
   let historyTotal = 0;
   let profile = '';
+  let profileOriginal = '';
+  let profileDirty = false;
+  let profileAce = null;
   let loading = false;
   let runningOp = ''; // 'run' | 'dry-run' | 'rebuild' | 'send:uid' | 'discard:uid'
   let expandedDrafts = new Set();
@@ -55,17 +58,29 @@ const EmailModule = (function () {
     return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
 
-  async function apiFetch(url, opts) {
+  async function apiFetch(url, opts, timeoutMs) {
     try {
+      if (timeoutMs) {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+        opts = { ...opts, signal: ctrl.signal };
+        const res = await fetch(url, opts);
+        clearTimeout(timer);
+        return await res.json();
+      }
       const res = await fetch(url, opts);
       return await res.json();
     } catch (e) {
       console.error('EmailModule fetch error:', url, e);
+      if (e.name === 'AbortError') return { error: 'Request timed out — try again or check server logs' };
       return { error: e.message };
     }
   }
 
   function rerender() {
+    // Skip full re-renders while the profile Ace editor is active —
+    // requestRender does root.innerHTML=... which would destroy the editor.
+    if (profileAce && activeTab === 'profile') return;
     if (typeof requestRender === 'function') requestRender({});
   }
 
@@ -101,6 +116,98 @@ const EmailModule = (function () {
   async function fetchProfile() {
     const resp = await apiFetch('/api/drafter/profile');
     profile = resp.text || '';
+    profileOriginal = profile;
+    profileDirty = false;
+  }
+
+  function initProfileEditor() {
+    if (profileAce) return;
+    if (typeof ace === 'undefined') return;
+    const container = document.getElementById('profile-ace-editor');
+    if (!container) return;
+
+    profileAce = ace.edit(container);
+    profileAce.setShowPrintMargin(false);
+    profileAce.setFontSize(13);
+    profileAce.session.setUseWrapMode(true);
+    profileAce.session.setTabSize(2);
+    profileAce.setOption('scrollPastEnd', 0.3);
+    profileAce.session.setMode('ace/mode/markdown');
+
+    // Match theme
+    const theme = localStorage.getItem('kukuibot.theme') || 'blue';
+    const themeMap = { blue: 'ace/theme/one_dark', claudia: 'ace/theme/one_dark', 'sol-dark': 'ace/theme/solarized_dark', 'sol-light': 'ace/theme/tomorrow' };
+    profileAce.setTheme(themeMap[theme] || themeMap.blue);
+
+    profileAce.session.setValue(profile);
+    profileAce.clearSelection();
+
+    profileAce.session.on('change', () => {
+      const newDirty = profileAce.getValue() !== profileOriginal;
+      if (newDirty !== profileDirty) {
+        profileDirty = newDirty;
+        _updateProfileToolbar();
+      }
+    });
+
+    profileAce.commands.addCommand({
+      name: 'save',
+      bindKey: { win: 'Ctrl-S', mac: 'Cmd-S' },
+      exec: () => saveProfile(),
+    });
+  }
+
+  function destroyProfileEditor() {
+    if (profileAce) {
+      profileAce.destroy();
+      profileAce = null;
+    }
+    profileDirty = false;
+  }
+
+  function _updateProfileToolbar() {
+    const saveBtn = document.getElementById('profile-save-btn');
+    const revertBtn = document.getElementById('profile-revert-btn');
+    const dirtyDot = document.getElementById('profile-dirty-dot');
+    const indicator = document.getElementById('profile-save-indicator');
+    if (saveBtn) saveBtn.disabled = !profileDirty;
+    if (revertBtn) revertBtn.disabled = !profileDirty;
+    if (dirtyDot) dirtyDot.style.display = profileDirty ? 'inline-block' : 'none';
+  }
+
+  async function saveProfile() {
+    if (!profileAce || !profileDirty) return;
+    const text = profileAce.getValue();
+    const resp = await apiFetch('/api/drafter/profile/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (resp.error) {
+      alert('Save failed: ' + resp.error);
+      return;
+    }
+    profile = text;
+    profileOriginal = text;
+    profileDirty = false;
+    _updateProfileToolbar();
+    await fetchStatus();
+    // Flash save indicator
+    const indicator = document.getElementById('profile-save-indicator');
+    if (indicator) {
+      indicator.textContent = 'Saved';
+      indicator.classList.add('show');
+      setTimeout(() => indicator.classList.remove('show'), 1500);
+    }
+  }
+
+  function revertProfile() {
+    if (!profileAce || !profileDirty) return;
+    if (!confirm('Revert to last saved version?')) return;
+    profileAce.session.setValue(profileOriginal);
+    profileAce.clearSelection();
+    profileDirty = false;
+    _updateProfileToolbar();
   }
 
   async function refreshAll() {
@@ -116,17 +223,19 @@ const EmailModule = (function () {
   function buildModelList() {
     availableModels = [];
     if (typeof MODELS === 'undefined') return;
-    // Claude Code models first (they're the primary backend), then others
-    const order = ['claude', 'anthropic', 'openrouter', 'spark', 'codex'];
+    // Use the same availability check as the new-worker modal in app.js
+    const isAvailable = typeof _isModelAvailable === 'function' ? _isModelAvailable : () => true;
+    // Only include models that are actually connected/available
+    const available = Object.entries(MODELS).filter(([k, m]) => isAvailable(k, m));
+    // Claude Code models first, then Anthropic API, then OpenRouter
+    const order = ['claude', 'anthropic', 'openrouter'];
     const groupOf = (key, def) => {
       if (key.startsWith('claude_')) return 'claude';
-      const m = (def.model || '').toLowerCase();
-      if (m.includes('anthropic') || key.startsWith('anthropic_')) return 'anthropic';
-      if (m.includes('openrouter') || key.startsWith('openrouter_')) return 'openrouter';
-      if (key === 'spark') return 'spark';
-      return 'codex';
+      if ((def.model || '') === 'anthropic' || key.startsWith('anthropic_')) return 'anthropic';
+      if ((def.model || '') === 'openrouter' || key.startsWith('openrouter_')) return 'openrouter';
+      return 'other';
     };
-    const sorted = Object.entries(MODELS).sort((a, b) => {
+    const sorted = available.sort((a, b) => {
       const ai = order.indexOf(groupOf(a[0], a[1]));
       const bi = order.indexOf(groupOf(b[0], b[1]));
       return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
@@ -156,12 +265,12 @@ const EmailModule = (function () {
     runningOp = dryRun ? 'dry-run' : 'run';
     rerender();
     const url = dryRun ? '/api/drafter/dry-run' : '/api/drafter/run';
-    const resp = await apiFetch(url, { method: 'POST' });
+    const resp = await apiFetch(url, { method: 'POST' }, 300000);
     runningOp = '';
     if (resp.error) {
       alert('Drafter error: ' + resp.error);
     } else {
-      const msg = `Drafted: ${resp.drafted || 0}, Skipped: ${resp.skipped || 0}, Errors: ${resp.errors || 0}`;
+      const msg = `Drafted: ${resp.drafted || 0} | Skipped: ${resp.skipped || 0} | Spam: ${resp.spam || 0} | Errors: ${resp.errors || 0}`;
       if (dryRun) {
         alert('Dry Run Results\n\n' + msg);
       }
@@ -195,9 +304,10 @@ const EmailModule = (function () {
   }
 
   async function rebuildProfile() {
+    destroyProfileEditor();
     runningOp = 'rebuild';
     rerender();
-    const resp = await apiFetch('/api/drafter/profile/rebuild', { method: 'POST' });
+    const resp = await apiFetch('/api/drafter/profile/rebuild', { method: 'POST' }, 300000);
     runningOp = '';
     if (resp.error) {
       alert('Rebuild error: ' + resp.error);
@@ -206,6 +316,9 @@ const EmailModule = (function () {
       await fetchStatus();
     }
     rerender();
+    if (activeTab === 'profile' && profile) {
+      requestAnimationFrame(() => initProfileEditor());
+    }
   }
 
   async function saveConfig(updates) {
@@ -226,16 +339,30 @@ const EmailModule = (function () {
     rerender();
   }
 
-  function saveExclusions(type, value) {
-    const current = config.exclusions || { senders: [], subjects: [] };
+  function toggleFilter(filterId, enabled) {
+    const filters = (config.filters || []).map(f =>
+      f.id === filterId ? { ...f, enabled } : f
+    );
+    saveConfig({ filters });
+  }
+
+  function saveFilterPatterns(filterId, value) {
     const items = value.split(',').map(s => s.trim()).filter(Boolean);
-    current[type] = items;
-    saveConfig({ exclusions: current });
+    const filters = (config.filters || []).map(f =>
+      f.id === filterId ? { ...f, patterns: items } : f
+    );
+    saveConfig({ filters });
   }
 
   // --- Tab switch ---
 
   async function setTab(tab) {
+    // Destroy profile editor when leaving profile tab
+    if (activeTab === 'profile' && tab !== 'profile') {
+      destroyProfileEditor();
+    }
+    // Skip if already on this tab with an active editor
+    if (tab === 'profile' && profileAce) return;
     activeTab = tab;
     rerender();
     if (tab === 'history' && history.length === 0) {
@@ -245,6 +372,8 @@ const EmailModule = (function () {
     if (tab === 'profile') {
       await fetchProfile();
       rerender();
+      // Init Ace editor after DOM has rendered
+      requestAnimationFrame(() => initProfileEditor());
     }
     if (tab === 'settings' && !config.enabled && config.enabled !== false) {
       await fetchConfig();
@@ -455,6 +584,7 @@ const EmailModule = (function () {
 
   function destroy() {
     initialized = false;
+    destroyProfileEditor();
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
     if (chatAbortController) { try { chatAbortController.abort(); } catch {} }
   }
@@ -587,7 +717,7 @@ const EmailModule = (function () {
     html += '<div class="email-history-list">';
     for (const h of history) {
       const action = (h.action || '').replace('skipped_auto', 'skipped').replace('skipped_excluded', 'skipped').replace('skipped_empty', 'skipped');
-      const cls = action.startsWith('skip') ? 'skipped' : action;
+      const cls = action === 'spam_detected' ? 'spam_detected' : action.startsWith('skip') ? 'skipped' : action;
       html += `<div class="email-history-row">
         <span class="email-history-action ${escHtml(cls)}">${escHtml(action)}</span>
         <span class="email-history-subject" title="${escHtml(h.subject)}">${escHtml(h.subject)}</span>
@@ -606,7 +736,6 @@ const EmailModule = (function () {
     const interval = config.check_interval_min || 15;
     const maxPerRun = config.max_per_run || 10;
     const sig = config.signature_html || '';
-    const excl = config.exclusions || { senders: [], subjects: [] };
 
     // Build model/worker options for the chat section
     const modelOpts = availableModels.map(m =>
@@ -670,23 +799,33 @@ const EmailModule = (function () {
       </div>
 
       <div class="email-settings-group">
-        <h3>Exclusions</h3>
-        <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
-          Comma-separated patterns. Use * as wildcard.
+        <h3>Filters</h3>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:10px">
+          Control which emails get auto-drafted replies. Disable a filter to stop it from skipping emails.
         </div>
-        <div class="email-setting-row" style="flex-direction:column;align-items:stretch;gap:6px">
-          <div class="email-setting-label">Excluded Senders</div>
-          <input type="text" class="email-setting-input" style="width:100%;text-align:left"
-            value="${escHtml(excl.senders.join(', '))}"
-            placeholder="e.g. *@noreply.github.com, alerts@*"
-            onchange="EmailModule.saveExclusions('senders', this.value)" />
-        </div>
-        <div class="email-setting-row" style="flex-direction:column;align-items:stretch;gap:6px;margin-top:8px">
-          <div class="email-setting-label">Excluded Subjects</div>
-          <input type="text" class="email-setting-input" style="width:100%;text-align:left"
-            value="${escHtml(excl.subjects.join(', '))}"
-            placeholder="e.g. *newsletter*, *unsubscribe*"
-            onchange="EmailModule.saveExclusions('subjects', this.value)" />
+        <div class="email-filter-list">
+          ${(config.filters || []).map(f => {
+            const isExclusion = f.type === 'exclusion';
+            const patterns = (f.patterns || []).join(', ');
+            return `<div class="email-filter-item${f.enabled ? '' : ' disabled'}">
+              <div class="email-filter-row">
+                <label class="email-toggle" style="flex-shrink:0">
+                  <input type="checkbox" ${f.enabled ? 'checked' : ''} onchange="EmailModule.toggleFilter('${escHtml(f.id)}', this.checked)">
+                  <span class="email-toggle-slider"></span>
+                </label>
+                <div class="email-filter-info">
+                  <div class="email-filter-name">${escHtml(f.name)}</div>
+                  <div class="email-filter-desc">${escHtml(f.description)}</div>
+                </div>
+              </div>
+              ${isExclusion ? `<div class="email-filter-patterns" style="${f.enabled ? '' : 'opacity:0.5'}">
+                <input type="text" class="email-setting-input" style="width:100%;text-align:left;font-size:12px"
+                  value="${escHtml(patterns)}"
+                  placeholder="${f.id === 'exclude_senders' ? 'e.g. *@noreply.github.com, alerts@*' : 'e.g. *newsletter*, *unsubscribe*'}"
+                  onchange="EmailModule.saveFilterPatterns('${escHtml(f.id)}', this.value)" />
+              </div>` : ''}
+            </div>`;
+          }).join('')}
         </div>
       </div>
 
@@ -708,37 +847,43 @@ const EmailModule = (function () {
       return `<div class="email-empty">
         <span class="email-spinner"></span>
         <div>Rebuilding style profile from sent emails...</div>
-        <div class="email-empty-desc">This analyzes your last 1,000 sent emails. May take a minute.</div>
+        <div class="email-empty-desc">This analyzes your last 100 sent emails. May take a minute.</div>
       </div>`;
     }
 
     const age = status ? status.profile_age_days : null;
     const fresh = status ? status.profile_fresh : false;
 
-    let html = `<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
-      <span style="font-size:14px;font-weight:600;color:var(--text)">Writing Style Profile</span>
-      ${age !== null && age !== undefined ? `<span style="font-size:12px;color:${fresh ? 'var(--green)' : 'var(--yellow)'}">
-        ${fresh ? 'Fresh' : 'Stale'} (${age}d old)
-      </span>` : '<span style="font-size:12px;color:var(--muted)">Not built yet</span>'}
-      <button class="email-action-btn" onclick="EmailModule.rebuildProfile()" style="margin-left:auto">
-        ${profile ? 'Rebuild' : 'Build Now'}
-      </button>
-    </div>`;
-
-    if (profile) {
-      html += `<div class="email-profile-view">${escHtml(profile)}</div>`;
-    } else {
-      html += `<div class="email-empty">
+    if (!profile) {
+      return `<div class="email-empty">
         <div class="email-empty-icon">&#128221;</div>
         <div class="email-empty-title">No style profile yet</div>
         <div class="email-empty-desc">
           Click "Build Now" to analyze your sent emails and create a writing style profile.
           This is required before the drafter can generate replies.
         </div>
+        <button class="email-action-btn primary" onclick="EmailModule.rebuildProfile()" style="margin-top:12px">Build Now</button>
       </div>`;
     }
 
-    return html;
+    return `<div class="profile-editor-wrap">
+      <div class="profile-editor-toolbar">
+        <div class="profile-editor-toolbar-left">
+          <span style="font-size:14px;font-weight:600;color:var(--text)">Writing Style Profile</span>
+          <span id="profile-dirty-dot" class="editor-dirty-dot" style="display:none" title="Unsaved changes"></span>
+          <span id="profile-save-indicator" class="editor-save-indicator"></span>
+          ${age !== null && age !== undefined ? `<span style="font-size:12px;color:${fresh ? 'var(--green)' : 'var(--yellow)'}">
+            ${fresh ? 'Fresh' : 'Stale'} (${age}d old)
+          </span>` : ''}
+        </div>
+        <div class="profile-editor-toolbar-right">
+          <button id="profile-save-btn" class="editor-btn" onclick="EmailModule.saveProfile()" disabled title="Save (Cmd+S)">Save</button>
+          <button id="profile-revert-btn" class="editor-btn" onclick="EmailModule.revertProfile()" disabled title="Revert to saved">Revert</button>
+          <button class="email-action-btn" onclick="EmailModule.rebuildProfile()">Rebuild</button>
+        </div>
+      </div>
+      <div id="profile-ace-editor" class="profile-ace-editor"></div>
+    </div>`;
   }
 
   // --- Render: Chat pane ---
@@ -883,7 +1028,8 @@ const EmailModule = (function () {
     discardDraft,
     rebuildProfile,
     saveConfig,
-    saveExclusions,
+    toggleFilter,
+    saveFilterPatterns,
     toggleDraftExpand,
     refreshAll,
     chatSend,
@@ -892,5 +1038,7 @@ const EmailModule = (function () {
     chatSetModel,
     chatSetWorker,
     chatClear,
+    saveProfile,
+    revertProfile,
   };
 })();

@@ -22,7 +22,8 @@ async def api_drafter_chat_register(req: Request):
         model_key = str(body.get("model_key", "")).strip()
         if not session_id:
             return JSONResponse({"error": "session_id required"}, status_code=400)
-        owner = get_request_user(req)
+        user_info = get_request_user(req)
+        owner = user_info.get("user", "unknown") if isinstance(user_info, dict) else str(user_info or "unknown")
         with db_connection() as db:
             db.execute(
                 """INSERT INTO tab_meta (owner, session_id, tab_id, model_key, label, worker_identity, updated_at)
@@ -201,4 +202,26 @@ async def api_drafter_profile_rebuild():
         return JSONResponse({"error": str(e)}, status_code=500)
     except Exception as e:
         logger.exception("profile rebuild error")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/api/drafter/profile/save")
+async def api_drafter_profile_save(req: Request):
+    """Save manually edited style profile text."""
+    from email_drafter import STYLE_PROFILE_PATH, _load_state, _save_state
+    import time
+    try:
+        body = await req.json()
+        text = body.get("text", "")
+        if not text or len(text.strip()) < 10:
+            return JSONResponse({"error": "Profile text is too short"}, status_code=400)
+        STYLE_PROFILE_PATH.write_text(text, encoding="utf-8")
+        # Update profile_built_at so freshness indicator stays accurate
+        state = _load_state()
+        state["profile_built_at"] = int(time.time())
+        _save_state(state)
+        logger.info(f"Style profile saved manually ({len(text)} chars)")
+        return {"ok": True, "size": len(text)}
+    except Exception as e:
+        logger.exception("profile save error")
         return JSONResponse({"error": str(e)}, status_code=500)

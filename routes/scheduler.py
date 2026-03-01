@@ -205,20 +205,17 @@ async def api_scheduler_run_now(job_id: str):
 
 @router.post("/api/scheduler/nl-to-cron")
 async def api_scheduler_nl_to_cron(req: Request):
-    """Convert natural language schedule description to cron expression using AI."""
+    """Convert natural language schedule description to cron expression using AI.
+
+    Routes through /api/chat so it uses whichever AI provider is connected
+    (Claude Code, Anthropic API, OpenRouter, etc.).
+    """
     from cron_manager import validate_cron_expr as _validate_cron
-    from anthropic_bridge import anthropic_chat, DEFAULT_MODEL as _ANTHROPIC_DEFAULT
 
     body = await req.json()
     text = (body.get("text") or "").strip()
     if not text:
         return JSONResponse({"ok": False, "error": "text is required"}, status_code=400)
-
-    # Import _anthropic_api_key from server at call time to avoid circular import
-    from server import _anthropic_api_key
-    api_key = _anthropic_api_key()
-    if not api_key:
-        return JSONResponse({"ok": False, "error": "No AI API key configured"}, status_code=503)
 
     system_prompt = """You are a cron expression parser. Convert natural language schedule descriptions to 5-field cron expressions.
 
@@ -245,24 +242,9 @@ Rules:
 - Only extract the schedule, not the command"""
 
     try:
-        # Use Haiku for speed + cost efficiency on this simple task
-        result = await anthropic_chat(
-            messages=[{"role": "user", "content": f"Schedule description: {text}"}],
-            system=[{"type": "text", "text": system_prompt}],
-            model="claude-haiku-4-5-20251001",
-            api_key=api_key,
-            max_tokens=512,
-            temperature=0.0,
-            timeout_s=15,
-            use_prompt_caching=False,
-        )
-
-        if not result.get("ok"):
-            return JSONResponse({"ok": False, "error": result.get("error", "AI call failed")}, status_code=500)
-
-        output_text = result.get("text", "")
-        if not output_text:
-            return JSONResponse({"ok": False, "error": "No response from AI"}, status_code=500)
+        from email_drafter import _ai_call
+        prompt = f"[System: {system_prompt}]\n\nSchedule description: {text}"
+        output_text = await _ai_call(prompt, timeout=30)
 
         parsed = json.loads(output_text)
 
@@ -285,6 +267,8 @@ Rules:
 
     except json.JSONDecodeError:
         return JSONResponse({"ok": False, "error": "Could not parse AI response"}, status_code=500)
+    except RuntimeError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=503)
     except Exception as e:
         logger.error(f"nl-to-cron failed: {e}")
         return JSONResponse({"ok": False, "error": "Internal error"}, status_code=500)
