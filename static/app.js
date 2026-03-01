@@ -2019,7 +2019,7 @@ function render(opts = {}) {
       <div class="sidebar-section">
         ${_renderGroupedTabs(tabs)}
         <button class="new-worker-btn" onclick="openNewWorkerModal()" title="Create a new worker">+ New Worker</button>
-        ${_updateAvailable ? `<button class="update-available-btn" onclick="window.location.href='/settings-v2.html#updates'" title="${_updateBehindCount} update${_updateBehindCount === 1 ? '' : 's'} available">&#8593; Update Available</button>` : ''}
+        ${_updateAvailable ? `<button class="update-available-btn" onclick="_updateAvailable=false;localStorage.setItem('kukuibot.updateAvailable','0');requestRender();window.location.href='/settings-v2.html#updates'" title="${_updateBehindCount} update${_updateBehindCount === 1 ? '' : 's'} available">&#8593; Update Available</button>` : ''}
       </div>
       ${planUsage?.ok ? `
       <div class="sidebar-usage">
