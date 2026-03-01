@@ -4164,10 +4164,15 @@ async def _email_sync_loop():
     sync_count = 0
     SYNC_FOLDERS = ["INBOX", "[Gmail]/Sent Mail", "[Gmail]/Drafts", "[Gmail]/Trash", "[Gmail]/Starred"]
     logger.info("Email sync loop started (default interval=180s, configurable via Settings)")
+    first_run = True
     while True:
         try:
-            interval = max(30, min(600, int(get_config("gmail.sync_interval_sec", "180"))))
-            await asyncio.sleep(interval)
+            if first_run:
+                first_run = False
+                await asyncio.sleep(5)  # Brief delay to let server finish init
+            else:
+                interval = max(30, min(600, int(get_config("gmail.sync_interval_sec", "180"))))
+                await asyncio.sleep(interval)
             # Check if Gmail is connected
             try:
                 status = await loop.run_in_executor(None, get_gmail_status)

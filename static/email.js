@@ -134,13 +134,15 @@ const EmailModule = (function () {
 
   // --- Inbox data fetching ---
 
-  async function fetchInbox() {
+  async function fetchInbox(skipCache) {
     inboxLoading = true;
     rerender();
+    const payload = { folder: inboxFolder, max_results: 50, search: inboxSearch };
+    if (skipCache) payload.cache = false;
     const resp = await apiFetch('/api/gmail/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ folder: inboxFolder, max_results: 50, search: inboxSearch }),
+      body: JSON.stringify(payload),
     });
     if (resp.ok && resp.messages) {
       inboxMessages = resp.messages;
@@ -1065,7 +1067,7 @@ const EmailModule = (function () {
   }
 
   function refreshInbox() {
-    fetchInbox();
+    fetchInbox(true);  // bypass cache, force fresh IMAP fetch
   }
 
   // --- Render: Drafts Tab ---
