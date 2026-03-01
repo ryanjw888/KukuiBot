@@ -57,28 +57,97 @@ logger = logging.getLogger("kukuibot.claude_bridge")
 #  OAuth Token Refresh Helper
 # ---------------------------------------------------------------------------
 
-async def refresh_cli_oauth_token() -> tuple[bool, str]:
-    """Trigger the CLI built-in OAuth refresh by spawning a throwaway process.
+_CLAUDE_OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
+_CLAUDE_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+_CREDS_PATH = Path.home() / ".claude" / ".credentials.json"
 
-    Returns (success, new_token).  success is True when the credentials file
-    was updated with a later expiresAt than before the spawn.
+
+def _read_creds() -> tuple[str, str, int]:
+    """Read (accessToken, refreshToken, expiresAt_ms) from CLI credentials."""
+    try:
+        if not _CREDS_PATH.is_file():
+            return "", "", 0
+        data = json.loads(_CREDS_PATH.read_text())
+        oauth = data.get("claudeAiOauth", {})
+        tok = (oauth.get("accessToken") or "").strip()
+        refresh = (oauth.get("refreshToken") or "").strip()
+        exp = int(oauth.get("expiresAt", 0))
+        return tok, refresh, exp
+    except Exception:
+        return "", "", 0
+
+
+def _write_creds(access_token: str, refresh_token: str, expires_at_ms: int) -> bool:
+    """Update the CLI credentials file with new tokens."""
+    try:
+        data = {}
+        if _CREDS_PATH.is_file():
+            data = json.loads(_CREDS_PATH.read_text())
+        oauth = data.get("claudeAiOauth", {})
+        oauth["accessToken"] = access_token
+        oauth["refreshToken"] = refresh_token
+        oauth["expiresAt"] = expires_at_ms
+        data["claudeAiOauth"] = oauth
+        _CREDS_PATH.write_text(json.dumps(data, indent=2))
+        return True
+    except Exception as e:
+        logger.warning(f"Failed to write credentials: {e}")
+        return False
+
+
+def _direct_refresh_token(refresh_tok: str) -> dict:
+    """Call the Claude OAuth token endpoint directly with a refresh token.
+
+    Returns {"access_token": str, "refresh_token": str, "expires_in": int}
+    or raises on failure.
     """
-    creds_path = Path.home() / ".claude" / ".credentials.json"
+    import urllib.request
+    payload = json.dumps({
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_tok,
+        "client_id": _CLAUDE_OAUTH_CLIENT_ID,
+    }).encode()
+    req = urllib.request.Request(
+        _CLAUDE_OAUTH_TOKEN_URL,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    resp = urllib.request.urlopen(req, timeout=30)
+    return json.loads(resp.read())
 
-    def _read_expiry() -> tuple[str, int]:
+
+async def refresh_cli_oauth_token() -> tuple[bool, str]:
+    """Refresh the Claude CLI OAuth token.
+
+    Strategy:
+      1. Try direct refresh via the OAuth token endpoint (works even if token
+         is already expired, as long as refresh_token is valid)
+      2. Fall back to spawning a throwaway CLI process (older method)
+
+    Returns (success, new_token).
+    """
+    old_tok, refresh_tok, old_exp = _read_creds()
+
+    # Strategy 1: Direct refresh using the refresh_token
+    if refresh_tok:
         try:
-            if not creds_path.is_file():
-                return "", 0
-            data = json.loads(creds_path.read_text())
-            oauth = data.get("claudeAiOauth", {})
-            tok = (oauth.get("accessToken") or "").strip()
-            exp = int(oauth.get("expiresAt", 0))
-            return tok, exp
-        except Exception:
-            return "", 0
+            result = await asyncio.get_event_loop().run_in_executor(
+                None, _direct_refresh_token, refresh_tok
+            )
+            new_access = result.get("access_token", "")
+            new_refresh = result.get("refresh_token", refresh_tok)
+            expires_in = result.get("expires_in", 0)
+            if new_access:
+                expires_at_ms = int((time.time() + expires_in) * 1000) if expires_in else 0
+                _write_creds(new_access, new_refresh, expires_at_ms)
+                logger.info(f"refresh_cli_oauth_token: direct refresh succeeded "
+                            f"(new expiry in {expires_in / 60:.0f}m)")
+                return True, new_access
+        except Exception as e:
+            logger.warning(f"refresh_cli_oauth_token: direct refresh failed: {e}")
 
-    old_tok, old_exp = _read_expiry()
-
+    # Strategy 2: Spawn throwaway CLI process (may work if token is close to
+    # expiry but not yet fully expired)
     try:
         proc = await asyncio.create_subprocess_exec(
             CLAUDE_BIN, "--print", "-p", "ping",
@@ -98,9 +167,10 @@ async def refresh_cli_oauth_token() -> tuple[bool, str]:
         logger.warning(f"refresh_cli_oauth_token: spawn failed: {e}")
         return False, ""
 
-    new_tok, new_exp = _read_expiry()
+    new_tok, _, new_exp = _read_creds()
     if new_exp > old_exp and new_tok:
-        logger.info(f"refresh_cli_oauth_token: token refreshed (new expiry in {(new_exp/1000 - time.time())/60:.0f}m)")
+        logger.info(f"refresh_cli_oauth_token: CLI refresh succeeded "
+                    f"(new expiry in {(new_exp / 1000 - time.time()) / 60:.0f}m)")
         return True, new_tok
     return False, ""
 

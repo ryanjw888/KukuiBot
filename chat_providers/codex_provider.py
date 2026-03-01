@@ -19,6 +19,7 @@ from auth import (
     get_token,
     import_from_legacy,
     load_history,
+    refresh_openai_token,
     save_history,
 )
 from config import KUKUIBOT_API_URL, KUKUIBOT_USER_AGENT, MAX_TOOL_ROUNDS, MODEL
@@ -203,13 +204,32 @@ async def process_chat_codex(
                 if not response.ok:
                     error_text = response.text
                     logger.warning(f"[{session_id}] API error: {response.status_code} — {error_text[:300]}")
-                    if response.status_code == 429:
+
+                    # Auto-refresh on 401/403: refresh token and retry once
+                    if response.status_code in (401, 403):
+                        logger.info(f"[{session_id}] 401/403 — attempting auto-refresh")
+                        new_token = await asyncio.get_event_loop().run_in_executor(None, refresh_openai_token)
+                        if new_token:
+                            token = new_token
+                            account_id = extract_account_id(token)
+                            headers = _build_headers(token, account_id)
+                            logger.info(f"[{session_id}] Token refreshed — retrying request")
+                            response = await asyncio.get_event_loop().run_in_executor(
+                                None, _do_request, token, account_id, headers, instructions, items, TOOL_DEFINITIONS, tc, session_id, model_name,
+                            )
+                            if not response.ok:
+                                await _emit_event(session_id, queue, {"type": "error", "message": f"Auth failed after token refresh: {response.status_code}"}, run_id=run_id)
+                                break
+                            # Refresh succeeded — fall through to SSE parsing
+                        else:
+                            await _emit_event(session_id, queue, {"type": "error", "message": "Auth failed — token expired. Please re-authenticate in Settings."}, run_id=run_id)
+                            break
+                    elif response.status_code == 429:
                         await _emit_event(session_id, queue, {"type": "error", "message": "Rate limited — try again shortly."}, run_id=run_id)
-                    elif response.status_code in (401, 403):
-                        await _emit_event(session_id, queue, {"type": "error", "message": "Auth failed — token may need refresh."}, run_id=run_id)
+                        break
                     else:
                         await _emit_event(session_id, queue, {"type": "error", "message": f"API error {response.status_code}: {error_text[:200]}"}, run_id=run_id)
-                    break
+                        break
 
                 for evt in _parse_sse(response):
                     evt_type = evt.get("type", "")

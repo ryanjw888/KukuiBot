@@ -562,6 +562,38 @@ def get_token() -> str:
     return token or ""
 
 
+def refresh_openai_token() -> str:
+    """Attempt to refresh the OpenAI OAuth token using the stored refresh token.
+
+    Returns the new access token on success, or "" on failure.
+    """
+    with db_connection() as db:
+        row = db.execute(
+            "SELECT refresh_token, provider_type FROM auth WHERE provider = 'openai-kukuibot'"
+        ).fetchone()
+    if not row or not row[0]:
+        logger.warning("refresh_openai_token: no refresh token stored")
+        return ""
+    stored_refresh, provider_type = row
+    if provider_type == "api_key":
+        return ""  # API keys don't refresh
+    try:
+        from oauth import refresh_token as do_refresh
+        result = do_refresh(stored_refresh)
+        new_access = result.get("access", "")
+        new_refresh = result.get("refresh", "")
+        expires_in = result.get("expires", 0)
+        if expires_in:
+            expires_in = max(0, int(expires_in - time.time()))
+        if new_access:
+            save_token(new_access, new_refresh, expires_in=expires_in, provider_type="session_token")
+            logger.info("refresh_openai_token: token refreshed successfully")
+            return new_access
+    except Exception as e:
+        logger.error(f"refresh_openai_token failed: {e}")
+    return ""
+
+
 def get_provider_type() -> str:
     """Get the configured provider type ('api_key', 'session_token', or '')."""
     with db_connection() as db:

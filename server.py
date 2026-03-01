@@ -4293,6 +4293,37 @@ async def _token_refresh_monitor():
             logger.warning(f"Token refresh monitor error: {e}")
 
 
+async def _openai_token_refresh_monitor():
+    """Background task: proactively refresh the OpenAI OAuth token before expiry."""
+    from auth import get_provider_type, refresh_openai_token
+    logger.info("OpenAI token refresh monitor started (interval=300s, threshold=900s)")
+    while True:
+        try:
+            await asyncio.sleep(300)  # Check every 5 minutes
+            if get_provider_type() != "session_token":
+                continue  # API keys don't expire
+            with db_connection() as db:
+                row = db.execute(
+                    "SELECT expires_at FROM auth WHERE provider = 'openai-kukuibot'"
+                ).fetchone()
+            if not row or not row[0]:
+                continue
+            expires_at = row[0]
+            remaining = expires_at - time.time()
+            if remaining > 900:  # More than 15 min left — nothing to do
+                continue
+            logger.info(f"OpenAI token expiring in {remaining:.0f}s — triggering proactive refresh")
+            new_token = await asyncio.get_event_loop().run_in_executor(None, refresh_openai_token)
+            if new_token:
+                logger.info("OpenAI proactive token refresh succeeded")
+            else:
+                logger.warning("OpenAI proactive token refresh failed — user may need to re-authenticate")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"OpenAI token refresh monitor error: {e}")
+
+
 @app.on_event("startup")
 async def startup():
     _init_server_log()
@@ -4373,8 +4404,9 @@ async def startup():
     # direct wakes for those tabs are skipped to avoid duplicates.
     # See _system_wake() docstring for the full recovery flow.
     _app_state.system_wake_task = asyncio.create_task(_system_wake())
-    # Start proactive OAuth token refresh monitor
+    # Start proactive OAuth token refresh monitors
     _app_state.token_refresh_monitor_task = asyncio.create_task(_token_refresh_monitor())
+    _app_state.openai_token_refresh_task = asyncio.create_task(_openai_token_refresh_monitor())
     # Start email cache background sync task
     _app_state.email_sync_task = asyncio.create_task(_email_sync_loop())
     logger.info("Email sync background task started")
