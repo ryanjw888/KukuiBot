@@ -3956,6 +3956,29 @@ async def update_check(req: Request):
         ).stdout.strip()
         behind_count = int(behind) if behind.isdigit() else 0
 
+        # Detect diverged history (local commits not on origin) and auto-rebase
+        ahead = subprocess.run(
+            ["git", "-C", src_dir, "rev-list", "--count", f"origin/{branch}..HEAD"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+        ahead_count = int(ahead) if ahead.isdigit() else 0
+
+        if ahead_count > 0 and behind_count > 0:
+            # Diverged — rebase local commits on top of origin so update can fast-forward
+            subprocess.run(["git", "-C", src_dir, "stash", "--quiet"], capture_output=True, timeout=5)
+            rebase = subprocess.run(
+                ["git", "-C", src_dir, "pull", "origin", branch, "--rebase"],
+                capture_output=True, text=True, timeout=60,
+            )
+            subprocess.run(["git", "-C", src_dir, "stash", "pop", "--quiet"], capture_output=True, timeout=5)
+            if rebase.returncode == 0:
+                # Recount after rebase
+                behind = subprocess.run(
+                    ["git", "-C", src_dir, "rev-list", "--count", f"HEAD..origin/{branch}"],
+                    capture_output=True, text=True, timeout=5,
+                ).stdout.strip()
+                behind_count = int(behind) if behind.isdigit() else 0
+
         commit = subprocess.run(
             ["git", "-C", src_dir, "rev-parse", "HEAD"],
             capture_output=True, text=True, timeout=5,

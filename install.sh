@@ -342,7 +342,7 @@ sudo xcodebuild -license accept </dev/null 2>/dev/null || true
 # --- Clone or update source ---
 if [ -d "$SRC_DIR/.git" ]; then
   echo "→ Updating existing source at $SRC_DIR"
-  cd "$SRC_DIR" && git pull --ff-only 2>/dev/null || true
+  cd "$SRC_DIR" && git pull --ff-only 2>/dev/null || git pull --rebase 2>/dev/null || true
 else
   echo "→ Cloning KukuiBot to $SRC_DIR"
   git clone "$REPO_URL" "$SRC_DIR" </dev/null || {
