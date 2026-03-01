@@ -110,7 +110,11 @@ def _direct_refresh_token(refresh_tok: str) -> dict:
     req = urllib.request.Request(
         _CLAUDE_OAUTH_TOKEN_URL,
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "claude-code/1.0",
+            "Accept": "application/json",
+        },
     )
     resp = urllib.request.urlopen(req, timeout=30)
     return json.loads(resp.read())
