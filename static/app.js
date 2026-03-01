@@ -111,18 +111,20 @@ function setAppMode(mode, initialPath) {
   if (mode === 'editor') {
     _waitForEditorDOM(() => {
       if (typeof EditorModule !== 'undefined') {
+        // Pre-set root before init so init's loadTree uses the correct path
+        if (initialPath) EditorModule.presetRoot(initialPath);
         EditorModule.init();
         if (!editorInitialized) {
           EditorModule.postInit();
           editorInitialized = true;
         } else {
           EditorModule.syncTheme();
-        }
-        // If a specific path was requested, scope the tree to it
-        if (initialPath) {
-          EditorModule.setRoot(initialPath);
-        } else if (editorInitialized) {
-          EditorModule.loadTree();
+          // Reload tree for already-initialized editor (setRoot if path, else refresh)
+          if (initialPath) {
+            EditorModule.setRoot(initialPath);
+          } else {
+            EditorModule.loadTree();
+          }
         }
         editorInitialized = true;
       }
@@ -2373,7 +2375,7 @@ async function _toggleSkillsPopup(ev) {
     const editBtn = document.createElement('button');
     editBtn.className = 'skills-edit-btn';
     editBtn.textContent = 'Edit';
-    editBtn.onclick = (e) => { e.stopPropagation(); document.getElementById('skills-popup')?.remove(); setAppMode('editor', _skillsDir); };
+    editBtn.onclick = (e) => { e.stopPropagation(); document.getElementById('skills-popup')?.remove(); setAppMode('editor', _skillsDir.replace(/\/$/, '') + '/' + workerKey); };
     titleRow.appendChild(editBtn);
   }
   popup.appendChild(titleRow);

@@ -849,12 +849,17 @@ const EditorModule = (function () {
   }
 
   // Set the file tree root and reload. Used to scope the editor to a specific directory.
-  function setRoot(path) {
+  // Pre-set root path without loading tree (call before init so init's loadTree uses it)
+  function presetRoot(path) {
     fileTreeRoot = path || '';
     _currentTreePath = path || '';
     expandedDirs.clear();
     filterText = '';
     _searchMode = false;
+  }
+
+  function setRoot(path) {
+    presetRoot(path);
     loadTree(path);
   }
 
@@ -873,6 +878,7 @@ const EditorModule = (function () {
     breadcrumbNavigate,
     onFilterInput,
     loadTree,
+    presetRoot,
     setRoot,
     getDirty,
     postInit,
