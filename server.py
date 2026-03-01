@@ -2462,27 +2462,15 @@ async def api_worker_delete(key: str):
 
 @app.get("/api/skills/{worker_key}")
 async def api_skills_for_worker(worker_key: str):
-    """Return skills applicable to a given worker identity."""
+    """Return skills for a given worker identity from its dedicated folder."""
     import re as _re
     if not _re.fullmatch(r"[a-z0-9*-]+", worker_key):
         return JSONResponse({"ok": False, "error": "Invalid worker key"}, status_code=400)
     from config import SKILLS_DIR
-    meta_file = SKILLS_DIR / "_meta.json"
-    if not meta_file.is_file():
-        return {"ok": True, "skills": []}
+    from skill_loader import list_skills_for_worker
     try:
-        import json as _json
-        meta = _json.loads(meta_file.read_text(encoding="utf-8"))
-        all_skills = meta.get("skills", [])
-        matched = [
-            {"id": s["id"], "description": s.get("description", ""), "file": s.get("file", "")}
-            for s in all_skills
-            if "*" in s.get("workers", []) or worker_key in s.get("workers", [])
-        ]
-        matched.sort(key=lambda s: next(
-            (sk.get("priority", 99) for sk in all_skills if sk["id"] == s["id"]), 99
-        ))
-        return {"ok": True, "skills": matched, "skills_dir": str(SKILLS_DIR)}
+        matched = list_skills_for_worker(worker_key, SKILLS_DIR)
+        return {"ok": True, "skills": matched, "skills_dir": str(SKILLS_DIR), "worker_skills_dir": str(SKILLS_DIR / worker_key)}
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 

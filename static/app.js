@@ -83,6 +83,8 @@ applyTheme(localStorage.getItem(LS_THEME_KEY) || 'blue');
 let appMode = 'chat'; // 'chat' | 'editor' | 'email'
 let editorInitialized = false;
 let emailInitialized = false;
+let _emailDraftCount = 0;
+let _draftBadgeTimer = null;
 let _editorModeSwitch = false; // true during the render that switches modes
 let _emailRenderRequested = false; // set by EmailModule to allow one render through
 
@@ -180,6 +182,7 @@ let newWorkerModelKey = 'codex';
 let newWorkerIdentityKey = '';
 let newWorkerError = '';
 let _availableWorkers = [];
+let _workersDir = '';
 let _updateAvailable = false;
 let _updateBehindCount = 0;
 let showDeleteTabModal = false;
@@ -2007,7 +2010,7 @@ function render(opts = {}) {
       <div class="sidebar-mode-strip">
         <button class="sidebar-mode-btn${appMode === 'chat' ? ' active' : ''}" onclick="setAppMode('chat')"><span class="sidebar-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><circle cx="9" cy="10" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="10" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="10" r="1" fill="currentColor" stroke="none"/></svg></span><span class="sidebar-mode-label">AI</span></button>
         <button class="sidebar-mode-btn${appMode === 'editor' ? ' active' : ''}" onclick="setAppMode('editor')"><span class="sidebar-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span><span class="sidebar-mode-label">Files</span></button>
-        <button class="sidebar-mode-btn${appMode === 'email' ? ' active' : ''}" onclick="setAppMode('email')"><span class="sidebar-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></span><span class="sidebar-mode-label">Email</span></button>
+        <button class="sidebar-mode-btn${appMode === 'email' ? ' active' : ''}" onclick="setAppMode('email')" style="position:relative"><span class="sidebar-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></span>${_emailDraftCount > 0 ? `<span class="email-draft-badge" id="email-draft-badge">${_emailDraftCount}</span>` : ''}<span class="sidebar-mode-label">Email</span></button>
       </div>
       ${appMode === 'editor' ? `
       <div class="sidebar-section editor-sidebar-section">
@@ -2331,16 +2334,18 @@ const _skillDisplayOrder = {
 };
 
 let _skillsDir = '';  // populated from API response
+let _workerSkillsDir = '';  // per-worker skills folder path
 
 async function _fetchSkillsForWorker(workerKey) {
   const cached = _skillsCache[workerKey];
-  if (cached && Date.now() - cached.ts < 60000) { _skillsDir = cached.skillsDir || ''; return cached.skills; }
+  if (cached && Date.now() - cached.ts < 60000) { _skillsDir = cached.skillsDir || ''; _workerSkillsDir = cached.workerSkillsDir || ''; return cached.skills; }
   try {
     const res = await fetch(API + '/api/skills/' + encodeURIComponent(workerKey));
     const data = await res.json();
     const skills = data.skills || [];
     _skillsDir = data.skills_dir || '';
-    _skillsCache[workerKey] = { skills, skillsDir: _skillsDir, ts: Date.now() };
+    _workerSkillsDir = data.worker_skills_dir || '';
+    _skillsCache[workerKey] = { skills, skillsDir: _skillsDir, workerSkillsDir: _workerSkillsDir, ts: Date.now() };
     return skills;
   } catch { return []; }
 }
@@ -2352,7 +2357,7 @@ async function _toggleSkillsPopup(ev) {
   const tab = tabs.find(t => t.id === activeTabId);
   const workerKey = tab?.workerIdentity;
   if (!workerKey) return;
-  const skills = await _fetchSkillsForWorker(workerKey);
+  const [skills] = await Promise.all([_fetchSkillsForWorker(workerKey), _loadAvailableWorkers()]);
   if (!skills.length) return;
   // Apply display order overrides (skills not in map keep original position)
   skills.sort((a, b) => (_skillDisplayOrder[a.id] ?? 50) - (_skillDisplayOrder[b.id] ?? 50));
@@ -2371,12 +2376,35 @@ async function _toggleSkillsPopup(ev) {
   const titleLabel = document.createElement('span');
   titleLabel.textContent = 'Skills';
   titleRow.appendChild(titleLabel);
-  if (_skillsDir) {
-    const editBtn = document.createElement('button');
-    editBtn.className = 'skills-edit-btn';
-    editBtn.textContent = 'Edit';
-    editBtn.onclick = (e) => { e.stopPropagation(); document.getElementById('skills-popup')?.remove(); setAppMode('editor', _skillsDir.replace(/\/$/, '') + '/' + workerKey); };
-    titleRow.appendChild(editBtn);
+  if (_skillsDir || _workersDir) {
+    const editGroup = document.createElement('span');
+    editGroup.className = 'skills-edit-group';
+    const editLabel = document.createElement('span');
+    editLabel.className = 'skills-edit-label';
+    editLabel.textContent = 'Edit:';
+    editGroup.appendChild(editLabel);
+    if (_workersDir) {
+      const workerBtn = document.createElement('button');
+      workerBtn.className = 'skills-edit-btn';
+      workerBtn.textContent = 'Worker';
+      workerBtn.onclick = (e) => { e.stopPropagation(); document.getElementById('skills-popup')?.remove(); setAppMode('editor', _workersDir); setTimeout(() => { if (typeof EditorModule !== 'undefined') EditorModule.openFile(_workersDir.replace(/\/$/, '') + '/' + workerKey + '.md'); }, 300); };
+      editGroup.appendChild(workerBtn);
+    }
+    if (_skillsDir) {
+      const sep = document.createElement('span');
+      sep.className = 'skills-edit-sep';
+      sep.textContent = '|';
+      editGroup.appendChild(sep);
+      const skillsBtn = document.createElement('button');
+      skillsBtn.className = 'skills-edit-btn';
+      skillsBtn.textContent = 'Skills';
+      skillsBtn.onclick = (e) => {
+        e.stopPropagation(); document.getElementById('skills-popup')?.remove();
+        setAppMode('editor', _workerSkillsDir || _skillsDir);
+      };
+      editGroup.appendChild(skillsBtn);
+    }
+    titleRow.appendChild(editGroup);
   }
   popup.appendChild(titleRow);
   skills.forEach(s => {
@@ -4796,6 +4824,7 @@ async function _loadAvailableWorkers() {
     const res = await fetch(API + '/api/workers');
     const data = await res.json();
     _availableWorkers = data.workers || [];
+    if (data.workers_dir) _workersDir = data.workers_dir;
   } catch {}
 }
 
@@ -6060,6 +6089,8 @@ async function boot() {
     refreshMeta();
     // Check for updates once per calendar day (non-blocking)
     checkForUpdatesDaily();
+    // Start polling for email draft badge count
+    startDraftBadgePoll();
 
     // Check for ?editor= query param (e.g. from settings "Open in File Editor" button)
     const urlParams = new URLSearchParams(window.location.search);
@@ -6070,6 +6101,51 @@ async function boot() {
       setAppMode('editor', editorPath);
     }
   } catch { requestRender({ preserveScroll: true }); }
+}
+
+// --- Email draft badge poll ---
+function updateDraftBadgeDOM() {
+  // Direct DOM update — works even when full renders are skipped (email/editor mode)
+  const existing = document.getElementById('email-draft-badge');
+  if (_emailDraftCount > 0) {
+    if (existing) {
+      existing.textContent = _emailDraftCount;
+    } else {
+      // Badge doesn't exist in DOM yet — find the email button and inject it
+      const emailBtn = document.querySelector('.sidebar-mode-btn[onclick*="email"]');
+      if (emailBtn) {
+        emailBtn.style.position = 'relative';
+        const badge = document.createElement('span');
+        badge.className = 'email-draft-badge';
+        badge.id = 'email-draft-badge';
+        badge.textContent = _emailDraftCount;
+        // Insert before the label span
+        const label = emailBtn.querySelector('.sidebar-mode-label');
+        if (label) emailBtn.insertBefore(badge, label);
+        else emailBtn.appendChild(badge);
+      }
+    }
+  } else if (existing) {
+    existing.remove();
+  }
+}
+
+async function pollDraftBadge() {
+  if (typeof EmailModule === 'undefined') return;
+  const changed = await EmailModule.pollDraftCount();
+  const newCount = EmailModule.getDraftCount();
+  if (newCount !== _emailDraftCount) {
+    _emailDraftCount = newCount;
+    updateDraftBadgeDOM();
+  }
+}
+
+function startDraftBadgePoll() {
+  if (_draftBadgeTimer) return;
+  // Initial fetch
+  pollDraftBadge();
+  // Poll every 60s
+  _draftBadgeTimer = setInterval(pollDraftBadge, 60000);
 }
 
 // --- Daily update check (once per calendar day) ---

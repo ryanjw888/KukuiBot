@@ -71,6 +71,47 @@ These are the tools available to the KukuiBot agent out of the box:
 - Download model files individually from HuggingFace: `curl -L "https://huggingface.co/{repo}/resolve/main/{file}" -o {file}`
 - Then point `transformers.pipeline()` at the local directory instead of the repo name
 
+## Delegation Tools (Cross-Worker Task Dispatch)
+
+Use these tools to delegate work to other KukuiBot workers. **Always use the built-in tools — never use bash/curl to hit delegation APIs directly.**
+
+### delegate_task
+Dispatch a task to another worker session. Runs asynchronously.
+```
+delegate_task(worker="developer", prompt="...", model="claude_opus")
+```
+- `worker` (required): Target worker identity — `developer`, `it-admin`, `code-analyst`, `assistant`
+- `prompt` (required): Detailed task prompt. Include objective, deliverables, and stop conditions.
+- `model` (optional): Target model — `claude_opus`, `claude_sonnet`, `codex`. Omit to use any available session for that worker.
+- `force` (optional): Boolean. Override collision guard if slots are occupied.
+- Returns: `task_id`, `status`, `target_session_id`, `slot`
+
+### check_task
+Check status of a delegated task. Returns current status, elapsed time, and response.
+```
+check_task(task_id="task-abc12345")
+```
+
+### list_tasks
+List all tasks delegated from the current session.
+```
+list_tasks()
+```
+
+### Delegation Rules
+1. **Use the tool, not curl/bash.** The tools handle session routing, slot selection, prompt tagging, and delivery verification automatically. Manual API calls bypass all of this and will likely fail.
+2. **Workers must have an active tab.** Delegation targets existing tab sessions. If no tab exists for the requested worker/model, open one in the UI first.
+3. **Tasks are async.** After `delegate_task`, you'll receive a push notification when the task completes. Do not poll `check_task` in a loop — wait for the notification.
+4. **Include TASK_DONE in your prompt.** Tell the target worker to end with `TASK_DONE {task_id}` (the system adds this instruction automatically, but reinforcing it improves reliability).
+5. **Max 4 concurrent slots** per worker/model combo (configurable via `KUKUIBOT_DELEGATION_MAX_SLOTS`).
+6. **Delegated sessions cannot restart the server.** Server restart commands are blocked in `deleg-*` sessions. The parent coordinator handles restarts.
+
+### Troubleshooting
+- **"No active session found"** → Open a tab for that worker/model in the UI
+- **"All slots occupied"** → Wait for a task to complete, or use `force=true`
+- **"dispatch_failed"** → Claude process pool may be full. Check with `list_tasks()` and wait for slots to free up
+- **Task stuck in "dispatched"** → The delegation monitor auto-promotes to "running" once delivery is confirmed. If stuck >60s, check_task will self-heal if the message actually landed.
+
 ## Instance-Specific Notes
 
 _Add your environment details here — device names, network info, service URLs, SSH hosts, etc._

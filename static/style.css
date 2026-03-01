@@ -187,6 +187,16 @@ body {
 }
 .sidebar-mode-label { font-size: 10px; line-height: 1; letter-spacing: 0.3px; }
 
+.email-draft-badge {
+  position: absolute; top: 2px; right: 4px;
+  min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: 9px;
+  background: #d4a017; color: #fff;
+  font-size: 10px; font-weight: 700; line-height: 16px;
+  text-align: center; pointer-events: none;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+
 .sidebar-section { flex: 1; overflow-y: auto; padding: 0 6px; }
 .sidebar-section::-webkit-scrollbar { width: 3px; }
 .sidebar-section::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
@@ -1092,6 +1102,15 @@ body {
   padding: 4px 12px 6px; font-size: 10px; font-weight: 600;
   color: var(--muted, #8892b0); text-transform: uppercase; letter-spacing: 0.5px;
   border-bottom: 1px solid var(--border, #1c2333);
+}
+.skills-edit-group {
+  display: flex; align-items: center; gap: 4px;
+}
+.skills-edit-label {
+  font-size: 10px; color: var(--muted, #8892b0); font-weight: 500;
+}
+.skills-edit-sep {
+  font-size: 10px; color: var(--muted, #8892b0); opacity: 0.5;
 }
 .skills-edit-btn {
   font-size: 10px; font-weight: 500; font-family: inherit;

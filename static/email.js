@@ -313,6 +313,11 @@ const EmailModule = (function () {
   async function fetchDrafts() {
     const resp = await apiFetch('/api/drafter/drafts');
     drafts = resp.drafts || [];
+    // Update badge in sidebar (works even when full renders are skipped)
+    if (typeof updateDraftBadgeDOM === 'function') {
+      _emailDraftCount = drafts.length;
+      updateDraftBadgeDOM();
+    }
   }
 
   async function fetchHistory() {
@@ -1734,6 +1739,24 @@ const EmailModule = (function () {
     return html;
   }
 
+  // --- Badge helpers ---
+
+  function getDraftCount() {
+    return drafts.length;
+  }
+
+  async function pollDraftCount() {
+    try {
+      const resp = await apiFetch('/api/drafter/drafts');
+      const newDrafts = resp.drafts || [];
+      const changed = newDrafts.length !== drafts.length;
+      drafts = newDrafts;
+      return changed;
+    } catch {
+      return false;
+    }
+  }
+
   // --- Public API ---
 
   return {
@@ -1782,5 +1805,7 @@ const EmailModule = (function () {
     sidebarSelectFolder,
     sidebarCompose,
     fetchSyncStatus,
+    getDraftCount,
+    pollDraftCount,
   };
 })();

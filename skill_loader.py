@@ -1,11 +1,11 @@
 """
 skill_loader.py — Load composable skills for worker roles.
 
-Skills live in ~/.kukuibot/skills/ as standalone markdown files.
-A _meta.json registry maps skills to workers and defines load order.
+Skills live in ~/.kukuibot/skills/{worker-identity}/ as standalone markdown files.
+Each worker has its own folder. Whatever .md files are in the folder get loaded.
+Files are sorted alphabetically (use numeric prefixes like 00-, 01- for ordering).
 """
 
-import json
 import logging
 from pathlib import Path
 
@@ -13,60 +13,37 @@ logger = logging.getLogger("skill_loader")
 
 # Maximum total characters for all skills combined per worker
 MAX_SKILLS_CHARS = 20000
+# Maximum characters per individual skill file
+MAX_SKILL_CHARS = 5500
 
 
 def load_skills_for_worker(worker_identity: str, skills_dir: Path) -> list[str]:
-    """Load skills applicable to the given worker role.
+    """Load skills for a worker from its dedicated folder.
 
-    Reads _meta.json, filters by worker, loads SKILL.md files in priority order.
+    Scans skills_dir/{worker_identity}/*.md, sorted alphabetically.
     Returns a list of formatted skill section strings.
     """
-    meta_file = skills_dir / "_meta.json"
-    if not meta_file.is_file():
+    worker_dir = skills_dir / worker_identity
+    if not worker_dir.is_dir():
         return []
 
-    try:
-        meta = json.loads(meta_file.read_text())
-    except Exception as e:
-        logger.warning(f"Failed to parse skills _meta.json: {e}")
+    skill_files = sorted(worker_dir.glob("*.md"))
+    if not skill_files:
         return []
-
-    skills = meta.get("skills", [])
-    if not skills:
-        return []
-
-    # Filter skills applicable to this worker (or wildcard "*")
-    applicable = []
-    for skill in skills:
-        workers = skill.get("workers", [])
-        if worker_identity in workers or "*" in workers:
-            applicable.append(skill)
-
-    if not applicable:
-        return []
-
-    # Sort by priority (lower number = higher priority)
-    applicable.sort(key=lambda s: s.get("priority", 99))
 
     sections = []
     total_chars = 0
 
-    for skill in applicable:
-        skill_file = skills_dir / skill.get("file", "")
-        if not skill_file.is_file():
-            logger.warning(f"Skill file not found: {skill_file}")
-            continue
-
+    for skill_file in skill_files:
         try:
             content = skill_file.read_text()
         except Exception as e:
-            logger.warning(f"Failed to read skill {skill.get('id', '?')}: {e}")
+            logger.warning(f"Failed to read skill {skill_file.name}: {e}")
             continue
 
         # Enforce per-skill max
-        max_chars = skill.get("max_chars", 4000)
-        if len(content) > max_chars:
-            content = content[:max_chars] + "\n...(truncated)"
+        if len(content) > MAX_SKILL_CHARS:
+            content = content[:MAX_SKILL_CHARS] + "\n...(truncated)"
 
         # Enforce total budget
         if total_chars + len(content) > MAX_SKILLS_CHARS:
@@ -76,8 +53,45 @@ def load_skills_for_worker(worker_identity: str, skills_dir: Path) -> list[str]:
             )
             break
 
-        skill_id = skill.get("id", skill_file.stem)
+        # Derive skill ID from filename (strip numeric prefix like "00-")
+        stem = skill_file.stem
+        skill_id = stem.lstrip("0123456789-") or stem
         sections.append(f"## Skill: {skill_id}\n{content}")
         total_chars += len(content)
 
     return sections
+
+
+def list_skills_for_worker(worker_identity: str, skills_dir: Path) -> list[dict]:
+    """List skill metadata for a worker (used by the API/frontend).
+
+    Returns list of {id, description, file} dicts.
+    """
+    worker_dir = skills_dir / worker_identity
+    if not worker_dir.is_dir():
+        return []
+
+    skill_files = sorted(worker_dir.glob("*.md"))
+    skills = []
+
+    for skill_file in skill_files:
+        stem = skill_file.stem
+        skill_id = stem.lstrip("0123456789-") or stem
+        # Extract first non-empty, non-heading line as description
+        description = ""
+        try:
+            for line in skill_file.read_text().splitlines():
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    description = line[:120]
+                    break
+        except Exception:
+            pass
+
+        skills.append({
+            "id": skill_id,
+            "description": description,
+            "file": f"{worker_identity}/{skill_file.name}",
+        })
+
+    return skills

@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Network Audit Report — Kukui IT</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f5f5f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; color: #333; line-height: 1.6;">
+
+<!-- Main Container -->
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width: 900px; margin: 0 auto; background-color: #ffffff;">
+
+<!-- Header -->
+<tr>
+<td style="padding: 30px 40px; background-color: #ffffff; border-bottom: 3px solid #5aad1a;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+<tr>
+<td style="vertical-align: middle;">
+<img src="https://kukuiit.com/wp-content/uploads/2024/07/logo.png" alt="Kukui IT" referrerpolicy="no-referrer" style="height: 60px; width: auto;" />
+</td>
+<td style="vertical-align: middle; text-align: right;">
+<span style="font-size: 14px; color: #666;">Network Security Audit</span><br>
+<span style="font-size: 13px; color: #999;">$audit_date</span>
+</td>
+</tr>
+</table>
+</td>
+</tr>
+
+<!-- Title Bar -->
+<tr>
+<td style="padding: 20px 40px; background-color: #5aad1a; color: #ffffff;">
+<span style="font-size: 20px; font-weight: 600;">Network Audit Report</span><br>
+<span style="font-size: 14px; opacity: 0.9;">$client_name</span>
+</td>
+</tr>
+
+<!-- Audit Summary Bar -->
+<tr>
+<td style="padding: 20px 40px; background-color: #f8f9fa; border-bottom: 1px solid #e9ecef;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+<tr>
+<td style="width: 25%; text-align: center; padding: 10px;">
+<span style="font-size: 28px; font-weight: 700; color: #333;">$total_hosts</span><br>
+<span style="font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: 1px;">Hosts</span>
+</td>
+<td style="width: 25%; text-align: center; padding: 10px;">
+<span style="font-size: 28px; font-weight: 700; color: #333;">$total_ports</span><br>
+<span style="font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: 1px;">Open Ports</span>
+</td>
+<td style="width: 25%; text-align: center; padding: 10px;">
+<span style="font-size: 28px; font-weight: 700; color: $grade_color;">$overall_grade</span><br>
+<span style="font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: 1px;">Security Grade</span>
+</td>
+<td style="width: 25%; text-align: center; padding: 10px;">
+<span style="font-size: 28px; font-weight: 700; color: #333;">$total_vulns</span><br>
+<span style="font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: 1px;">Findings</span>
+</td>
+</tr>
+</table>
+</td>
+</tr>
+
+<!-- Executive Summary -->
+<tr>
+<td style="padding: 30px 40px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+<tr>
+<td>
+<span style="font-size: 18px; font-weight: 600; color: #333;">Executive Summary</span>
+<hr style="border: none; border-top: 2px solid #5aad1a; margin: 10px 0 15px 0; width: 50px;">
+</td>
+</tr>
+<tr>
+<td style="font-size: 14px; color: #555; line-height: 1.8;">
+$executive_summary
+</td>
+</tr>
+</table>
+</td>
+</tr>
+
+<!-- Key Vulnerabilities -->
+<tr>
+<td style="padding: 30px 40px; background-color: #fafafa;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+<tr>
+<td>
+<span style="font-size: 18px; font-weight: 600; color: #333;">Key Vulnerabilities</span>
+<hr style="border: none; border-top: 2px solid #5aad1a; margin: 10px 0 15px 0; width: 50px;">
+</td>
+</tr>
+<tr>
+<td>
+$vulnerabilities_html
+</td>
+</tr>
+</table>
+</td>
+</tr>
+
+<!-- Positive Practices -->
+<tr>
+<td style="padding: 30px 40px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+<tr>
+<td>
+<span style="font-size: 18px; font-weight: 600; color: #333;">Positive Security Practices</span>
+<hr style="border: none; border-top: 2px solid #5aad1a; margin: 10px 0 15px 0; width: 50px;">
+</td>
+</tr>
+<tr>
+<td>
+$positive_practices_html
+</td>
+</tr>
+</table>
+</td>
+</tr>
+
+<!-- Device Inventory -->
+<tr>
+<td style="padding: 30px 40px; background-color: #fafafa;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+<tr>
+<td>
+<span style="font-size: 18px; font-weight: 600; color: #333;">Device Inventory</span>
+<hr style="border: none; border-top: 2px solid #5aad1a; margin: 10px 0 15px 0; width: 50px;">
+</td>
+</tr>
+<tr>
+<td>
+$device_inventory_html
+</td>
+</tr>
+</table>
+</td>
+</tr>
+
+<!-- Priority Action Plan -->
+<tr>
+<td style="padding: 30px 40px;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+<tr>
+<td>
+<span style="font-size: 18px; font-weight: 600; color: #333;">Priority Action Plan</span>
+<hr style="border: none; border-top: 2px solid #5aad1a; margin: 10px 0 15px 0; width: 50px;">
+</td>
+</tr>
+<tr>
+<td>
+$priority_actions_html
+</td>
+</tr>
+</table>
+</td>
+</tr>
+
+<!-- Technical Appendix -->
+<tr>
+<td style="padding: 30px 40px; background-color: #fafafa;">
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+<tr>
+<td>
+<span style="font-size: 18px; font-weight: 600; color: #333;">Technical Appendix</span>
+<hr style="border: none; border-top: 2px solid #5aad1a; margin: 10px 0 15px 0; width: 50px;">
+</td>
+</tr>
+<tr>
+<td style="font-size: 13px; color: #666;">
+$technical_appendix_html
+</td>
+</tr>
+</table>
+</td>
+</tr>
+
+<!-- Footer -->
+<tr>
+<td style="padding: 25px 40px; background-color: #333; color: #aaa; text-align: center;">
+<span style="font-size: 13px;">Network Audit performed by <strong style="color: #5aad1a;">Kukui IT</strong></span><br>
+<span style="font-size: 12px; color: #888;">kukuiit.com &bull; Over 30 years protecting Hawaii's businesses</span><br>
+<span style="font-size: 11px; color: #666; margin-top: 8px; display: inline-block;">Report generated $generation_timestamp</span>
+</td>
+</tr>
+
+</table>
+</body>
+</html>
