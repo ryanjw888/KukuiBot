@@ -8,7 +8,7 @@ const EmailModule = (function () {
   'use strict';
 
   // --- State ---
-  let activeTab = 'drafts'; // 'drafts' | 'history' | 'settings' | 'profile'
+  let activeTab = 'drafts'; // 'drafts' | 'history' | 'settings' | 'profile' | 'spam'
   let drafts = [];
   let status = null; // null = not loaded yet
   let config = {};
@@ -81,6 +81,9 @@ const EmailModule = (function () {
     // Skip full re-renders while the profile Ace editor is active —
     // requestRender does root.innerHTML=... which would destroy the editor.
     if (profileAce && activeTab === 'profile') return;
+    // Signal that this is an intentional email module render (not a background SSE event).
+    // Without this flag, requestRender skips renders in email mode to prevent DOM destruction.
+    if (typeof _emailRenderRequested !== 'undefined') _emailRenderRequested = true;
     if (typeof requestRender === 'function') requestRender({});
   }
 
@@ -365,7 +368,7 @@ const EmailModule = (function () {
     if (tab === 'profile' && profileAce) return;
     activeTab = tab;
     rerender();
-    if (tab === 'history' && history.length === 0) {
+    if ((tab === 'history' || tab === 'spam') && history.length === 0) {
       await fetchHistory();
       rerender();
     }
@@ -804,7 +807,7 @@ const EmailModule = (function () {
           Control which emails get auto-drafted replies. Disable a filter to stop it from skipping emails.
         </div>
         <div class="email-filter-list">
-          ${(config.filters || []).map(f => {
+          ${(config.filters || []).filter(f => f.id !== 'spam_detection').map(f => {
             const isExclusion = f.type === 'exclusion';
             const patterns = (f.patterns || []).join(', ');
             return `<div class="email-filter-item${f.enabled ? '' : ' disabled'}">
@@ -836,6 +839,132 @@ const EmailModule = (function () {
         </div>
         <textarea style="width:100%;min-height:80px;padding:8px;border-radius:6px;border:1px solid var(--border-light);background:var(--bg);color:var(--text);font-size:12px;font-family:monospace;resize:vertical"
           onchange="EmailModule.saveConfig({signature_html: this.value})">${escHtml(sig)}</textarea>
+      </div>
+    </div>`;
+  }
+
+  // --- Spam config helpers ---
+
+  function getSpamFilter() {
+    return (config.filters || []).find(f => f.id === 'spam_detection') || {};
+  }
+
+  function saveSpamSetting(key, value) {
+    const filters = (config.filters || []).map(f => {
+      if (f.id === 'spam_detection') return { ...f, [key]: value };
+      return f;
+    });
+    saveConfig({ filters });
+  }
+
+  // --- Render: Spam Tab ---
+
+  function renderSpamTab() {
+    const sf = getSpamFilter();
+    const enabled = sf.enabled !== false;
+    const action = sf.spam_action || 'label';
+    const notify = sf.notify !== false;
+    const threshold = sf.confidence_threshold != null ? sf.confidence_threshold : 0.6;
+
+    // Count spam from history
+    const spamCount = history.filter(h => h.action === 'spam_detected').length;
+
+    return `<div class="email-settings">
+      <div class="email-settings-group">
+        <h3>&#128737; Spam &amp; Phishing Protection</h3>
+        <div class="email-setting-row">
+          <div>
+            <div class="email-setting-label">Enable AI Detection</div>
+            <div class="email-setting-desc">Use AI to classify incoming emails as spam or phishing</div>
+          </div>
+          <label class="email-toggle">
+            <input type="checkbox" ${enabled ? 'checked' : ''} onchange="EmailModule.saveSpamSetting('enabled', this.checked)">
+            <span class="email-toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="email-settings-group${enabled ? '' : ' disabled-section'}">
+        <h3>Action on Detection</h3>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:10px">
+          What to do when spam or phishing is detected.
+        </div>
+        <div class="spam-action-options">
+          <label class="spam-action-option${action === 'label' ? ' active' : ''}">
+            <input type="radio" name="spam_action" value="label" ${action === 'label' ? 'checked' : ''} onchange="EmailModule.saveSpamSetting('spam_action', 'label')">
+            <div class="spam-action-card">
+              <div class="spam-action-icon">&#127991;</div>
+              <div class="spam-action-title">Label</div>
+              <div class="spam-action-desc">Prepend "SPAM:" to the subject line. Email stays in inbox.</div>
+            </div>
+          </label>
+          <label class="spam-action-option${action === 'spam' ? ' active' : ''}">
+            <input type="radio" name="spam_action" value="spam" ${action === 'spam' ? 'checked' : ''} onchange="EmailModule.saveSpamSetting('spam_action', 'spam')">
+            <div class="spam-action-card">
+              <div class="spam-action-icon">&#128465;</div>
+              <div class="spam-action-title">Move to Spam</div>
+              <div class="spam-action-desc">Move the email to Gmail's Spam folder.</div>
+            </div>
+          </label>
+          <label class="spam-action-option${action === 'trash' ? ' active' : ''}">
+            <input type="radio" name="spam_action" value="trash" ${action === 'trash' ? 'checked' : ''} onchange="EmailModule.saveSpamSetting('spam_action', 'trash')">
+            <div class="spam-action-card">
+              <div class="spam-action-icon">&#128711;</div>
+              <div class="spam-action-title">Move to Trash</div>
+              <div class="spam-action-desc">Move the email directly to Trash. Auto-deleted after 30 days.</div>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <div class="email-settings-group${enabled ? '' : ' disabled-section'}">
+        <h3>Sensitivity</h3>
+        <div class="email-setting-row">
+          <div>
+            <div class="email-setting-label">Confidence Threshold</div>
+            <div class="email-setting-desc">Minimum AI confidence to trigger action (${Math.round(threshold * 100)}%)</div>
+          </div>
+          <input type="range" class="spam-threshold-slider" min="0.3" max="0.95" step="0.05" value="${threshold}"
+            oninput="this.nextElementSibling.textContent = Math.round(this.value * 100) + '%'"
+            onchange="EmailModule.saveSpamSetting('confidence_threshold', parseFloat(this.value))">
+          <span class="spam-threshold-val">${Math.round(threshold * 100)}%</span>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;padding-left:2px">
+          Lower = more aggressive (catches more spam, more false positives). Higher = more conservative.
+        </div>
+      </div>
+
+      <div class="email-settings-group${enabled ? '' : ' disabled-section'}">
+        <h3>Notifications</h3>
+        <div class="email-setting-row">
+          <div>
+            <div class="email-setting-label">Show Spam Notifications</div>
+            <div class="email-setting-desc">Display a notification when spam is detected during drafter runs</div>
+          </div>
+          <label class="email-toggle">
+            <input type="checkbox" ${notify ? 'checked' : ''} onchange="EmailModule.saveSpamSetting('notify', this.checked)">
+            <span class="email-toggle-slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="email-settings-group">
+        <h3>Recent Spam Activity</h3>
+        ${spamCount > 0 ? `
+          <div style="font-size:12px;color:var(--muted);margin-bottom:10px">${spamCount} spam emails detected in recent history</div>
+          <div class="email-history-list" style="max-height:200px;overflow-y:auto">
+            ${history.filter(h => h.action === 'spam_detected').slice(0, 20).map(h => `
+              <div class="email-history-row">
+                <span class="email-history-action spam_detected">spam</span>
+                <span class="email-history-subject" title="${escHtml(h.subject)}">${escHtml(h.subject)}</span>
+                <span class="email-history-from" title="${escHtml(h.from_addr)}">${escHtml(h.from_addr)}</span>
+                <span class="email-history-time">${fmtDate(h.created_at)}</span>
+              </div>
+            `).join('')}
+          </div>
+        ` : `
+          <div style="font-size:13px;color:var(--muted);padding:12px 0">No spam detected yet. Run the drafter to start scanning.</div>
+        `}
       </div>
     </div>`;
   }
@@ -952,6 +1081,7 @@ const EmailModule = (function () {
       <div class="email-toolbar-left">
         <button class="email-tab${activeTab === 'drafts' ? ' active' : ''}" onclick="EmailModule.setTab('drafts')">Drafts${drafts.length ? ' (' + drafts.length + ')' : ''}</button>
         <button class="email-tab${activeTab === 'history' ? ' active' : ''}" onclick="EmailModule.setTab('history')">History</button>
+        <button class="email-tab${activeTab === 'spam' ? ' active' : ''}" onclick="EmailModule.setTab('spam')">Spam</button>
         <button class="email-tab${activeTab === 'settings' ? ' active' : ''}" onclick="EmailModule.setTab('settings')">Settings</button>
         <button class="email-tab${activeTab === 'profile' ? ' active' : ''}" onclick="EmailModule.setTab('profile')">Profile</button>
       </div>
@@ -968,6 +1098,7 @@ const EmailModule = (function () {
       <div class="email-split-top email-content">
         ${activeTab === 'drafts' ? renderDraftsTab() : ''}
         ${activeTab === 'history' ? renderHistoryTab() : ''}
+        ${activeTab === 'spam' ? renderSpamTab() : ''}
         ${activeTab === 'settings' ? renderSettingsTab() : ''}
         ${activeTab === 'profile' ? renderProfileTab() : ''}
       </div>
@@ -1030,6 +1161,7 @@ const EmailModule = (function () {
     saveConfig,
     toggleFilter,
     saveFilterPatterns,
+    saveSpamSetting,
     toggleDraftExpand,
     refreshAll,
     chatSend,

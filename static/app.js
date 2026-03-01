@@ -84,6 +84,7 @@ let appMode = 'chat'; // 'chat' | 'editor' | 'email'
 let editorInitialized = false;
 let emailInitialized = false;
 let _editorModeSwitch = false; // true during the render that switches modes
+let _emailRenderRequested = false; // set by EmailModule to allow one render through
 
 function setAppMode(mode, initialPath) {
   if (mode === appMode && !initialPath) return;
@@ -1510,6 +1511,12 @@ function requestRender(opts = {}) {
     // render() does root.innerHTML=... which destroys the Ace editor instance.
     // Only allow the mode-switch render through (when _editorModeSwitch is set).
     if (appMode === 'editor' && !_editorModeSwitch) return;
+    // Skip background re-renders while in email mode.
+    // render() does root.innerHTML=... which destroys the email panel DOM
+    // (Ace profile editor, chat scroll position, form state).
+    // Only allow the mode-switch render or explicit EmailModule render through.
+    if (appMode === 'email' && !_editorModeSwitch && !_emailRenderRequested) return;
+    if (_emailRenderRequested) _emailRenderRequested = false;
     const inputEl = document.getElementById('input');
     const inputFocused = inputEl && document.activeElement === inputEl;
     if (inputFocused && !o.forceStickBottom && o.preserveScroll && !_editorModeSwitch) return;
@@ -1996,9 +2003,9 @@ function render(opts = {}) {
         <button class="sidebar-nav-item" onclick="doLogout()"><span class="sidebar-nav-icon">&#128682;</span>Logout</button>
       </div>` : ''}
       <div class="sidebar-mode-strip">
-        <button class="sidebar-mode-btn${appMode === 'chat' ? ' active' : ''}" onclick="setAppMode('chat')"><span class="sidebar-nav-icon">&#128172;</span>Chat</button>
-        <button class="sidebar-mode-btn${appMode === 'editor' ? ' active' : ''}" onclick="setAppMode('editor')"><span class="sidebar-nav-icon">&#128194;</span>Files</button>
-        <button class="sidebar-mode-btn${appMode === 'email' ? ' active' : ''}" onclick="setAppMode('email')"><span class="sidebar-nav-icon">&#9993;</span>Email</button>
+        <button class="sidebar-mode-btn${appMode === 'chat' ? ' active' : ''}" onclick="setAppMode('chat')"><span class="sidebar-nav-icon">&#128172;</span><span class="sidebar-mode-label">AI</span></button>
+        <button class="sidebar-mode-btn${appMode === 'editor' ? ' active' : ''}" onclick="setAppMode('editor')"><span class="sidebar-nav-icon">&#128194;</span><span class="sidebar-mode-label">Files</span></button>
+        <button class="sidebar-mode-btn${appMode === 'email' ? ' active' : ''}" onclick="setAppMode('email')"><span class="sidebar-nav-icon">&#128231;</span><span class="sidebar-mode-label">Email</span></button>
       </div>
       ${appMode === 'editor' ? `
       <div class="sidebar-section editor-sidebar-section">

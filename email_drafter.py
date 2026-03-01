@@ -109,9 +109,14 @@ DEFAULT_FILTERS = [
     {
         "id": "spam_detection",
         "name": "AI spam/phishing detection",
-        "description": "Uses AI to classify emails as spam or phishing. Detected spam gets 'SPAM:' prepended to the subject.",
+        "description": "Uses AI to classify emails as spam or phishing.",
         "enabled": True,
         "type": "builtin",
+        "spam_action": "label",        # "label" = prepend SPAM: to subject
+                                        # "trash" = move to Trash
+                                        # "spam"  = move to [Gmail]/Spam
+        "notify": True,                 # show notification in UI when spam detected
+        "confidence_threshold": 0.6,    # minimum confidence to act (0.0 - 1.0)
     },
     {
         "id": "exclude_senders",
@@ -518,6 +523,46 @@ def _imap_rewrite_subject(raw_bytes: bytes, new_subject: str, original_msg_num: 
 
     except Exception as e:
         logger.warning(f"IMAP rewrite failed: {e}")
+        return False
+    finally:
+        if imap:
+            try:
+                imap.logout()
+            except Exception:
+                pass
+
+
+def _imap_move_to_folder(original_msg_num: bytes, folder: str) -> bool:
+    """Move an email to a specified IMAP folder (e.g. '[Gmail]/Trash', '[Gmail]/Spam').
+
+    Opens a separate read-write IMAP connection. Copies the message to the
+    target folder, then deletes the original from INBOX.
+
+    Returns True on success, False on failure.
+    """
+    imap = None
+    try:
+        imap = _imap_connect()
+        status, _ = imap.select("INBOX")  # read-write
+        if status != "OK":
+            logger.warning(f"IMAP move: could not open INBOX read-write")
+            return False
+
+        # COPY to target folder
+        status, resp = imap.copy(original_msg_num, folder)
+        if status != "OK":
+            logger.warning(f"IMAP move: COPY to {folder} failed: {resp}")
+            return False
+
+        # DELETE original from INBOX
+        imap.store(original_msg_num, "+FLAGS", "\\Deleted")
+        imap.expunge()
+
+        logger.info(f"IMAP: moved message to {folder}")
+        return True
+
+    except Exception as e:
+        logger.warning(f"IMAP move to {folder} failed: {e}")
         return False
     finally:
         if imap:
@@ -971,18 +1016,30 @@ async def check_and_draft(dry_run: bool = False) -> dict:
                     continue
 
                 # Spam/phishing detection (if enabled)
-                spam_filter_enabled = any(
-                    f["id"] == "spam_detection" and f.get("enabled", True) for f in filters
+                spam_filter = next(
+                    (f for f in filters if f["id"] == "spam_detection" and f.get("enabled", True)),
+                    None,
                 )
-                if spam_filter_enabled:
+                if spam_filter:
                     try:
+                        threshold = spam_filter.get("confidence_threshold", 0.6)
                         classification = await _classify_spam(from_addr_parsed, subject, body)
-                        if classification["is_spam"]:
-                            new_subject = subject if subject.upper().startswith("SPAM:") else f"SPAM: {subject}"
+                        if classification["is_spam"] and classification["confidence"] >= threshold:
+                            spam_action = spam_filter.get("spam_action", "label")
+                            action_desc = spam_action
                             if not dry_run:
-                                _imap_rewrite_subject(raw, new_subject, num)
+                                if spam_action == "trash":
+                                    _imap_move_to_folder(num, "[Gmail]/Trash")
+                                    action_desc = "moved to Trash"
+                                elif spam_action == "spam":
+                                    _imap_move_to_folder(num, "[Gmail]/Spam")
+                                    action_desc = "moved to Spam"
+                                else:  # "label" — default: prepend SPAM: to subject
+                                    new_subject = subject if subject.upper().startswith("SPAM:") else f"SPAM: {subject}"
+                                    _imap_rewrite_subject(raw, new_subject, num)
+                                    action_desc = "labeled SPAM:"
                             results["spam"] += 1
-                            reason = f"spam detected ({classification['confidence']:.0%}): {classification['reason']}"
+                            reason = f"spam detected ({classification['confidence']:.0%}, {action_desc}): {classification['reason']}"
                             results["details"].append({
                                 "from": from_addr_parsed, "subject": subject[:80],
                                 "action": "spam_detected", "reason": reason,
