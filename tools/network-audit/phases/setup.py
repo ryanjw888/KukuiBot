@@ -1,5 +1,6 @@
 """Phase 0 — Pre-Audit Setup: detect network, create dirs, check tools."""
 
+import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -37,10 +38,11 @@ async def run_setup(config: AuditConfig) -> AuditLog:
         errors.append("nmap not found — required for scanning")
 
     # Create timestamped output directory
+    # Fix ownership on parent dirs that may have been created by a prior sudo run
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     if config.output_dir == DEFAULT_REPORT_DIR:
         config.output_dir = config.output_dir / timestamp
-    config.output_dir.mkdir(parents=True, exist_ok=True)
+    _mkdir_safe(config.output_dir)
 
     # Initialize audit log
     audit_log = AuditLog(config.output_dir)
@@ -72,17 +74,54 @@ async def run_setup(config: AuditConfig) -> AuditLog:
     )
     audit_log.save()
 
-    print(f"[Phase 0] Setup complete in {elapsed:.1f}s")
-    print(f"  Interface: {network.interface}")
-    print(f"  Local IP:  {network.local_ip}")
-    print(f"  Gateway:   {network.gateway}")
-    print(f"  Subnet:    {config.subnet}")
-    print(f"  Output:    {config.output_dir}")
+    print(f"[Phase 0] Setup complete in {elapsed:.1f}s", flush=True)
+    print(f"  Interface: {network.interface}", flush=True)
+    print(f"  Local IP:  {network.local_ip}", flush=True)
+    print(f"  Gateway:   {network.gateway}", flush=True)
+    print(f"  Subnet:    {config.subnet}", flush=True)
+    print(f"  Output:    {config.output_dir}", flush=True)
     for name, info in tools.items():
         status = f"v{info.version}" if info.available else "NOT FOUND"
-        print(f"  {name}: {status}")
+        print(f"  {name}: {status}", flush=True)
     if errors:
         for e in errors:
-            print(f"  WARNING: {e}")
+            print(f"  WARNING: {e}", flush=True)
 
     return audit_log
+
+
+def _mkdir_safe(path: Path) -> None:
+    """Create directory tree, fixing root-owned parents from prior sudo runs.
+
+    If a parent directory exists but is owned by root (from a previous sudo scan),
+    non-sudo mkdir will fail with PermissionError. This function detects that case
+    and chowns the offending directories to the current user before retrying.
+    """
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        # Walk up to find the root-owned directory blocking us
+        uid = os.getuid()
+        gid = os.getgid()
+        to_fix = []
+        check = path
+        while check != check.parent:
+            if check.exists():
+                stat = check.stat()
+                if stat.st_uid != uid:
+                    to_fix.append(check)
+                break  # existing dir found, stop walking
+            check = check.parent
+
+        if to_fix:
+            import subprocess
+            for d in to_fix:
+                print(f"  Fixing ownership on {d} (was root-owned)...", flush=True)
+                subprocess.run(
+                    ["sudo", "chown", "-R", f"{uid}:{gid}", str(d)],
+                    timeout=5,
+                )
+            # Retry
+            path.mkdir(parents=True, exist_ok=True)
+        else:
+            raise

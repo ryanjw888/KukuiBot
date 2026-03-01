@@ -1,5 +1,6 @@
 """Phase 1 — Reconnaissance & Discovery: find live hosts on the network."""
 
+import asyncio
 import re
 import time
 from datetime import datetime
@@ -85,7 +86,7 @@ async def run_discovery(config: AuditConfig, audit_log: AuditLog) -> list[dict]:
     )
     audit_log.save()
 
-    print(f"[Phase 1] Discovery complete in {elapsed:.1f}s — {len(hosts_by_ip)} hosts found")
+    print(f"[Phase 1] Discovery complete in {elapsed:.1f}s — {len(hosts_by_ip)} hosts found", flush=True)
     return list(hosts_by_ip.values())
 
 
@@ -147,9 +148,11 @@ async def _discover_nmap_ping(config: AuditConfig) -> list[dict]:
     if not config.subnet:
         return []
 
+    # /23 subnets (512 hosts) need 60-90s; /24 needs ~15-30s
+    nmap_timeout = 120 if "/23" in config.subnet or "/22" in config.subnet else 60
     result = await run_command(
-        ["nmap", "-sn", config.subnet],
-        timeout=30,
+        ["nmap", "-sn", "--max-retries", "1", "-T4", config.subnet],
+        timeout=nmap_timeout,
     )
     hosts = []
     if result.exit_code != 0:
@@ -196,14 +199,38 @@ async def _discover_nmap_ping(config: AuditConfig) -> list[dict]:
 
 
 async def _discover_mdns() -> list[dict]:
-    """mDNS/DNS-SD service browsing."""
-    result = await run_shell(
-        "dns-sd -B _services._dns-sd._udp local. 2>/dev/null",
-        timeout=MDNS_TIMEOUT,
-    )
-    # dns-sd doesn't resolve to IPs directly — just notes service existence
-    # The real value is in populating hostnames. Return empty for now;
-    # mDNS hostnames are better captured via nmap -sn which reports .local names
+    """mDNS/DNS-SD service browsing.
+
+    Note: dns-sd -B runs forever (continuous browse), so we must use
+    process-group kill to ensure cleanup. The function returns [] because
+    dns-sd doesn't resolve to IPs — mDNS hostnames are captured by nmap -sn.
+    """
+    import os
+    import signal
+
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            "dns-sd -B _services._dns-sd._udp local. 2>/dev/null",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            preexec_fn=os.setsid,  # Create new process group so we can kill dns-sd too
+        )
+        try:
+            await asyncio.wait_for(proc.communicate(), timeout=MDNS_TIMEOUT)
+        except asyncio.TimeoutError:
+            # Kill the entire process group (shell + dns-sd child)
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     return []
 
 

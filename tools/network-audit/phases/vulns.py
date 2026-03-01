@@ -20,7 +20,7 @@ async def run_vulns(config: AuditConfig, audit_log: AuditLog) -> None:
     has_nuclei = config.tools.get("nuclei") and config.tools["nuclei"].available
 
     if not live_hosts:
-        print("[Phase 5] No hosts for vulnerability assessment")
+        print("[Phase 5] No hosts for vulnerability assessment", flush=True)
         audit_log.log_phase(
             phase=5, name="Vulnerability Assessment",
             start_time=start_time, end_time=datetime.now().isoformat(),
@@ -47,7 +47,7 @@ async def run_vulns(config: AuditConfig, audit_log: AuditLog) -> None:
             targets_urls.append(ip)
 
     if has_nuclei and targets_urls:
-        print(f"[Phase 5] Running Nuclei CVE scan on {len(targets_urls)} targets...")
+        print(f"[Phase 5] Running Nuclei CVE scan on {len(targets_urls)} targets...", flush=True)
 
         targets_file = config.output_dir / "nuclei_cve_targets.txt"
         targets_file.write_text("\n".join(targets_urls))
@@ -96,9 +96,9 @@ async def run_vulns(config: AuditConfig, audit_log: AuditLog) -> None:
                             "matched_at": f.get("matched_at", ""),
                         }],
                     })
-            print(f"  Found {len(findings)} CVE findings")
+            print(f"  Found {len(findings)} CVE findings", flush=True)
     elif not has_nuclei:
-        print("[Phase 5] Nuclei not available — skipping CVE scan")
+        print("[Phase 5] Nuclei not available — skipping CVE scan", flush=True)
         errors.append("Nuclei not available for CVE scanning")
 
     # Version-based checks (supplement to Nuclei)
@@ -109,7 +109,7 @@ async def run_vulns(config: AuditConfig, audit_log: AuditLog) -> None:
             audit_log.add_host({"ip": host_ip, "vulnerabilities": [vf]})
 
     if version_findings:
-        print(f"  Found {len(version_findings)} version-based findings")
+        print(f"  Found {len(version_findings)} version-based findings", flush=True)
 
     elapsed = time.monotonic() - start
     audit_log.log_phase(
@@ -123,7 +123,7 @@ async def run_vulns(config: AuditConfig, audit_log: AuditLog) -> None:
     )
     audit_log.save()
 
-    print(f"[Phase 5] Vulnerability assessment complete in {elapsed:.1f}s")
+    print(f"[Phase 5] Vulnerability assessment complete in {elapsed:.1f}s", flush=True)
 
 
 def _check_known_vulnerable_versions(hosts: list[dict]) -> list[dict]:

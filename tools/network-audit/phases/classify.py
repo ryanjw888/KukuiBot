@@ -73,7 +73,7 @@ async def run_classify(config: AuditConfig, audit_log: AuditLog) -> None:
 
     hosts = audit_log.get_live_hosts()
     if not hosts:
-        print("[Phase 4] No hosts to classify")
+        print("[Phase 4] No hosts to classify", flush=True)
         audit_log.log_phase(
             phase=4, name="Vendor ID & Device Classification",
             start_time=start_time, end_time=datetime.now().isoformat(),
@@ -112,7 +112,7 @@ async def run_classify(config: AuditConfig, audit_log: AuditLog) -> None:
         cat = h.get("category", "Unknown")
         categories[cat] = categories.get(cat, 0) + 1
     summary = ", ".join(f"{v} {k}" for k, v in sorted(categories.items(), key=lambda x: -x[1]))
-    print(f"[Phase 4] Classification complete in {elapsed:.1f}s — {summary}")
+    print(f"[Phase 4] Classification complete in {elapsed:.1f}s — {summary}", flush=True)
 
 
 def _classify_device(host: dict, vendor: str) -> str:

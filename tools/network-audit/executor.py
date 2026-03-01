@@ -1,6 +1,8 @@
 """executor.py — Async subprocess runner with timeouts and retries."""
 
 import asyncio
+import os
+import signal
 import time
 from dataclasses import dataclass
 
@@ -105,6 +107,7 @@ async def run_shell(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
+            preexec_fn=os.setsid,  # New process group for reliable timeout kill
         )
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
@@ -121,6 +124,11 @@ async def run_shell(
             )
         except asyncio.TimeoutError:
             elapsed = time.monotonic() - start
+            # Kill entire process group (shell + children) to prevent orphans
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
             try:
                 proc.kill()
                 await proc.wait()

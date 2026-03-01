@@ -26,30 +26,27 @@ import asyncio
 import json
 import sys
 import time
+import traceback
 from datetime import datetime
 from pathlib import Path
 
 # Allow running directly or as a module
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).parent))
-    # Adjust for relative imports when running directly
-    import importlib
     import types
 
     pkg_dir = Path(__file__).parent
     pkg_name = "network_audit"
 
-    # Create a fake package so relative imports work
     pkg = types.ModuleType(pkg_name)
     pkg.__path__ = [str(pkg_dir)]
     pkg.__package__ = pkg_name
     sys.modules[pkg_name] = pkg
-
-    # Re-map this module's package
     sys.modules[__name__].__package__ = pkg_name
 
 from .config import AuditConfig, DEFAULT_REPORT_DIR
 from .audit_log import AuditLog
+from .progress import ProgressTracker
 from .phases.setup import run_setup
 from .phases.discovery import run_discovery
 from .phases.scanning import run_scanning
@@ -106,58 +103,127 @@ def parse_args() -> argparse.Namespace:
 
 
 async def run_full_audit(config: AuditConfig) -> Path:
-    """Run all audit phases sequentially."""
-    print("=" * 60)
-    print("  Kukui IT — Network Security Audit")
-    print("=" * 60)
-    print()
+    """Run all audit phases with progress tracking."""
+    print("=" * 60, flush=True)
+    print("  Kukui IT — Network Security Audit", flush=True)
+    print("=" * 60, flush=True)
+    print(flush=True)
 
     # Phase 0: Setup
     audit_log = await run_setup(config)
     if not config.subnet:
-        print("\nERROR: Could not determine subnet. Use --subnet to specify.")
+        print("\nERROR: Could not determine subnet. Use --subnet to specify.", flush=True)
         sys.exit(1)
-    print()
+
+    # Initialize progress tracker (after setup creates output_dir)
+    progress = ProgressTracker(config.output_dir)
+    progress.complete_phase(0, "Pre-Audit Setup", 0.1, "Setup complete")
+    print(flush=True)
 
     # Phase 1: Discovery
+    progress.start_phase(1, "Discovery", "Discovering live hosts on the network...")
+    t1 = time.monotonic()
     live_hosts = await run_discovery(config, audit_log)
+    d1 = time.monotonic() - t1
+    host_count = len(live_hosts)
+    progress.set_stats(hosts=host_count)
+    progress.complete_phase(1, "Discovery", d1, f"Found {host_count} live hosts")
     if not live_hosts:
-        print("\nWARNING: No live hosts discovered. Check subnet and permissions.")
-    print()
+        print("\nWARNING: No live hosts discovered. Check subnet and permissions.", flush=True)
+    print(flush=True)
 
-    # Phase 2: Port Scanning & Service Enumeration
+    # Phase 2: Port Scanning + Phase 4: Classification can overlap
+    # Scan ports first, then classify while probes run
+    progress.start_phase(2, "Port Scanning", f"Scanning {host_count} hosts for open ports...")
+    t2 = time.monotonic()
     await run_scanning(config, audit_log)
-    print()
+    d2 = time.monotonic() - t2
+    total_ports = sum(len(h.get("ports", [])) for h in audit_log.get_live_hosts())
+    progress.set_stats(ports=total_ports)
+    progress.complete_phase(2, "Port Scanning", d2, f"Found {total_ports} open ports")
+    print(flush=True)
 
-    # Phase 3: Targeted Security Probes
-    await run_probes(config, audit_log)
-    print()
+    # Phase 3 + 4 + 5 in parallel:
+    #   - Phase 3: Targeted probes (nmap scripts + Nuclei misconfig)
+    #   - Phase 4: Classification (pure Python, instant)
+    #   - Phase 5: Nuclei CVE scan
+    # These are independent — probes use nmap scripts, vulns use Nuclei CVEs,
+    # classify is pure OUI lookup. Run them all at once.
+    progress.start_phase(3, "Probes + Classification + Vuln Scan",
+                         "Running security probes, device classification, and vulnerability scan in parallel...")
+    t345 = time.monotonic()
 
-    # Phase 4: Vendor ID & Device Classification
-    await run_classify(config, audit_log)
-    print()
+    results_345 = await asyncio.gather(
+        _run_phase_safe(run_probes, config, audit_log, "probes"),
+        _run_phase_safe(run_classify, config, audit_log, "classify"),
+        _run_phase_safe(run_vulns, config, audit_log, "vulns"),
+        return_exceptions=True,
+    )
 
-    # Phase 5: Vulnerability Assessment
-    await run_vulns(config, audit_log)
-    print()
+    d345 = time.monotonic() - t345
+
+    # Log any errors from parallel phases
+    for i, (name, r) in enumerate(zip(["probes", "classify", "vulns"], results_345)):
+        if isinstance(r, Exception):
+            err_msg = f"Phase {name} failed: {r}"
+            progress.add_error(err_msg)
+            print(f"  WARNING: {err_msg}", flush=True)
+
+    # Update final stats
+    audit_log.update_stats()
+    stats = audit_log.to_dict().get("summary_stats", {})
+    total_ports = stats.get("total_open_ports", 0)
+    vuln_counts = stats.get("vulnerabilities_by_severity", {})
+    total_vulns = sum(vuln_counts.values())
+    progress.set_stats(ports=total_ports, vulns=total_vulns)
+
+    progress.complete_phase(3, "Probes", d345, "Security probes complete")
+    progress.complete_phase(4, "Classification", 0, "Device classification complete")
+    progress.complete_phase(5, "Vulnerability Assessment", 0,
+                           f"Found {total_vulns} vulnerability findings")
+    print(flush=True)
 
     # Finalize
     audit_log.finalize()
     audit_log.save()
 
-    print("=" * 60)
-    print(f"  Audit complete!")
-    print(f"  Results: {audit_log.path}")
-    print(f"  Hosts:   {len(audit_log.get_live_hosts())}")
-    stats = audit_log.to_dict().get("summary_stats", {})
-    print(f"  Ports:   {stats.get('total_open_ports', 0)}")
-    vulns = stats.get("vulnerabilities_by_severity", {})
-    vuln_summary = ", ".join(f"{v} {k}" for k, v in vulns.items() if v)
+    vuln_summary = ", ".join(f"{v} {k}" for k, v in vuln_counts.items() if v)
+    cat_summary = ", ".join(
+        f"{v} {k}" for k, v in sorted(
+            stats.get("device_categories", {}).items(), key=lambda x: -x[1]
+        )
+    )
+
+    print("=" * 60, flush=True)
+    print(f"  Audit complete!", flush=True)
+    print(f"  Results: {audit_log.path}", flush=True)
+    print(f"  Hosts:   {stats.get('total_hosts', 0)}", flush=True)
+    print(f"  Ports:   {total_ports}", flush=True)
+    if cat_summary:
+        print(f"  Devices: {cat_summary}", flush=True)
     if vuln_summary:
-        print(f"  Vulns:   {vuln_summary}")
-    print("=" * 60)
+        print(f"  Vulns:   {vuln_summary}", flush=True)
+    total_elapsed = audit_log.to_dict()["audit_meta"].get("duration_seconds", 0)
+    print(f"  Time:    {total_elapsed:.0f}s", flush=True)
+    print("=" * 60, flush=True)
+
+    progress.complete(
+        message=f"Audit complete: {stats.get('total_hosts', 0)} hosts, "
+                f"{total_ports} ports, {total_vulns} findings",
+        scan_results_path=str(audit_log.path),
+    )
 
     return audit_log.path
+
+
+async def _run_phase_safe(phase_fn, config, audit_log, name):
+    """Run a phase function, catching and returning exceptions."""
+    try:
+        return await phase_fn(config, audit_log)
+    except Exception as e:
+        print(f"  ERROR in {name}: {e}", flush=True)
+        traceback.print_exc()
+        raise
 
 
 async def run_single_phase(config: AuditConfig, phase: str) -> Path:
@@ -165,7 +231,7 @@ async def run_single_phase(config: AuditConfig, phase: str) -> Path:
     audit_log = await run_setup(config)
 
     if phase == "setup":
-        pass  # Already done
+        pass
     elif phase == "discovery":
         await run_discovery(config, audit_log)
     elif phase == "scanning":
@@ -210,7 +276,6 @@ def render_mode(args: argparse.Namespace) -> Path:
     scan_data = json.loads(scan_path.read_text())
     analysis = json.loads(analysis_path.read_text())
 
-    # Determine output path
     if args.output:
         output_path = Path(args.output)
         if output_path.is_dir() or not output_path.suffix:
@@ -240,12 +305,20 @@ def main():
     if args.output:
         config.output_dir = Path(args.output)
 
-    if args.phase:
-        result_path = asyncio.run(run_single_phase(config, args.phase))
-    else:
-        result_path = asyncio.run(run_full_audit(config))
+    try:
+        if args.phase:
+            result_path = asyncio.run(run_single_phase(config, args.phase))
+        else:
+            result_path = asyncio.run(run_full_audit(config))
 
-    print(f"\nScan results saved to: {result_path}")
+        print(f"\nScan results saved to: {result_path}", flush=True)
+    except KeyboardInterrupt:
+        print("\nAudit interrupted by user.", flush=True)
+        sys.exit(130)
+    except Exception as e:
+        print(f"\nFATAL ERROR: {e}", flush=True)
+        traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":

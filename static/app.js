@@ -243,6 +243,17 @@ const _claudeEvtConnecting = {};    // sessionId → true
 const _claudeIAmSending = {};       // sessionId → true while send() is consuming inline SSE
 let _localCompactInProgress = false;
 
+// --- SSE Connection TTL ---
+// Keep recently-active tabs connected for 30 minutes instead of disconnecting
+// immediately on tab switch. This lets background tabs receive live streaming
+// events (tool progress, thinking, text deltas) so messages don't vanish.
+// Cap at 4 concurrent SSE connections (browser limit is 6 for HTTP/1.1;
+// 1 for global events + 1 headroom for fetch requests = 4 available).
+const _SSE_TTL_MS = 30 * 60 * 1000;  // 30 minutes
+const _SSE_MAX_CONNECTIONS = 4;
+const _sseLastActiveAt = {};     // sessionId → timestamp (when tab was last the active tab)
+let _sseTtlTimer = null;         // periodic cleanup timer
+
 // Must match server.py / claude_bridge.py; separates prepended delegation
 // notifications from the user's actual message content.
 const DELEGATION_PREPEND_BOUNDARY = '[[KUKUIBOT_DELEGATION_BOUNDARY_V1]]';
@@ -401,16 +412,95 @@ function disconnectClaudeEventsForTab(tab) {
     delete _claudeEvtSources[sid];
   }
   delete _claudeEvtConnecting[sid];
+  delete _sseLastActiveAt[sid];
+}
+
+// --- SSE TTL: connection lifecycle management ---
+// Count active SSE connections (Claude + Anthropic, excludes global)
+function _countSseConnections() {
+  let n = 0;
+  for (const sid in _claudeEvtSources) if (_claudeEvtSources[sid]) n++;
+  for (const sid in _claudeEvtConnecting) if (_claudeEvtConnecting[sid]) n++;
+  for (const sid in _anthropicEvtSources) if (_anthropicEvtSources[sid]) n++;
+  for (const sid in _anthropicEvtConnecting) if (_anthropicEvtConnecting[sid]) n++;
+  return n;
+}
+
+// Evict the oldest inactive SSE connection to make room for a new one.
+// Never evicts the active tab or tabs that are currently loading.
+function _evictOldestSse() {
+  let oldest = null;
+  let oldestTime = Infinity;
+  for (const sid in _sseLastActiveAt) {
+    const tab = tabs.find(t => t.sessionId === sid);
+    if (!tab) { // orphan — disconnect immediately
+      if (_claudeEvtSources[sid]) { try { _claudeEvtSources[sid].close(); } catch {} delete _claudeEvtSources[sid]; }
+      if (_anthropicEvtSources[sid]) { try { _anthropicEvtSources[sid].close(); } catch {} delete _anthropicEvtSources[sid]; }
+      delete _sseLastActiveAt[sid];
+      return true;
+    }
+    if (tab.id === activeTabId) continue;     // never evict active tab
+    if (tab.wasLoading) continue;              // never evict loading tab
+    if (_sseLastActiveAt[sid] < oldestTime) {
+      oldestTime = _sseLastActiveAt[sid];
+      oldest = tab;
+    }
+  }
+  if (oldest) {
+    if (_isClaudeModel(oldest.modelKey)) disconnectClaudeEventsForTab(oldest);
+    if (_isAnthropicModel(oldest.modelKey)) disconnectAnthropicEventsForTab(oldest);
+    return true;
+  }
+  return false;
+}
+
+// Periodic cleanup: disconnect tabs that exceeded TTL
+function _sseTtlCleanup() {
+  const now = Date.now();
+  for (const sid in _sseLastActiveAt) {
+    if (now - _sseLastActiveAt[sid] > _SSE_TTL_MS) {
+      const tab = tabs.find(t => t.sessionId === sid);
+      if (!tab) { delete _sseLastActiveAt[sid]; continue; }
+      if (tab.id === activeTabId) continue;     // active tab stays
+      if (tab.wasLoading) continue;              // loading tab stays
+      if (_isClaudeModel(tab.modelKey)) disconnectClaudeEventsForTab(tab);
+      if (_isAnthropicModel(tab.modelKey)) disconnectAnthropicEventsForTab(tab);
+    }
+  }
+}
+
+function _startSseTtlTimer() {
+  if (_sseTtlTimer) return;
+  _sseTtlTimer = setInterval(_sseTtlCleanup, 60000); // check every minute
+}
+
+// Ensure the given tab can get an SSE connection, evicting if at cap
+function _ensureSseSlot(tab) {
+  if (!tab) return;
+  const sid = tab.sessionId;
+  // Already connected — just update timestamp
+  if (_claudeEvtSources[sid] || _claudeEvtConnecting[sid] ||
+      _anthropicEvtSources[sid] || _anthropicEvtConnecting[sid]) {
+    _sseLastActiveAt[sid] = Date.now();
+    return;
+  }
+  // Need a new connection — check capacity
+  while (_countSseConnections() >= _SSE_MAX_CONNECTIONS) {
+    if (!_evictOldestSse()) break; // can't evict anyone — proceed anyway
+  }
+  _sseLastActiveAt[sid] = Date.now();
 }
 
 function connectClaudeEvents() {
-  // ⚠️ WARNING: DO NOT change this to connect ALL Claude tabs.
-  // Lazy SSE: only connect the ACTIVE Claude tab to avoid exhausting
-  // the browser's per-domain connection limit (6 for HTTP/1.1).
-  // Connecting all tabs will max out connections and freeze the entire UI.
-  // switchTab() handles connect/disconnect when tabs change.
+  // SSE TTL model: connect the active tab + keep recently-active tabs connected
+  // for up to 30 minutes. Capped at 4 concurrent connections to stay within
+  // the browser's 6-connection limit (1 global SSE + 1 headroom = 4 available).
   const act = activeTab();
-  if (act && _isClaudeModel(act.modelKey)) connectClaudeEventsForTab(act);
+  if (act && _isClaudeModel(act.modelKey)) {
+    _ensureSseSlot(act);
+    connectClaudeEventsForTab(act);
+  }
+  _startSseTtlTimer();
 }
 
 // --- Anthropic Persistent EventSource Connections ---
@@ -508,14 +598,17 @@ function disconnectAnthropicEventsForTab(tab) {
     delete _anthropicEvtSources[sid];
   }
   delete _anthropicEvtConnecting[sid];
+  delete _sseLastActiveAt[sid];
 }
 
 function connectAnthropicEvents() {
-  // ⚠️ WARNING: DO NOT change this to connect ALL Anthropic tabs.
-  // Lazy SSE: only connect the ACTIVE tab. See connectClaudeEvents() for details.
-  // Connecting all tabs will max out browser connections and freeze the UI.
+  // SSE TTL model: same as connectClaudeEvents — keep recently-active connected.
   const act = activeTab();
-  if (act && _isAnthropicModel(act.modelKey)) connectAnthropicEventsForTab(act);
+  if (act && _isAnthropicModel(act.modelKey)) {
+    _ensureSseSlot(act);
+    connectAnthropicEventsForTab(act);
+  }
+  _startSseTtlTimer();
 }
 
 // --- Global Broadcast SSE (Cross-Device Sync) ---
@@ -1669,14 +1762,17 @@ function switchTab(id) {
   activeTabId = id;
   const switched = activeTab();
 
-  // ⚠️ WARNING: This disconnect is critical to lazy SSE. DO NOT remove it.
-  // Only the active tab should hold an EventSource connection. Without this disconnect,
-  // connections accumulate across tab switches and hit the browser's 6-connection limit,
-  // freezing all HTTP requests to the domain.
-  // Exception: tabs with wasLoading=true keep their connection to avoid dropping mid-stream.
-  if (prevTab && prevTab.id !== id && !prevTab.wasLoading) {
-    if (_isClaudeModel(prevTab.modelKey)) disconnectClaudeEventsForTab(prevTab);
-    if (_isAnthropicModel(prevTab.modelKey)) disconnectAnthropicEventsForTab(prevTab);
+  // SSE TTL model: instead of disconnecting the previous tab immediately,
+  // mark it with a timestamp so it stays connected for up to 30 minutes.
+  // This lets background tabs receive live events (tool progress, streaming text).
+  // The TTL cleanup timer and _ensureSseSlot() handle eviction when the cap is hit.
+  // Tabs with wasLoading=true are never evicted (even after TTL).
+  if (prevTab && prevTab.id !== id) {
+    const prevSid = prevTab.sessionId;
+    if (_claudeEvtSources[prevSid] || _anthropicEvtSources[prevSid]) {
+      // Already connected — just stamp the TTL (don't disconnect)
+      _sseLastActiveAt[prevSid] = Date.now();
+    }
   }
 
   if (switched) {
@@ -1708,8 +1804,11 @@ function switchTab(id) {
   // Sequence SSE attach after history load to avoid race where SSE events
   // arrive before history is loaded, causing duplicate or out-of-order rendering
   const connectSSE = () => {
-    if (tab && _isClaudeModel(tab.modelKey)) connectClaudeEventsForTab(tab);
-    if (tab && _isAnthropicModel(tab.modelKey)) connectAnthropicEventsForTab(tab);
+    if (tab) {
+      _ensureSseSlot(tab);
+      if (_isClaudeModel(tab.modelKey)) connectClaudeEventsForTab(tab);
+      if (_isAnthropicModel(tab.modelKey)) connectAnthropicEventsForTab(tab);
+    }
   };
   if (tab && tab.messages.length === 0) {
     loadTabHistory(tab, 120).then(connectSSE, connectSSE);
@@ -3895,15 +3994,21 @@ function addWork(tabId, entry) {
 
     if (shouldJumpToNewest) firstToolJumpDone = true;
 
-    const lockWhileCollapsed = !showWorkLog && !shouldJumpToNewest;
-
+    // Update ONLY the work log host — do NOT rebuild the entire messages pane.
+    // Full pane re-renders (forcePaneRefresh) during streaming destroy and recreate
+    // every message bubble via innerHTML, causing visible blank flashes especially
+    // in long conversations. The work log is a separate DOM element that can be
+    // patched independently.
     if (streamDomInitialized) {
-      renderMessageStreamOnly({
-        forcePaneRefresh: true,
-        forceStickBottom: shouldJumpToNewest,
-        lockScroll: lockWhileCollapsed,
-      });
+      const wlHost = document.getElementById('work-log-host');
+      if (wlHost) wlHost.innerHTML = renderWorkLogFixed(tab);
+      // If the work log just expanded, scroll it into view
+      if (shouldJumpToNewest) {
+        const el = document.getElementById('messages');
+        if (el) el.scrollTop = el.scrollHeight;
+      }
     } else {
+      const lockWhileCollapsed = !showWorkLog && !shouldJumpToNewest;
       requestRender({
         preserveScroll: lockWhileCollapsed || !shouldJumpToNewest,
         forceStickBottom: shouldJumpToNewest,
