@@ -49,7 +49,8 @@ from .audit_log import AuditLog
 from .progress import ProgressTracker
 from .phases.setup import run_setup
 from .phases.discovery import run_discovery
-from .phases.scanning import run_scanning
+from .phases.scanning import run_scanning, triage_hosts
+from .oui.oui_lookup import get_vendor, preload as preload_oui
 from .phases.probes import run_probes
 from .phases.classify import run_classify
 from .phases.vulns import run_vulns
@@ -132,8 +133,24 @@ async def run_full_audit(config: AuditConfig) -> Path:
         print("\nWARNING: No live hosts discovered. Check subnet and permissions.", flush=True)
     print(flush=True)
 
-    # Phase 2: Port Scanning + Phase 4: Classification can overlap
-    # Scan ports first, then classify while probes run
+    # Pre-scan triage: OUI vendor lookup to classify devices BEFORE scanning
+    # This lets Phase 2 use tiered scanning (quick for IoT, full for servers)
+    if live_hosts:
+        preload_oui()
+        for host in live_hosts:
+            mac = host.get("mac", "")
+            if mac:
+                vendor = get_vendor(mac)
+                if vendor and vendor != "Unknown":
+                    audit_log.add_host({"ip": host["ip"], "vendor": vendor})
+        scan_tiers = triage_hosts(audit_log.get_live_hosts())
+        quick_count = len(scan_tiers.get("quick", []))
+        full_count = len(scan_tiers.get("full", []))
+        print(f"[Pre-scan] Device triage: {full_count} full-scan, "
+              f"{quick_count} quick-scan", flush=True)
+        print(flush=True)
+
+    # Phase 2: Port Scanning (tiered based on device type)
     progress.start_phase(2, "Port Scanning", f"Scanning {host_count} hosts for open ports...")
     t2 = time.monotonic()
     await run_scanning(config, audit_log)

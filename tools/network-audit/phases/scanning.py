@@ -1,13 +1,18 @@
 """Phase 2 — Port Scanning & Service Enumeration.
 
-Strategy:
-  1. Batched nmap top-1000 on ALL hosts (fast, reliable)
-  2. If RustScan is available, run full-65535 sweep on "interesting" hosts only
-     (gateways, servers, NAS, hosts with 5+ open ports) to catch hidden ports
-  3. nmap service-enum on any newly discovered ports from RustScan
+Strategy (tiered by device type):
+  1. Pre-scan triage: use MAC vendor to categorize hosts into scan tiers
+     - QUICK tier (IoT, printers, cameras, phones, smart home): nmap top-100
+     - FULL tier (computers, NAS, network equipment, gateways, unknown): nmap top-1000
+  2. Run both tiers in parallel (batched nmap calls)
+  3. If RustScan is available, run full-65535 sweep on "interesting" FULL-tier hosts
+     (gateways, servers, NAS, hosts with 5+ open ports)
+  4. nmap service-enum on any newly discovered ports from RustScan
 
-This is much faster than running RustScan on every host — most LAN devices
-(phones, printers, IoT) have < 5 ports in the top 1000 and RustScan adds nothing.
+This saves significant time — IoT/printers/cameras have predictable ports, so
+scanning their top-1000 wastes ~90% of the scan time on ports that will never
+be open. Computers/NAS/servers need the full top-1000 because they run
+arbitrary services.
 """
 
 import asyncio
@@ -19,6 +24,7 @@ from ..audit_log import AuditLog
 from ..config import (
     AuditConfig,
     NMAP_TOP_PORTS,
+    NMAP_QUICK_PORTS,
     RUSTSCAN_BATCH_SIZE,
     RUSTSCAN_TIMEOUT_MS,
     SCAN_TIMEOUT_PER_HOST,
@@ -29,11 +35,107 @@ from ..parsers.nmap_parser import parse_nmap_xml
 from ..parsers.rustscan_parser import parse_rustscan_output
 
 # How many hosts to include in a single nmap call
-NMAP_BATCH_SIZE = 8
+NMAP_BATCH_SIZE_QUICK = 24  # Simple devices, fewer ports → bigger batches
+NMAP_BATCH_SIZE_FULL = 16   # More ports but still LAN-local
+MAX_CONCURRENT_BATCHES = 4  # nmap processes running at once (LAN has plenty of bandwidth)
 
 # Thresholds for deciding which hosts get a RustScan deep sweep
 RUSTSCAN_MIN_OPEN_PORTS = 5  # Hosts with this many+ open ports are "interesting"
 RUSTSCAN_INTERESTING_PORTS = {22, 80, 443, 8080, 8443, 548, 445, 5000, 5001}
+
+# Device categories that get a quick scan (top-100 only)
+QUICK_SCAN_CATEGORIES = {
+    "IoT", "Smart Home", "Printer", "Camera", "Phone/Tablet",
+}
+
+# Vendor keywords that map directly to quick-scan (used in triage before
+# full Phase 4 classification — just needs the vendor string from OUI)
+QUICK_SCAN_VENDORS = {
+    # Smart Home
+    "google": "Smart Home",
+    "amazon": "Smart Home",
+    "sonos": "Smart Home",
+    "ring": "Smart Home",
+    "nest": "Smart Home",
+    "ecobee": "Smart Home",
+    "philips": "Smart Home",
+    # Printers
+    "brother": "Printer",
+    "canon": "Printer",
+    "epson": "Printer",
+    "xerox": "Printer",
+    "lexmark": "Printer",
+    # Cameras
+    "hikvision": "Camera",
+    "dahua": "Camera",
+    "axis": "Camera",
+    "reolink": "Camera",
+    # IoT
+    "raspberry": "IoT",
+    "espressif": "IoT",
+    # Phones/Tablets
+    "samsung": "Phone/Tablet",
+    "oneplus": "Phone/Tablet",
+    "xiaomi": "Phone/Tablet",
+    "huawei": "Phone/Tablet",
+}
+
+# Vendor keywords that map to full-scan tier
+FULL_SCAN_VENDORS = {
+    "apple", "dell", "lenovo", "hewlett", "intel", "microsoft", "hp inc",
+    "synology", "qnap", "western digital",
+    "ubiquiti", "cisco", "netgear", "tp-link", "aruba", "ruckus", "meraki",
+    "mikrotik",
+}
+
+
+def triage_hosts(live_hosts: list[dict]) -> dict[str, list[str]]:
+    """Categorize hosts into scan tiers based on vendor and gateway status.
+
+    Returns {"quick": [ip, ...], "full": [ip, ...]}.
+    Called from audit.py after early OUI lookup so vendor is available.
+    """
+    quick_ips = []
+    full_ips = []
+
+    for host in live_hosts:
+        ip = host["ip"]
+        vendor = host.get("vendor", "").lower()
+
+        # Gateways always get full scan
+        if host.get("is_gateway"):
+            full_ips.append(ip)
+            continue
+
+        # If already classified (e.g. from a prior partial run), use category
+        category = host.get("category", "")
+        if category in QUICK_SCAN_CATEGORIES:
+            quick_ips.append(ip)
+            continue
+        if category and category != "Unknown":
+            full_ips.append(ip)
+            continue
+
+        # Triage by vendor keyword
+        tier = None
+        if vendor:
+            for keyword in QUICK_SCAN_VENDORS:
+                if keyword in vendor:
+                    tier = "quick"
+                    break
+            if tier is None:
+                for keyword in FULL_SCAN_VENDORS:
+                    if keyword in vendor:
+                        tier = "full"
+                        break
+
+        if tier == "quick":
+            quick_ips.append(ip)
+        else:
+            # Unknown vendor → full scan (safer to scan more than miss something)
+            full_ips.append(ip)
+
+    return {"quick": quick_ips, "full": full_ips}
 
 
 async def run_scanning(config: AuditConfig, audit_log: AuditLog) -> None:
@@ -60,29 +162,45 @@ async def run_scanning(config: AuditConfig, audit_log: AuditLog) -> None:
     xml_dir = config.output_dir / "nmap-xml"
     xml_dir.mkdir(parents=True, exist_ok=True)
 
-    host_count = len(live_hosts)
-    ips = [h["ip"] for h in live_hosts]
+    # ── Step 1: Triage hosts into scan tiers ──
+    tiers = triage_hosts(live_hosts)
+    quick_ips = tiers["quick"]
+    full_ips = tiers["full"]
 
-    # ── Step 1: Batched nmap top-ports on ALL hosts ──
-    batch_count = (host_count + NMAP_BATCH_SIZE - 1) // NMAP_BATCH_SIZE
-    print(f"[Phase 2] Scanning {host_count} hosts in {batch_count} batches "
-          f"(nmap top-{NMAP_TOP_PORTS}, {NMAP_BATCH_SIZE}/batch)...", flush=True)
+    # ── Step 2: Run quick and full nmap scans in parallel ──
+    all_batch_tasks = []
 
-    batch_tasks = []
-    for batch_ips in _batch_list(ips, NMAP_BATCH_SIZE):
-        batch_tasks.append(
-            _scan_batch_nmap_top(batch_ips, xml_dir, config, audit_log)
-        )
+    if quick_ips:
+        quick_batch_count = (len(quick_ips) + NMAP_BATCH_SIZE_QUICK - 1) // NMAP_BATCH_SIZE_QUICK
+        print(f"[Phase 2] Quick scan: {len(quick_ips)} devices in {quick_batch_count} batches "
+              f"(nmap top-{NMAP_QUICK_PORTS}, no scripts)...", flush=True)
+        for batch_ips in _batch_list(quick_ips, NMAP_BATCH_SIZE_QUICK):
+            all_batch_tasks.append(
+                _scan_batch_nmap(batch_ips, xml_dir, config, audit_log,
+                                 top_ports=NMAP_QUICK_PORTS, label="quick",
+                                 use_scripts=False, host_timeout=60)
+            )
 
-    batch_results = await run_parallel(batch_tasks, max_workers=2)
-    for r in batch_results:
-        if isinstance(r, dict):
-            errors.extend(r.get("errors", []))
-            commands_run.extend(r.get("commands", []))
+    if full_ips:
+        full_batch_count = (len(full_ips) + NMAP_BATCH_SIZE_FULL - 1) // NMAP_BATCH_SIZE_FULL
+        print(f"[Phase 2] Full scan:  {len(full_ips)} devices in {full_batch_count} batches "
+              f"(nmap top-{NMAP_TOP_PORTS})...", flush=True)
+        for batch_ips in _batch_list(full_ips, NMAP_BATCH_SIZE_FULL):
+            all_batch_tasks.append(
+                _scan_batch_nmap(batch_ips, xml_dir, config, audit_log,
+                                 top_ports=NMAP_TOP_PORTS, label="full")
+            )
 
-    # ── Step 2: RustScan deep sweep on "interesting" hosts only ──
-    if has_rustscan:
-        interesting = _pick_interesting_hosts(audit_log, live_hosts)
+    if all_batch_tasks:
+        batch_results = await run_parallel(all_batch_tasks, max_workers=MAX_CONCURRENT_BATCHES)
+        for r in batch_results:
+            if isinstance(r, dict):
+                errors.extend(r.get("errors", []))
+                commands_run.extend(r.get("commands", []))
+
+    # ── Step 3: RustScan deep sweep on "interesting" FULL-tier hosts only ──
+    if has_rustscan and full_ips:
+        interesting = _pick_interesting_hosts(audit_log, full_ips)
         if interesting:
             print(f"[Phase 2] RustScan deep sweep on {len(interesting)} interesting hosts: "
                   f"{', '.join(interesting)}...", flush=True)
@@ -115,12 +233,12 @@ async def run_scanning(config: AuditConfig, audit_log: AuditLog) -> None:
                     print(f"    {ip}: RustScan found {len(new_ports)} new ports: "
                           f"{', '.join(str(p) for p in sorted(new_ports))}", flush=True)
 
-            # Step 3: nmap service-enum on just the NEW ports
+            # Step 4: nmap service-enum on just the NEW ports
             if extra_ports:
                 print(f"  nmap service-enum on {len(extra_ports)} hosts with new ports...",
                       flush=True)
                 extra_tasks = []
-                for batch in _batch_hosts_with_ports(extra_ports, NMAP_BATCH_SIZE):
+                for batch in _batch_hosts_with_ports(extra_ports, NMAP_BATCH_SIZE_FULL):
                     extra_tasks.append(
                         _scan_batch_nmap_specific(batch, xml_dir, config, audit_log,
                                                   suffix="_deep")
@@ -150,8 +268,8 @@ async def run_scanning(config: AuditConfig, audit_log: AuditLog) -> None:
           flush=True)
 
 
-def _pick_interesting_hosts(audit_log: AuditLog, live_hosts: list[dict]) -> list[str]:
-    """Select hosts worth a full-65535 RustScan sweep.
+def _pick_interesting_hosts(audit_log: AuditLog, full_ips: list[str]) -> list[str]:
+    """Select full-tier hosts worth a full-65535 RustScan sweep.
 
     Criteria (any one qualifies):
     - Gateway/router
@@ -159,8 +277,7 @@ def _pick_interesting_hosts(audit_log: AuditLog, live_hosts: list[dict]) -> list
     - Has server-like services (SSH + HTTP, or NAS ports like 548/5000)
     """
     interesting = []
-    for host in live_hosts:
-        ip = host["ip"]
+    for ip in full_ips:
         host_data = audit_log.get_host(ip)
         if not host_data:
             continue
@@ -171,7 +288,7 @@ def _pick_interesting_hosts(audit_log: AuditLog, live_hosts: list[dict]) -> list
         }
 
         # Gateway — always interesting
-        if host.get("is_gateway") or host_data.get("is_gateway"):
+        if host_data.get("is_gateway"):
             interesting.append(ip)
             continue
 
@@ -290,17 +407,29 @@ async def _scan_batch_nmap_specific(
     return {"errors": errors, "commands": commands}
 
 
-async def _scan_batch_nmap_top(
+async def _scan_batch_nmap(
     ips: list[str],
     xml_dir: Path,
     config: AuditConfig,
     audit_log: AuditLog,
+    top_ports: int = NMAP_TOP_PORTS,
+    label: str = "",
+    use_scripts: bool = True,
+    host_timeout: int = SCAN_TIMEOUT_PER_HOST,
 ) -> dict:
-    """nmap top-ports scan on a batch of hosts."""
+    """nmap top-ports scan on a batch of hosts.
+
+    Args:
+        use_scripts: If False, skip -sC (default scripts). Saves ~10-20s per
+                     host on simple devices where scripts add no value.
+        host_timeout: Per-host timeout in seconds. Quick-tier uses 60s,
+                      full-tier uses 90s (the default).
+    """
     errors = []
     commands = []
 
-    batch_name = f"batch_{ips[0].replace('.', '_')}_{len(ips)}"
+    suffix = f"_{label}" if label else ""
+    batch_name = f"batch_{ips[0].replace('.', '_')}_{len(ips)}{suffix}"
     xml_path = xml_dir / f"{batch_name}.xml"
 
     nmap_cmd = []
@@ -309,16 +438,19 @@ async def _scan_batch_nmap_top(
     else:
         nmap_cmd = ["nmap", "-sT"]
 
+    nmap_cmd.append("-sV")
+    if use_scripts:
+        nmap_cmd.append("-sC")
+
     nmap_cmd.extend([
-        "-sV", "-sC",
-        "--top-ports", str(NMAP_TOP_PORTS),
+        "--top-ports", str(top_ports),
         "-T4",
-        "--host-timeout", f"{SCAN_TIMEOUT_PER_HOST}s",
+        "--host-timeout", f"{host_timeout}s",
         "-oX", str(xml_path),
         *ips,
     ])
 
-    batch_timeout = SCAN_TIMEOUT_PER_HOST + (len(ips) - 1) * 30 + 10
+    batch_timeout = host_timeout + (len(ips) - 1) * 20 + 10
     result = await run_command(nmap_cmd, timeout=batch_timeout, retries=1)
     commands.append({
         "cmd": result.command,
@@ -333,7 +465,7 @@ async def _scan_batch_nmap_top(
         parsed_hosts = parse_nmap_xml(xml_path)
         for ph in parsed_hosts:
             audit_log.add_host(ph)
-        print(f"    Batch done: {len(ips)} hosts, "
+        print(f"    [{label or 'scan'}] Batch done: {len(ips)} hosts, "
               f"{sum(len(ph.get('ports', [])) for ph in parsed_hosts)} ports "
               f"({result.duration:.0f}s)", flush=True)
 
