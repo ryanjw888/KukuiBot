@@ -218,6 +218,10 @@ app = FastAPI(title=APP_NAME, version="0.1.0")
 _app_state = AppState()
 app.state.app_state = _app_state
 
+# Main asyncio loop reference (set at startup) so thread-based callbacks
+# can schedule async bridge operations safely.
+_MAIN_LOOP = None
+
 app.include_router(chat_router)
 app.include_router(files_router)
 app.include_router(integrations_router)
@@ -2066,20 +2070,42 @@ async def api_claude_config_get(req: Request):
 
 @app.get("/api/claude/auth")
 async def api_claude_auth_status(req: Request):
-    """Return Claude OAuth token health status (admin only)."""
+    """Return Claude auth health status (admin only).
+
+    In configured mode, trust the configured token/API key and avoid treating
+    stale ~/.claude credentials as a hard failure signal.
+    """
     if not _is_admin(req):
         return JSONResponse({"ok": False, "error": "Admin only"}, status_code=403)
+
+    strategy = _claude_auth_strategy()
     _, expires_s = _read_cli_credentials_raw()
     import time as _time
     now = _time.time()
     remaining_hours = round((expires_s - now) / 3600, 2) if expires_s else None
-    token_healthy = (expires_s - now) > 900 if expires_s else False  # >15 min
+
+    configured_oauth = bool((_sanitize_bearer_token(get_config("claude_code.oauth_token", "") or "") or "").strip())
+    configured_api = bool((get_config("claude_code.api_key", "") or "").strip() or (os.environ.get("ANTHROPIC_API_KEY") or "").strip())
+    cli_token_healthy = bool(expires_s and (expires_s - now) > 900)  # >15 min
+
+    if strategy == "local":
+        token_healthy = cli_token_healthy
+        health_mode = "local_cli"
+    else:
+        # configured mode: allow DB-configured OAuth/API key to be treated as healthy
+        token_healthy = configured_oauth or configured_api or cli_token_healthy
+        health_mode = "configured"
+
     return {
         "ok": True,
         "token_expires_at": expires_s,
         "token_remaining_hours": remaining_hours,
         "token_healthy": token_healthy,
-        "auth_strategy": _claude_auth_strategy(),
+        "auth_strategy": strategy,
+        "health_mode": health_mode,
+        "configured_oauth": configured_oauth,
+        "configured_api_key": configured_api,
+        "cli_token_healthy": cli_token_healthy,
     }
 
 
@@ -2214,6 +2240,19 @@ def _start_oauth_callback_server(state: str, code_verifier: str, settings_url_ba
                 pool._auth_strategy = "configured"
                 for p in pool._processes.values():
                     p.set_auth_strategy("configured")
+                # Permanent fix: existing long-lived Claude subprocesses keep
+                # old env vars; force a pool recycle so new messages spawn with
+                # the freshly saved OAuth token.
+                global _MAIN_LOOP
+                if _MAIN_LOOP is not None:
+                    try:
+                        fut = asyncio.run_coroutine_threadsafe(pool.kill_all(), _MAIN_LOOP)
+                        fut.result(timeout=10)
+                        logger.info("[OAUTH-CB] Claude pool recycled after token save")
+                    except Exception as e:
+                        logger.warning(f"[OAUTH-CB] Failed to recycle Claude pool after token save: {e}")
+                else:
+                    logger.warning("[OAUTH-CB] _MAIN_LOOP unavailable; skipping Claude pool recycle")
             logger.info("[OAUTH-CB] Token saved successfully")
 
             self._redirect(f"{settings_url_base}?claude_oauth=success#claude")
@@ -4326,6 +4365,8 @@ async def _openai_token_refresh_monitor():
 
 @app.on_event("startup")
 async def startup():
+    global _MAIN_LOOP
+    _MAIN_LOOP = asyncio.get_running_loop()
     _init_server_log()
     init_log_db()
     # --- Startup Integrity Gate (Phase 3) ---
