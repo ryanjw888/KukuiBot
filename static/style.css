@@ -2195,31 +2195,49 @@ body {
 .email-sidebar-section {
   flex: 1; overflow-y: auto; padding: 8px;
 }
-.email-sidebar-status {
-  padding: 10px; border-radius: 8px;
-  background: rgba(255,255,255,0.03);
-  border: 1px solid var(--border-light);
-  margin-bottom: 8px;
+/* Gmail-style sidebar: compose button + folder nav */
+.email-sidebar-compose {
+  padding: 0 4px 8px;
 }
-.email-sidebar-stat {
-  display: flex; justify-content: space-between;
-  font-size: 12px; padding: 3px 0;
-}
-.email-sidebar-stat-label { color: var(--muted); }
-.email-sidebar-stat-val { color: var(--text); font-weight: 500; }
-.email-sidebar-actions {
-  display: flex; flex-direction: column; gap: 4px;
-}
-.email-sidebar-btn {
+.email-sidebar-compose-btn {
   display: flex; align-items: center; gap: 8px;
-  width: 100%; padding: 7px 10px; border-radius: 8px;
-  border: 1px solid var(--border-light); background: rgba(255,255,255,0.03);
-  color: var(--muted); cursor: pointer; text-align: left;
-  font-size: 12px; font-family: inherit;
-  transition: all 0.15s;
+  width: 100%; padding: 10px 16px; border-radius: 16px;
+  border: none;
+  background: var(--accent, #6495ed); color: #fff;
+  cursor: pointer; font-size: 14px; font-weight: 600;
+  font-family: inherit; transition: filter 0.15s;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.2);
 }
-.email-sidebar-btn:hover { background: rgba(255,255,255,0.07); border-color: var(--accent); color: var(--text); }
-.email-sidebar-btn:disabled { opacity: 0.4; cursor: default; }
+.email-sidebar-compose-btn:hover { filter: brightness(1.15); }
+.email-sidebar-folders {
+  display: flex; flex-direction: column; gap: 1px;
+}
+.email-sidebar-folder {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; padding: 7px 12px; border-radius: 0 20px 20px 0;
+  border: none; background: transparent;
+  color: var(--text); cursor: pointer; text-align: left;
+  font-size: 13px; font-family: inherit;
+  transition: background 0.12s;
+}
+.email-sidebar-folder:hover { background: rgba(255,255,255,0.06); }
+.email-sidebar-folder.active {
+  background: rgba(var(--accent-rgb, 100,149,237), 0.18);
+  color: var(--accent, #6495ed); font-weight: 600;
+}
+.email-sidebar-folder-icon {
+  width: 20px; text-align: center; font-size: 14px; flex-shrink: 0;
+}
+.email-sidebar-folder-label {
+  flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.email-sidebar-folder-count {
+  font-size: 11px; font-weight: 600; color: var(--accent, #6495ed);
+  min-width: 18px; text-align: right;
+}
+.email-sidebar-divider {
+  height: 1px; background: var(--border); margin: 8px 12px;
+}
 
 /* Mobile */
 .mobile-email-title {
@@ -2384,6 +2402,140 @@ body {
 }
 .disabled-section { opacity: 0.4; pointer-events: none; }
 
+/* Inbox tab */
+.inbox-container {
+  display: flex; flex-direction: column; height: 100%; min-height: 0;
+}
+.inbox-toolbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+.inbox-split {
+  display: flex; flex: 1; min-height: 0;
+}
+.inbox-list {
+  width: 35%; border-right: 1px solid var(--border);
+  overflow-y: auto; flex-shrink: 0;
+}
+.inbox-list::-webkit-scrollbar { width: 4px; }
+.inbox-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+.inbox-preview {
+  flex: 1; overflow-y: auto; display: flex; flex-direction: column; min-width: 0;
+}
+.inbox-preview::-webkit-scrollbar { width: 4px; }
+.inbox-preview::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+.inbox-msg-row {
+  padding: 10px 12px; border-bottom: 1px solid var(--border);
+  cursor: pointer; display: flex; flex-direction: column; gap: 2px;
+  position: relative; transition: background 0.12s;
+}
+.inbox-msg-row:hover { background: var(--surface-hover); }
+.inbox-msg-row.selected { background: rgba(var(--accent-rgb, 100,149,237), 0.15); }
+.inbox-msg-row.unread .inbox-msg-sender,
+.inbox-msg-row.unread .inbox-msg-subject { font-weight: 600; color: var(--text); }
+.inbox-msg-sender {
+  font-size: 13px; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  padding-right: 60px;
+}
+.inbox-msg-subject {
+  font-size: 12px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.inbox-msg-snippet {
+  font-size: 11px; color: var(--muted); opacity: 0.7;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.inbox-msg-date {
+  font-size: 11px; color: var(--muted);
+  position: absolute; top: 10px; right: 12px;
+}
+.inbox-preview-header {
+  padding: 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.inbox-preview-actions {
+  display: flex; gap: 6px; margin-top: 8px;
+}
+.inbox-preview-body {
+  flex: 1; padding: 16px; overflow-y: auto; min-height: 0;
+}
+.inbox-preview-iframe {
+  width: 100%; border: none; min-height: 300px; background: #fff; border-radius: 4px;
+}
+.inbox-preview-text {
+  font-size: 13px; color: var(--text); line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word;
+  margin: 0; font-family: inherit;
+}
+/* Compose overlay — Gmail-style floating panel */
+.inbox-preview { position: relative; }
+.inbox-compose-overlay {
+  position: absolute; bottom: 0; right: 0; width: 80%;
+  max-height: 85%; min-height: 280px;
+  display: flex; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 10px 10px 0 0;
+  box-shadow: 0 -4px 24px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.06);
+  z-index: 20;
+  overflow: hidden;
+}
+.inbox-compose-titlebar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 14px;
+  background: var(--accent, #6495ed); color: #fff;
+  border-radius: 10px 10px 0 0;
+  flex-shrink: 0; cursor: default;
+  font-size: 13px; font-weight: 600;
+}
+.inbox-compose-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.inbox-compose-close {
+  background: none; border: none; color: #fff; font-size: 18px;
+  cursor: pointer; padding: 0 2px; line-height: 1; opacity: 0.8;
+}
+.inbox-compose-close:hover { opacity: 1; }
+.inbox-compose-form {
+  flex: 1; overflow-y: auto; padding: 10px 14px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.inbox-compose-field {
+  display: block; width: 100%; padding: 7px 10px;
+  border-radius: 6px; border: 1px solid var(--border-light);
+  background: var(--bg); color: var(--text);
+  font-size: 13px; font-family: inherit;
+  box-sizing: border-box;
+}
+.inbox-compose-field:focus { outline: none; border-color: var(--accent); }
+.inbox-compose-body { resize: vertical; min-height: 120px; flex: 1; }
+.inbox-compose-footer {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 14px; border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.inbox-search {
+  flex: 1; padding: 4px 10px; border-radius: 6px;
+  border: 1px solid var(--border-light); background: var(--bg);
+  color: var(--text); font-size: 12px; font-family: inherit;
+  outline: none;
+}
+.inbox-search:focus { border-color: var(--accent); }
+.inbox-folder-select {
+  padding: 3px 8px; border-radius: 6px;
+  border: 1px solid var(--border-light);
+  background: var(--bg); color: var(--text);
+  font-size: 11px; font-family: inherit;
+  cursor: pointer; outline: none;
+}
+.inbox-folder-select:focus { border-color: var(--accent); }
+.inbox-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 40px 20px; color: var(--muted); font-size: 13px;
+  text-align: center; gap: 8px; height: 100%;
+}
+
 /* Responsive — collapse sidebar on mobile, show mobile bar */
 @media (max-width: 700px) {
   .sidebar { display: none; }
@@ -2402,4 +2554,8 @@ body {
   .email-draft-actions { align-self: flex-end; }
   .email-content { padding: 10px 12px; }
   .email-history-from { display: none; }
+  .inbox-split { flex-direction: column; }
+  .inbox-list { width: 100%; max-height: 40vh; border-right: none; border-bottom: 1px solid var(--border); }
+  .inbox-preview { min-height: 200px; }
+  .inbox-compose-overlay { width: 100%; right: 0; }
 }

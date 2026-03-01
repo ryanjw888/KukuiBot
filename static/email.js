@@ -8,7 +8,7 @@ const EmailModule = (function () {
   'use strict';
 
   // --- State ---
-  let activeTab = 'drafts'; // 'drafts' | 'history' | 'settings' | 'profile' | 'spam'
+  let activeTab = 'inbox'; // 'inbox' | 'drafts' | 'history' | 'settings' | 'profile' | 'spam'
   let drafts = [];
   let status = null; // null = not loaded yet
   let config = {};
@@ -23,6 +23,20 @@ const EmailModule = (function () {
   let expandedDrafts = new Set();
   let initialized = false;
   let pollTimer = null;
+
+  // Inbox state
+  let inboxMessages = [];       // [{from, to, subject, date, uid, folder, is_read, snippet}]
+  let inboxFolder = 'INBOX';    // current folder
+  let inboxSearch = '';          // IMAP search query
+  let inboxLoading = false;
+  let selectedMessage = null;   // full message object from /api/gmail/message
+  let selectedUid = null;       // uid of currently selected message
+  let messageLoading = false;
+  let inboxFolders = [];        // available IMAP folders
+  let showCompose = false;      // compose form visible
+  let composeData = { to: '', subject: '', body: '' }; // compose form state
+  let composeSending = false;
+  let aiReplyLoading = false;
 
   // Chat state
   let chatMessages = []; // [{role, text, ts}]
@@ -93,6 +107,157 @@ const EmailModule = (function () {
       try { return DOMPurify.sanitize(marked.parse(text)); } catch {}
     }
     return escHtml(text).replace(/\n/g, '<br>');
+  }
+
+  // --- Inbox helpers ---
+
+  function parseSender(from) {
+    if (!from) return 'Unknown';
+    const match = from.match(/^"?([^"<]+?)"?\s*</);
+    return match ? match[1].trim() : from.split('@')[0];
+  }
+
+  function fmtInboxDate(dateStr) {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    if (isNaN(d)) return dateStr;
+    const now = new Date();
+    const diffMs = now - d;
+    const diffDays = Math.floor(diffMs / 86400000);
+    if (diffDays === 0) return d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+    if (diffDays === 1) return 'Yesterday';
+    if (diffDays < 7) return d.toLocaleDateString([], {weekday: 'short'});
+    return d.toLocaleDateString([], {month: 'short', day: 'numeric'});
+  }
+
+  // --- Inbox data fetching ---
+
+  async function fetchInbox() {
+    inboxLoading = true;
+    rerender();
+    const resp = await apiFetch('/api/gmail/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder: inboxFolder, max_results: 50, search: inboxSearch }),
+    });
+    if (resp.ok && resp.messages) {
+      inboxMessages = resp.messages;
+    } else if (resp.error) {
+      console.error('fetchInbox error:', resp.error);
+    }
+    inboxLoading = false;
+    rerender();
+  }
+
+  async function fetchMessageDetail(folder, uid) {
+    messageLoading = true;
+    selectedUid = uid;
+    rerender();
+    const resp = await apiFetch('/api/gmail/message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder, uid: String(uid) }),
+    });
+    if (resp.ok && resp.message) {
+      selectedMessage = resp.message;
+      // Mark as read if not already
+      const msg = inboxMessages.find(m => String(m.uid) === String(uid));
+      if (msg && !msg.is_read) {
+        msg.is_read = true;
+        apiFetch('/api/gmail/flags', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folder, uid: String(uid), flags: { seen: true } }),
+        });
+      }
+    } else if (resp.error) {
+      console.error('fetchMessageDetail error:', resp.error);
+    }
+    messageLoading = false;
+    rerender();
+  }
+
+  async function fetchFolders() {
+    const resp = await apiFetch('/api/gmail/folders');
+    if (resp.ok && resp.folders) {
+      inboxFolders = resp.folders;
+    }
+  }
+
+  async function trashMessage(folder, uid) {
+    if (!confirm('Move this message to trash?')) return;
+    const resp = await apiFetch('/api/gmail/trash', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder, uid: String(uid) }),
+    });
+    if (resp.ok) {
+      inboxMessages = inboxMessages.filter(m => String(m.uid) !== String(uid));
+      if (String(selectedUid) === String(uid)) {
+        selectedMessage = null;
+        selectedUid = null;
+      }
+      rerender();
+    } else if (resp.error) {
+      alert('Trash error: ' + resp.error);
+    }
+  }
+
+  async function toggleReadStatus(folder, uid) {
+    const msg = inboxMessages.find(m => String(m.uid) === String(uid));
+    if (!msg) return;
+    const newSeen = !msg.is_read;
+    const resp = await apiFetch('/api/gmail/flags', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder, uid: String(uid), flags: { seen: newSeen } }),
+    });
+    if (resp.ok) {
+      msg.is_read = newSeen;
+      rerender();
+    }
+  }
+
+  async function sendCompose() {
+    if (!composeData.to || !composeData.subject) {
+      alert('To and Subject are required.');
+      return;
+    }
+    composeSending = true;
+    rerender();
+    const resp = await apiFetch('/api/gmail/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(composeData),
+    });
+    composeSending = false;
+    if (resp.error) {
+      alert('Send error: ' + resp.error);
+      rerender();
+    } else {
+      composeData = { to: '', subject: '', body: '' };
+      showCompose = false;
+      rerender();
+      // Brief success feedback
+      const el = document.querySelector('.inbox-compose-success');
+      if (el) { el.style.display = 'block'; setTimeout(() => el.style.display = 'none', 2000); }
+    }
+  }
+
+  async function saveDraftCompose() {
+    if (!composeData.to && !composeData.subject && !composeData.body) return;
+    const resp = await apiFetch('/api/gmail/draft', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(composeData),
+    });
+    if (resp.error) {
+      alert('Draft error: ' + resp.error);
+    } else {
+      composeData = { to: '', subject: '', body: '' };
+      showCompose = false;
+      rerender();
+    }
   }
 
   // --- Data fetching ---
@@ -368,6 +533,10 @@ const EmailModule = (function () {
     if (tab === 'profile' && profileAce) return;
     activeTab = tab;
     rerender();
+    if (tab === 'inbox') {
+      if (inboxMessages.length === 0) fetchInbox();
+      if (inboxFolders.length === 0) fetchFolders();
+    }
     if ((tab === 'history' || tab === 'spam') && history.length === 0) {
       await fetchHistory();
       rerender();
@@ -397,11 +566,24 @@ const EmailModule = (function () {
     return 'tab-' + key + '-emailchat';
   }
 
+  function _buildInboxContext() {
+    // Build a summary of recent inbox emails for AI context
+    const msgs = inboxMessages.slice(0, 50);
+    if (!msgs.length) return '';
+    const lines = msgs.map((m, i) =>
+      `${i + 1}. From: ${m.from || 'Unknown'} | Subject: ${m.subject || '(no subject)'} | Date: ${m.date || ''}`
+    );
+    return `[EMAIL CONTEXT — Recent inbox (${msgs.length} messages)]\n${lines.join('\n')}\n[END EMAIL CONTEXT]\n\n`;
+  }
+
   async function chatSend() {
     const textarea = document.getElementById('email-chat-input');
     if (!textarea) return;
     const text = (textarea.value || '').trim();
     if (!text || chatStreaming) return;
+
+    // Check if this is the first message in a fresh chat
+    const isFirstMessage = chatMessages.filter(m => m.role === 'user').length === 0;
 
     chatMessages.push({ role: 'user', text, ts: Date.now() });
     textarea.value = '';
@@ -414,11 +596,18 @@ const EmailModule = (function () {
     chatAbortController = new AbortController();
     const sid = _resolveSessionId();
 
+    // Prepend inbox context on first message so the AI knows about recent emails
+    let apiMessage = text;
+    if (isFirstMessage) {
+      const ctx = _buildInboxContext();
+      if (ctx) apiMessage = ctx + text;
+    }
+
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, session_id: sid }),
+        body: JSON.stringify({ message: apiMessage, session_id: sid }),
         signal: chatAbortController.signal,
       });
 
@@ -554,7 +743,7 @@ const EmailModule = (function () {
   async function init() {
     if (initialized) return;
     initialized = true;
-    activeTab = 'drafts';
+    activeTab = 'inbox';
     expandedDrafts.clear();
     chatMessages = [];
 
@@ -576,11 +765,16 @@ const EmailModule = (function () {
     await Promise.all([fetchStatus(), fetchConfig(), fetchDrafts()]);
     rerender();
 
+    // Fetch inbox on init
+    fetchInbox();
+    fetchFolders();
+
     // Poll for new drafts every 30s while in email mode
     pollTimer = setInterval(async () => {
       if (typeof appMode !== 'undefined' && appMode === 'email') {
         await Promise.all([fetchStatus(), fetchDrafts()]);
         if (activeTab === 'drafts') rerender();
+        if (activeTab === 'inbox') fetchInbox();
       }
     }, 30000);
   }
@@ -650,6 +844,188 @@ const EmailModule = (function () {
       <span class="email-status-text">Active &middot; Last run: ${escHtml(lastRun)}</span>
       <span class="email-status-sub">${status.last_drafts_count || 0} drafted &middot; Profile ${status.profile_fresh ? 'fresh' : 'stale'}</span>
     </div>`;
+  }
+
+  // --- Render: Inbox Tab ---
+
+  function renderInboxTab() {
+    // Compose overlay (Gmail-style floating panel anchored bottom-right of preview)
+    let composeHtml = '';
+    if (showCompose) {
+      const title = composeData.subject && composeData.subject.startsWith('Re: ') ? 'Reply' : 'New Message';
+      composeHtml = `<div class="inbox-compose-overlay">
+        <div class="inbox-compose-titlebar">
+          <span class="inbox-compose-title">${title}</span>
+          <button class="inbox-compose-close" onclick="EmailModule.closeCompose()" title="Close">&times;</button>
+        </div>
+        <div class="inbox-compose-form">
+          <input class="inbox-compose-field" type="text" placeholder="To" value="${escHtml(composeData.to)}"
+            oninput="EmailModule.updateCompose('to', this.value)" />
+          <input class="inbox-compose-field" type="text" placeholder="Subject" value="${escHtml(composeData.subject)}"
+            oninput="EmailModule.updateCompose('subject', this.value)" />
+          <textarea class="inbox-compose-field inbox-compose-body" rows="8" placeholder="Message body..."
+            oninput="EmailModule.updateCompose('body', this.value)">${escHtml(composeData.body)}</textarea>
+        </div>
+        <div class="inbox-compose-footer">
+          <button class="email-action-btn primary" onclick="EmailModule.sendCompose()" ${composeSending ? 'disabled' : ''}>
+            ${composeSending ? '<span class="email-spinner"></span> Sending...' : 'Send'}
+          </button>
+          <button class="email-action-btn" onclick="EmailModule.saveDraftCompose()">Save Draft</button>
+          <button class="email-action-btn danger" onclick="EmailModule.closeCompose()" style="margin-left:auto">Discard</button>
+        </div>
+      </div>`;
+    }
+
+    // Folder dropdown options
+    const folderOpts = (inboxFolders.length ? inboxFolders : ['INBOX']).map(f =>
+      `<option value="${escHtml(f)}" ${f === inboxFolder ? 'selected' : ''}>${escHtml(f)}</option>`
+    ).join('');
+
+    // Toolbar
+    const toolbarHtml = `<div class="inbox-toolbar">
+      <select class="inbox-folder-select" onchange="EmailModule.setInboxFolder(this.value)">${folderOpts}</select>
+      <input class="inbox-search" type="text" placeholder="Search mail..." value="${escHtml(inboxSearch)}"
+        onkeydown="if(event.key==='Enter'){EmailModule.setInboxSearch(this.value)}" />
+      <button class="email-action-btn" onclick="EmailModule.openCompose()" title="Compose">Compose</button>
+      <button class="email-action-btn" onclick="EmailModule.refreshInbox()" title="Refresh">Refresh</button>
+    </div>`;
+
+    // Message list
+    let listHtml = '';
+    if (inboxLoading) {
+      listHtml = '<div class="inbox-empty"><span class="email-spinner"></span><div>Loading...</div></div>';
+    } else if (inboxMessages.length === 0) {
+      listHtml = '<div class="inbox-empty"><div style="font-size:32px;opacity:0.3">&#128235;</div><div>No messages</div></div>';
+    } else {
+      listHtml = inboxMessages.map(m => {
+        const isSelected = String(m.uid) === String(selectedUid);
+        const unreadCls = m.is_read ? '' : ' unread';
+        const selectedCls = isSelected ? ' selected' : '';
+        return `<div class="inbox-msg-row${unreadCls}${selectedCls}" onclick="EmailModule.selectMessage('${escHtml(m.folder || inboxFolder)}', '${escHtml(String(m.uid))}')">
+          <div class="inbox-msg-sender">${escHtml(parseSender(m.from))}</div>
+          <div class="inbox-msg-subject">${escHtml(m.subject || '(no subject)')}</div>
+          <div class="inbox-msg-snippet">${escHtml(m.snippet || '')}</div>
+          <div class="inbox-msg-date">${fmtInboxDate(m.date)}</div>
+        </div>`;
+      }).join('');
+    }
+
+    // Preview pane
+    let previewHtml = '';
+    if (messageLoading) {
+      previewHtml = '<div class="inbox-empty"><span class="email-spinner"></span><div>Loading message...</div></div>';
+    } else if (selectedMessage) {
+      const sm = selectedMessage;
+      let bodyContent = '';
+      if (sm.body_html) {
+        // Render HTML in sandboxed iframe
+        const safeHtml = sm.body_html.replace(/"/g, '&quot;');
+        bodyContent = `<iframe class="inbox-preview-iframe" sandbox="allow-same-origin" srcdoc="${safeHtml}"></iframe>`;
+      } else {
+        bodyContent = `<pre class="inbox-preview-text">${escHtml(sm.body || '(empty)')}</pre>`;
+      }
+
+      previewHtml = `<div class="inbox-preview-header">
+          <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:4px">${escHtml(sm.subject || '(no subject)')}</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:2px">From: ${escHtml(sm.from || '')}</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:2px">To: ${escHtml(sm.to || '')}</div>
+          <div style="font-size:12px;color:var(--muted)">Date: ${escHtml(sm.date || '')}</div>
+          <div class="inbox-preview-actions">
+            <button class="email-action-btn primary" onclick="EmailModule.aiReply()" ${aiReplyLoading ? 'disabled' : ''}>
+              ${aiReplyLoading ? '<span class="email-spinner"></span> Generating...' : 'AI Reply'}
+            </button>
+            <button class="email-action-btn" onclick="EmailModule.replyTo()">Reply</button>
+            <button class="email-action-btn danger" onclick="EmailModule.trashMessage('${escHtml(sm.folder || inboxFolder)}', '${escHtml(String(sm.uid || selectedUid))}')">Trash</button>
+            <button class="email-action-btn" onclick="EmailModule.toggleReadStatus('${escHtml(sm.folder || inboxFolder)}', '${escHtml(String(sm.uid || selectedUid))}')">Mark Unread</button>
+          </div>
+        </div>
+        <div class="inbox-preview-body">${bodyContent}</div>`;
+    } else {
+      previewHtml = '<div class="inbox-empty"><div style="font-size:32px;opacity:0.3">&#9993;</div><div>Select a message to read</div></div>';
+    }
+
+    return `<div class="inbox-container">
+      ${toolbarHtml}
+      <div class="inbox-split">
+        <div class="inbox-list">${listHtml}</div>
+        <div class="inbox-preview">${previewHtml}${composeHtml}</div>
+      </div>
+    </div>`;
+  }
+
+  // --- Inbox UI actions ---
+
+  function openCompose() {
+    showCompose = true;
+    composeData = { to: '', subject: '', body: '' };
+    rerender();
+  }
+
+  function closeCompose() {
+    showCompose = false;
+    rerender();
+  }
+
+  function updateCompose(field, value) {
+    composeData[field] = value;
+  }
+
+  function replyTo() {
+    if (!selectedMessage) return;
+    const sm = selectedMessage;
+    const reSubject = (sm.subject || '').startsWith('Re: ') ? sm.subject : 'Re: ' + (sm.subject || '');
+    const quotedBody = '\n\n--- Original Message ---\nFrom: ' + (sm.from || '') + '\nDate: ' + (sm.date || '') + '\n\n' + (sm.body || '');
+    composeData = { to: sm.from || '', subject: reSubject, body: quotedBody };
+    showCompose = true;
+    rerender();
+  }
+
+  async function aiReply() {
+    if (!selectedMessage || aiReplyLoading) return;
+    const sm = selectedMessage;
+    aiReplyLoading = true;
+    rerender();
+    const resp = await apiFetch('/api/drafter/ai-reply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: sm.from || '',
+        subject: sm.subject || '',
+        body: sm.body || '',
+        message_id: sm.message_id || '',
+      }),
+    }, 120000);
+    aiReplyLoading = false;
+    if (resp.error) {
+      alert('AI Reply error: ' + resp.error);
+      rerender();
+      return;
+    }
+    // Open compose overlay pre-filled with the AI-generated reply
+    const reSubject = resp.subject || ('Re: ' + (sm.subject || ''));
+    composeData = { to: sm.from || '', subject: reSubject, body: resp.reply_text || '' };
+    showCompose = true;
+    rerender();
+  }
+
+  function selectMessage(folder, uid) {
+    fetchMessageDetail(folder, uid);
+  }
+
+  function setInboxFolder(folder) {
+    inboxFolder = folder;
+    selectedMessage = null;
+    selectedUid = null;
+    fetchInbox();
+  }
+
+  function setInboxSearch(query) {
+    inboxSearch = query;
+    fetchInbox();
+  }
+
+  function refreshInbox() {
+    fetchInbox();
   }
 
   // --- Render: Drafts Tab ---
@@ -738,6 +1114,7 @@ const EmailModule = (function () {
     const enabled = config.enabled || false;
     const interval = config.check_interval_min || 15;
     const maxPerRun = config.max_per_run || 10;
+    const threadCtx = config.thread_context || 'full_thread';
     const sig = config.signature_html || '';
 
     // Build model/worker options for the chat section
@@ -776,6 +1153,16 @@ const EmailModule = (function () {
           </div>
           <input type="number" class="email-setting-input" value="${maxPerRun}" min="1" max="50"
             onchange="EmailModule.saveConfig({max_per_run: parseInt(this.value)})" />
+        </div>
+        <div class="email-setting-row">
+          <div>
+            <div class="email-setting-label">Thread Context</div>
+            <div class="email-setting-desc">How much conversation history the AI sees when drafting a reply</div>
+          </div>
+          <select class="email-model-select" style="width:auto;min-width:140px" onchange="EmailModule.saveConfig({thread_context: this.value})">
+            <option value="full_thread" ${threadCtx === 'full_thread' ? 'selected' : ''}>Full thread</option>
+            <option value="latest_only" ${threadCtx === 'latest_only' ? 'selected' : ''}>Latest only</option>
+          </select>
         </div>
       </div>
 
@@ -1079,6 +1466,7 @@ const EmailModule = (function () {
 
     return `<div class="email-toolbar">
       <div class="email-toolbar-left">
+        <button class="email-tab${activeTab === 'inbox' ? ' active' : ''}" onclick="EmailModule.setTab('inbox')">Inbox</button>
         <button class="email-tab${activeTab === 'drafts' ? ' active' : ''}" onclick="EmailModule.setTab('drafts')">Drafts${drafts.length ? ' (' + drafts.length + ')' : ''}</button>
         <button class="email-tab${activeTab === 'history' ? ' active' : ''}" onclick="EmailModule.setTab('history')">History</button>
         <button class="email-tab${activeTab === 'spam' ? ' active' : ''}" onclick="EmailModule.setTab('spam')">Spam</button>
@@ -1095,7 +1483,8 @@ const EmailModule = (function () {
       </div>
     </div>
     <div class="email-split">
-      <div class="email-split-top email-content">
+      <div class="email-split-top${activeTab === 'inbox' ? '' : ' email-content'}">
+        ${activeTab === 'inbox' ? renderInboxTab() : ''}
         ${activeTab === 'drafts' ? renderDraftsTab() : ''}
         ${activeTab === 'history' ? renderHistoryTab() : ''}
         ${activeTab === 'spam' ? renderSpamTab() : ''}
@@ -1108,42 +1497,82 @@ const EmailModule = (function () {
     </div>`;
   }
 
-  function renderSidebar() {
-    const connected = status ? status.gmail_connected : false;
-    const enabled = status ? status.enabled : false;
-    const lastRun = status && status.last_run_at ? timeAgo(status.last_run_at) : 'never';
-    const profileAge = status ? status.profile_age_days : null;
+  // --- Sidebar folder helpers ---
 
-    return `<div class="email-sidebar-status">
-      <div class="email-sidebar-stat">
-        <span class="email-sidebar-stat-label">Gmail</span>
-        <span class="email-sidebar-stat-val" style="color:${connected ? 'var(--green)' : 'var(--red)'}">${connected ? 'Connected' : status === null ? '...' : 'Disconnected'}</span>
-      </div>
-      <div class="email-sidebar-stat">
-        <span class="email-sidebar-stat-label">Drafter</span>
-        <span class="email-sidebar-stat-val" style="color:${enabled ? 'var(--green)' : 'var(--muted)'}">${enabled ? 'Enabled' : 'Disabled'}</span>
-      </div>
-      <div class="email-sidebar-stat">
-        <span class="email-sidebar-stat-label">Last Run</span>
-        <span class="email-sidebar-stat-val">${escHtml(lastRun)}</span>
-      </div>
-      <div class="email-sidebar-stat">
-        <span class="email-sidebar-stat-label">Drafts</span>
-        <span class="email-sidebar-stat-val">${drafts.length}</span>
-      </div>
-      <div class="email-sidebar-stat">
-        <span class="email-sidebar-stat-label">Profile</span>
-        <span class="email-sidebar-stat-val">${profileAge !== null && profileAge !== undefined ? profileAge + 'd old' : 'None'}</span>
-      </div>
-    </div>
-    <div class="email-sidebar-actions">
-      <button class="email-sidebar-btn" onclick="EmailModule.runDrafter(false)" ${runningOp ? 'disabled' : ''}>
-        ${runningOp === 'run' ? '<span class="email-spinner"></span>' : '&#9993;'} Run Drafter
-      </button>
-      <button class="email-sidebar-btn" onclick="EmailModule.setTab('settings')">
-        &#9881; Settings
+  const SIDEBAR_FOLDERS = [
+    { key: 'INBOX',              label: 'Inbox',      icon: '&#128229;' },
+    { key: '[Gmail]/Starred',    label: 'Starred',    icon: '&#11088;'  },
+    { key: '[Gmail]/Sent Mail',  label: 'Sent',       icon: '&#128228;' },
+    { key: '[Gmail]/Drafts',     label: 'Drafts',     icon: '&#128196;' },
+    { key: '[Gmail]/Spam',       label: 'Spam',       icon: '&#9888;'   },
+    { key: '[Gmail]/Trash',      label: 'Trash',      icon: '&#128465;' },
+    { key: '[Gmail]/All Mail',   label: 'All Mail',   icon: '&#128231;' },
+  ];
+
+  function sidebarSelectFolder(folderKey) {
+    if (activeTab !== 'inbox') {
+      activeTab = 'inbox';
+    }
+    inboxFolder = folderKey;
+    selectedMessage = null;
+    selectedUid = null;
+    rerender();
+    fetchInbox();
+  }
+
+  function sidebarCompose() {
+    if (activeTab !== 'inbox') {
+      activeTab = 'inbox';
+    }
+    showCompose = true;
+    composeData = { to: '', subject: '', body: '' };
+    rerender();
+  }
+
+  function renderSidebar() {
+    // Compose button
+    let html = `<div class="email-sidebar-compose">
+      <button class="email-sidebar-compose-btn" onclick="EmailModule.sidebarCompose()">
+        <span style="font-size:16px">&#9998;</span> Compose
       </button>
     </div>`;
+
+    // Folder nav
+    html += '<div class="email-sidebar-folders">';
+    for (const f of SIDEBAR_FOLDERS) {
+      const isActive = activeTab === 'inbox' && inboxFolder === f.key;
+      const count = f.key === 'INBOX'
+        ? inboxMessages.filter(m => !m.is_read).length
+        : f.key === '[Gmail]/Drafts' ? drafts.length : 0;
+      html += `<button class="email-sidebar-folder${isActive ? ' active' : ''}" onclick="EmailModule.sidebarSelectFolder('${escHtml(f.key)}')">
+        <span class="email-sidebar-folder-icon">${f.icon}</span>
+        <span class="email-sidebar-folder-label">${f.label}</span>
+        ${count > 0 ? `<span class="email-sidebar-folder-count">${count}</span>` : ''}
+      </button>`;
+    }
+    html += '</div>';
+
+    // Divider + drafter tabs
+    html += '<div class="email-sidebar-divider"></div>';
+    html += '<div class="email-sidebar-folders">';
+    const drafterTabs = [
+      { tab: 'drafts',   label: 'Auto Drafts', icon: '&#128221;', count: drafts.length },
+      { tab: 'history',  label: 'History',      icon: '&#128203;', count: 0 },
+      { tab: 'spam',     label: 'Spam Filter',  icon: '&#128737;', count: 0 },
+      { tab: 'profile',  label: 'Style Profile',icon: '&#127912;', count: 0 },
+      { tab: 'settings', label: 'Settings',     icon: '&#9881;',   count: 0 },
+    ];
+    for (const t of drafterTabs) {
+      const isActive = activeTab === t.tab;
+      html += `<button class="email-sidebar-folder${isActive ? ' active' : ''}" onclick="EmailModule.setTab('${t.tab}')">
+        <span class="email-sidebar-folder-icon">${t.icon}</span>
+        <span class="email-sidebar-folder-label">${t.label}</span>
+        ${t.count > 0 ? `<span class="email-sidebar-folder-count">${t.count}</span>` : ''}
+      </button>`;
+    }
+    html += '</div>';
+
+    return html;
   }
 
   // --- Public API ---
@@ -1172,5 +1601,24 @@ const EmailModule = (function () {
     chatClear,
     saveProfile,
     revertProfile,
+    // Inbox
+    fetchInbox,
+    fetchMessageDetail,
+    fetchFolders,
+    trashMessage,
+    toggleReadStatus,
+    sendCompose,
+    saveDraftCompose,
+    selectMessage,
+    openCompose,
+    closeCompose,
+    updateCompose,
+    replyTo,
+    aiReply,
+    setInboxFolder,
+    setInboxSearch,
+    refreshInbox,
+    sidebarSelectFolder,
+    sidebarCompose,
   };
 })();

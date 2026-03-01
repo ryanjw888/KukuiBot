@@ -235,6 +235,28 @@ async def api_gmail_trash(req: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@router.post("/api/gmail/flags")
+async def api_gmail_flags(req: Request):
+    """Set flags on a message (e.g. mark read/unread)."""
+    from gmail_bridge import set_message_flags
+    body = await req.json()
+    folder = body.get("folder", "INBOX")
+    uid = body.get("uid", "")
+    flags = body.get("flags", {})
+    if not uid:
+        return JSONResponse({"error": "uid is required"}, status_code=400)
+    if not str(uid).isdigit():
+        return JSONResponse({"error": "uid must be a single numeric message ID"}, status_code=400)
+    try:
+        result = set_message_flags(folder, uid, flags)
+        return {"ok": True, **result}
+    except PermissionError as e:
+        return JSONResponse({"error": str(e)}, status_code=403)
+    except Exception as e:
+        logger.warning(f"Gmail flags failed: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @router.post("/api/gmail/send-report")
 async def api_gmail_send_report(req: Request):
     """Send a local HTML report file as an email."""

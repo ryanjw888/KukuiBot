@@ -251,6 +251,37 @@ def _extract_body(msg: email.message.Message) -> str:
         return text
 
 
+def _extract_body_both(msg: email.message.Message) -> tuple[str, str | None]:
+    """Extract both plain text and HTML body from email.
+    Returns (plain_text, html_or_none)."""
+    if msg.is_multipart():
+        plain = ""
+        html = ""
+        for part in msg.walk():
+            ct = part.get_content_type()
+            if ct == "text/plain" and not plain:
+                payload = part.get_payload(decode=True)
+                if payload:
+                    plain = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+            elif ct == "text/html" and not html:
+                payload = part.get_payload(decode=True)
+                if payload:
+                    html = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+        if plain:
+            return plain, html or None
+        if html:
+            return _strip_html(html), html
+        return "", None
+    else:
+        payload = msg.get_payload(decode=True)
+        if not payload:
+            return "", None
+        text = payload.decode(msg.get_content_charset() or "utf-8", errors="replace")
+        if msg.get_content_type() == "text/html":
+            return _strip_html(text), text
+        return text, None
+
+
 def _strip_html(html: str) -> str:
     """Simple HTML tag stripper."""
     import re
@@ -328,14 +359,34 @@ def list_messages(folder: str = "INBOX", max_results: int = 20, search: str = ""
         summaries = []
         for num in msg_nums:
             try:
-                status, msg_data = imap.fetch(num, "(RFC822.HEADER)")
-                if status != "OK" or not msg_data or not msg_data[0]:
+                status, msg_data = imap.fetch(num, "(RFC822 FLAGS)")
+                if status != "OK" or not msg_data:
                     continue
-                raw = msg_data[0][1]
+                # IMAP response with FLAGS: msg_data may contain multiple parts
+                # Typically: [(b'num (FLAGS (...) RFC822 {size}', raw_bytes), b')']
+                raw = None
+                flags_str = b""
+                for part in msg_data:
+                    if isinstance(part, tuple):
+                        flags_str = part[0]  # contains FLAGS info
+                        raw = part[1]
+                        break
+                if raw is None:
+                    continue
+                # Parse FLAGS — look for \Seen
+                is_read = b"\\Seen" in flags_str
                 msg = email.message_from_bytes(raw)
                 headers = _parse_email_headers(msg)
                 headers["uid"] = num.decode()
                 headers["folder"] = folder
+                headers["is_read"] = is_read
+                # Extract snippet from body
+                try:
+                    body_text = _extract_body(msg)
+                    snippet = body_text[:120].replace("\n", " ").strip() if body_text else ""
+                except Exception:
+                    snippet = ""
+                headers["snippet"] = snippet
                 # Scan subject for injection attempts
                 original_subject = headers.get("subject", "")
                 headers["subject"] = scan_and_filter(original_subject, source="email_subject")
@@ -378,7 +429,7 @@ def get_message(folder: str, uid: str) -> dict:
         raw = msg_data[0][1]
         msg = email.message_from_bytes(raw)
         headers = _parse_email_headers(msg)
-        body = _extract_body(msg)
+        body, body_html = _extract_body_both(msg)
 
         # Scan for sensitive content (egress-style)
         from email_sanitize import scan
@@ -392,6 +443,8 @@ def get_message(folder: str, uid: str) -> dict:
         original_subject = headers.get("subject", "")
         body = scan_and_filter(body, source="email")
         subject_clean = scan_and_filter(original_subject, source="email_subject")
+        if body_html is not None:
+            body_html = scan_and_filter(body_html, source="email")
         injection_filtered = (body != original_body) or (subject_clean != original_subject)
         if injection_filtered:
             logger.warning(f"Gmail message {uid}: injection content filtered")
@@ -400,6 +453,7 @@ def get_message(folder: str, uid: str) -> dict:
         return {
             **headers,
             "body": body,
+            "body_html": body_html,
             "uid": uid,
             "folder": folder,
             "sensitive_findings": len(findings),
@@ -682,6 +736,41 @@ def trash_message(folder: str, uid: str) -> dict:
         imap.expunge()
 
         logger.info(f"Gmail message trashed: {uid} from {folder}")
+        return {"ok": True, "uid": uid}
+    finally:
+        try:
+            imap.logout()
+        except Exception:
+            pass
+
+
+def set_message_flags(folder: str, uid: str, flags: dict) -> dict:
+    """Set IMAP flags on a message. Requires read_inbox permission.
+
+    Args:
+        folder: IMAP folder name
+        uid: Message sequence number
+        flags: Dict of flags to set, e.g. {"seen": True} or {"seen": False}
+
+    Returns: {"ok": True, "uid": uid}
+    """
+    check_permission("read_inbox")
+
+    imap = _imap_connect()
+    try:
+        imap_folder = _resolve_folder(folder)
+
+        status, _ = imap.select(f'"{imap_folder}"')
+        if status != "OK":
+            raise RuntimeError(f"Could not open folder: {imap_folder}")
+
+        if "seen" in flags:
+            if flags["seen"]:
+                imap.store(uid.encode(), "+FLAGS", "\\Seen")
+            else:
+                imap.store(uid.encode(), "-FLAGS", "\\Seen")
+
+        logger.info(f"Gmail flags updated: uid={uid} folder={folder} flags={flags}")
         return {"ok": True, "uid": uid}
     finally:
         try:

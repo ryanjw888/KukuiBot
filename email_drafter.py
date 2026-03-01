@@ -43,6 +43,8 @@ MAX_EMAILS_PER_RUN = 10
 MAX_SENT_FOR_PROFILE = 100
 PROFILE_MAX_AGE_DAYS = 7
 MAX_BODY_CHARS = 3000
+MAX_THREAD_MESSAGES = 8         # max prior messages to include as context
+MAX_THREAD_BODY_CHARS = 1500    # truncation limit per older thread message
 MAX_PROCESSED_IDS = 1000
 
 # Custom header to identify auto-drafted emails
@@ -396,6 +398,86 @@ def _is_cc_only(msg: email.message.Message, my_email: str) -> bool:
     # Parse all To addresses
     to_addrs = [addr.lower() for _, addr in email.utils.getaddresses([to_raw])]
     return my_lower not in to_addrs
+
+
+def _fetch_thread_context(imap, msg: email.message.Message, current_num: bytes) -> list[dict]:
+    """Fetch prior messages in the same email thread via In-Reply-To / References headers.
+
+    Uses the existing readonly IMAP connection. Returns a list of dicts
+    [{"from": str, "date": str, "body": str}, ...] sorted oldest-first.
+    Returns an empty list if no thread is found or on error.
+    """
+    # Collect all message-ids referenced in this thread
+    references_raw = msg.get("References", "")
+    in_reply_to = msg.get("In-Reply-To", "")
+
+    # Parse message-ids from References header (space-separated)
+    ref_ids = re.findall(r"<[^>]+>", references_raw)
+    if in_reply_to and in_reply_to not in ref_ids:
+        ref_ids.append(in_reply_to)
+
+    if not ref_ids:
+        return []
+
+    thread_messages = []
+    seen_nums = {current_num}
+
+    for ref_id in ref_ids[:MAX_THREAD_MESSAGES]:
+        try:
+            # Search by Message-ID header
+            clean_id = ref_id.strip("<>")
+            status, data = imap.search(None, f'HEADER Message-ID "<{clean_id}>"')
+            if status != "OK" or not data[0]:
+                continue
+
+            for num in data[0].split():
+                if num in seen_nums:
+                    continue
+                seen_nums.add(num)
+
+                status2, msg_data = imap.fetch(num, "(BODY.PEEK[])")
+                if status2 != "OK" or not msg_data or not msg_data[0]:
+                    continue
+
+                thread_msg = email.message_from_bytes(msg_data[0][1])
+                thread_from = email.utils.parseaddr(thread_msg.get("From", ""))[1]
+                thread_date = thread_msg.get("Date", "")
+                thread_body = _extract_body(thread_msg)
+
+                # Run injection guard on thread content
+                try:
+                    from injection_guard import scan_and_filter
+                    thread_body = scan_and_filter(thread_body, source="email")
+                except Exception:
+                    pass
+
+                thread_messages.append({
+                    "from": thread_from,
+                    "date": thread_date,
+                    "body": thread_body[:MAX_THREAD_BODY_CHARS],
+                })
+
+                if len(thread_messages) >= MAX_THREAD_MESSAGES:
+                    break
+
+        except Exception as e:
+            logger.debug(f"Thread fetch error for {ref_id}: {e}")
+            continue
+
+        if len(thread_messages) >= MAX_THREAD_MESSAGES:
+            break
+
+    # Sort by date (oldest first) for chronological context
+    # Parse dates best-effort; fall back to original order
+    def _parse_date(d):
+        try:
+            return email.utils.parsedate_to_datetime(d["date"])
+        except Exception:
+            import datetime as _dt
+            return _dt.datetime.min.replace(tzinfo=_dt.timezone.utc)
+
+    thread_messages.sort(key=_parse_date)
+    return thread_messages
 
 
 async def _classify_spam(from_addr: str, subject: str, body: str) -> dict:
@@ -843,8 +925,26 @@ def _get_style_profile() -> str | None:
 
 
 async def _generate_draft_reply(style_profile: str, from_addr: str,
-                                subject: str, body: str) -> str:
+                                subject: str, body: str,
+                                thread_context: list[dict] | None = None) -> str:
     """Generate a draft reply using AI in the user's writing style."""
+    # Build thread context section if available
+    thread_section = ""
+    if thread_context:
+        thread_parts = []
+        for i, tm in enumerate(thread_context, 1):
+            thread_parts.append(
+                f"--- Message {i} ---\n"
+                f"From: {tm['from']}\n"
+                f"Date: {tm['date']}\n"
+                f"{tm['body']}"
+            )
+        thread_section = (
+            "\n\nPRIOR THREAD CONTEXT (oldest first):\n"
+            + "\n\n".join(thread_parts)
+            + "\n\n--- End of thread context ---\n"
+        )
+
     prompt = f"""Draft an email reply in the user's exact writing style.
 
 STYLE PROFILE:
@@ -855,8 +955,9 @@ RULES:
 - Match the user's style exactly — tone, greetings, sign-offs, vocabulary.
 - Address the content naturally. Keep length consistent with their patterns.
 - No AI disclaimers. Write as if you ARE the user.
-
-Reply to this email:
+- If thread context is provided, use it to understand the full conversation and craft a contextually appropriate reply to the LATEST message.
+{thread_section}
+Reply to this email (LATEST message — reply to THIS one):
 
 From: {from_addr}
 Subject: {subject}
@@ -864,6 +965,38 @@ Body:
 {body[:MAX_BODY_CHARS]}"""
 
     return await _ai_call(prompt, timeout=60)
+
+
+async def generate_ai_reply(from_addr: str, subject: str, body: str,
+                            message_id: str = "") -> dict:
+    """Generate an AI reply for a single message on demand.
+
+    Returns {ok, reply_text, subject} or {error}.
+    Used by the inbox AI Reply button.
+    """
+    from gmail_bridge import check_permission
+
+    check_permission("read_inbox")
+
+    style_profile = _get_style_profile()
+    if not style_profile:
+        return {"error": "No style profile found. Build one in the Profile tab first."}
+
+    reply_text = await _generate_draft_reply(
+        style_profile=style_profile,
+        from_addr=from_addr,
+        subject=subject,
+        body=body,
+    )
+
+    if not reply_text or not reply_text.strip():
+        return {"error": "AI generated an empty reply. Try again."}
+
+    re_subject = subject
+    if not re.match(r"^Re:\s", subject, re.IGNORECASE):
+        re_subject = f"Re: {subject}"
+
+    return {"ok": True, "reply_text": reply_text.strip(), "subject": re_subject}
 
 
 def _create_threaded_draft(from_email: str, original_from: str, subject: str,
@@ -1063,9 +1196,21 @@ async def check_and_draft(dry_run: bool = False) -> dict:
                     processed_ids.add(message_id)
                     continue
 
+                # Fetch thread context if enabled
+                thread_ctx = None
+                thread_mode = _get_config("drafter.thread_context", "full_thread")
+                if thread_mode == "full_thread":
+                    try:
+                        thread_ctx = _fetch_thread_context(imap, msg, num)
+                        if thread_ctx:
+                            logger.info(f"    Thread context: {len(thread_ctx)} prior message(s)")
+                    except Exception as e:
+                        logger.warning(f"Thread context fetch failed: {e}")
+
                 # Generate draft
                 draft_body = await _generate_draft_reply(
                     style_profile, original_from, subject, body,
+                    thread_context=thread_ctx,
                 )
 
                 if not draft_body or len(draft_body.strip()) < 5:
@@ -1367,6 +1512,7 @@ def get_config_dict() -> dict:
         "check_interval_min": int(_get_config("drafter.check_interval_min", "15")),
         "max_per_run": int(_get_config("drafter.max_per_run", str(MAX_EMAILS_PER_RUN))),
         "signature_html": _get_config("drafter.signature_html", DEFAULT_SIGNATURE_HTML),
+        "thread_context": _get_config("drafter.thread_context", "full_thread"),
         "filters": _get_filters(),
     }
 
@@ -1383,6 +1529,9 @@ def save_config_dict(cfg: dict):
         _set_config("drafter.max_per_run", str(val))
     if "signature_html" in cfg:
         _set_config("drafter.signature_html", cfg["signature_html"])
+    if "thread_context" in cfg:
+        val = cfg["thread_context"] if cfg["thread_context"] in ("full_thread", "latest_only") else "full_thread"
+        _set_config("drafter.thread_context", val)
     if "filters" in cfg:
         _save_filters(cfg["filters"])
 

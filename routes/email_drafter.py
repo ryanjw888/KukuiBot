@@ -161,6 +161,37 @@ async def api_drafter_discard(uid: str):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@router.post("/api/drafter/ai-reply")
+async def api_drafter_ai_reply(req: Request):
+    """Generate an AI reply for a single message on demand."""
+    def _generate(from_addr, subject, body, message_id):
+        import asyncio
+        from email_drafter import generate_ai_reply
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(
+                generate_ai_reply(from_addr, subject, body, message_id)
+            )
+        finally:
+            loop.close()
+
+    try:
+        body = await req.json()
+        from_addr = body.get("from", "")
+        subject = body.get("subject", "")
+        msg_body = body.get("body", "")
+        message_id = body.get("message_id", "")
+        if not from_addr or not subject:
+            return JSONResponse({"error": "from and subject are required"}, status_code=400)
+        result = await asyncio.to_thread(_generate, from_addr, subject, msg_body, message_id)
+        return result
+    except PermissionError as e:
+        return JSONResponse({"error": str(e)}, status_code=403)
+    except Exception as e:
+        logger.exception("ai-reply error")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @router.get("/api/drafter/history")
 async def api_drafter_history(limit: int = 50, offset: int = 0, action: str = ""):
     """Return paginated drafter history."""
