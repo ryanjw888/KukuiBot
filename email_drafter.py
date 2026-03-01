@@ -1513,6 +1513,7 @@ def get_config_dict() -> dict:
         "max_per_run": int(_get_config("drafter.max_per_run", str(MAX_EMAILS_PER_RUN))),
         "signature_html": _get_config("drafter.signature_html", DEFAULT_SIGNATURE_HTML),
         "thread_context": _get_config("drafter.thread_context", "full_thread"),
+        "sync_interval_sec": int(_get_config("gmail.sync_interval_sec", "180")),
         "filters": _get_filters(),
     }
 
@@ -1532,6 +1533,9 @@ def save_config_dict(cfg: dict):
     if "thread_context" in cfg:
         val = cfg["thread_context"] if cfg["thread_context"] in ("full_thread", "latest_only") else "full_thread"
         _set_config("drafter.thread_context", val)
+    if "sync_interval_sec" in cfg:
+        val = max(30, min(600, int(cfg["sync_interval_sec"])))
+        _set_config("gmail.sync_interval_sec", str(val))
     if "filters" in cfg:
         _save_filters(cfg["filters"])
 

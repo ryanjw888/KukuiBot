@@ -1207,6 +1207,18 @@ const EmailModule = (function () {
       </div>
 
       <div class="email-settings-group">
+        <h3>Inbox Sync</h3>
+        <div class="email-setting-row">
+          <div>
+            <div class="email-setting-label">Sync Interval</div>
+            <div class="email-setting-desc">Seconds between background email syncs (30-600). Lower = fresher inbox, more IMAP usage.</div>
+          </div>
+          <input type="number" class="email-setting-input" value="${config.sync_interval_sec || 180}" min="30" max="600" step="10"
+            onchange="EmailModule.saveConfig({sync_interval_sec: parseInt(this.value)})" />
+        </div>
+      </div>
+
+      <div class="email-settings-group">
         <h3>Email Chat Assistant</h3>
         <div class="email-setting-row">
           <div>

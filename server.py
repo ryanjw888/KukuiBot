@@ -4156,16 +4156,18 @@ async def _memory_reaper():
 
 
 async def _email_sync_loop():
-    """Background task: sync Gmail messages to local SQLite cache every 3 minutes."""
+    """Background task: sync Gmail messages to local SQLite cache. Interval is configurable (30-600s, default 180s)."""
     import email_cache
     from gmail_bridge import get_gmail_status, list_messages, get_message
+    from auth import get_config
     loop = asyncio.get_event_loop()
     sync_count = 0
     SYNC_FOLDERS = ["INBOX", "[Gmail]/Sent Mail", "[Gmail]/Drafts", "[Gmail]/Trash", "[Gmail]/Starred"]
-    logger.info("Email sync loop started (interval=180s)")
+    logger.info("Email sync loop started (default interval=180s, configurable via Settings)")
     while True:
         try:
-            await asyncio.sleep(180)  # 3 minutes
+            interval = max(30, min(600, int(get_config("gmail.sync_interval_sec", "180"))))
+            await asyncio.sleep(interval)
             # Check if Gmail is connected
             try:
                 status = await loop.run_in_executor(None, get_gmail_status)
