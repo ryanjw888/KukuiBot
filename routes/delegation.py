@@ -1187,9 +1187,11 @@ async def _system_wake():
         # Process non-tab parents first (their fallback routing delivers to manager tabs).
         # Merge any tasks owned by the fallback target into the message so only one
         # consolidated notification is needed per real tab session.
-        # Dedupe key is minute-granularity to prevent duplicate notifications if
-        # _system_wake() somehow runs twice in the same minute.
-        wake_dedupe = f"system_wake:{int(time.time()) // 60}"
+        # Dedupe key is per-session (not per-minute) — only one system_wake
+        # notification can be pending per session at a time. Previous minute-
+        # granularity dedupe caused spam: each restart in a different minute
+        # created a new notification, and the reconciler kept re-triggering them.
+        wake_dedupe = "system_wake:latest"
         for sid in non_tab_parents:
             # Collect all task IDs: the non-tab parent's own tasks + any tasks owned
             # by tab sessions that will receive this via fallback (to consolidate).

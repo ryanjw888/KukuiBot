@@ -425,6 +425,9 @@ async function checkForUpdates(e) {
       if (ud.error) {
         status.textContent = '❌ Update failed: ' + ud.error;
       } else {
+        localStorage.setItem('kukuibot.updateAvailable', '0');
+        localStorage.setItem('kukuibot.updateBehind', '0');
+        localStorage.removeItem('kukuibot.lastUpdateCheck');
         status.textContent = '✅ Updated! Reloading...';
         setTimeout(() => window.location.reload(), 2000);
         return;
@@ -737,6 +740,9 @@ async function checkForUpdates(e) {
       if (ud.error) {
         status.textContent = '❌ Update failed: ' + ud.error;
       } else {
+        localStorage.setItem('kukuibot.updateAvailable', '0');
+        localStorage.setItem('kukuibot.updateBehind', '0');
+        localStorage.removeItem('kukuibot.lastUpdateCheck');
         status.textContent = '✅ Updated! Reloading...';
         setTimeout(() => window.location.reload(), 2000);
         return;

@@ -382,10 +382,16 @@ def recover(*, max_attempts: int = 3, retention_seconds: int = 86400) -> dict[st
             counts["exhausted_failed"] = exhausted.rowcount
 
             # Reset stale injected → pending (injected but never consumed means
-            # the model run crashed after injection — retry)
+            # the model run crashed after injection — retry).
+            # Exclude fire-and-forget notifications (system_wake) — these have no
+            # TASK_DONE marker and should NOT be retried; mark them consumed instead.
+            db.execute(
+                "UPDATE delegation_notifications SET state='consumed' "
+                "WHERE state='injected' AND task_id='system_wake'",
+            )
             injected_reset = db.execute(
                 "UPDATE delegation_notifications SET state='pending', claimed_at=NULL, injected_at=NULL "
-                "WHERE state='injected' AND attempt_count < ?",
+                "WHERE state='injected' AND attempt_count < ? AND task_id != 'system_wake'",
                 (max_attempts,),
             )
             counts["injected_reset"] = injected_reset.rowcount

@@ -2822,6 +2822,10 @@ async function updateApply() {
       btn.disabled = false;
       btn.textContent = 'Retry';
     } else {
+      // Clear update banner state so main app button disappears after reload
+      localStorage.setItem('kukuibot.updateAvailable', '0');
+      localStorage.setItem('kukuibot.updateBehind', '0');
+      localStorage.removeItem('kukuibot.lastUpdateCheck');
       statusEl.style.color = 'var(--green)';
       statusEl.textContent = 'Updated successfully! Restarting server...';
       if (d.summary) {

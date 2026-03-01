@@ -230,6 +230,17 @@ class NotificationDispatcher:
         # Mark as injected in DB
         notification_store.mark_injected(ids)
 
+        # Identify fire-and-forget notifications (system_wake, etc.) that should
+        # be marked consumed immediately after in-memory queuing — they have no
+        # TASK_DONE marker, so the injected→pending recovery loop would re-queue
+        # them forever.
+        fire_and_forget_ids = [
+            nid for nid, payload in zip(ids, payloads)
+            if payload.get("task_id", "") == "system_wake"
+        ]
+        if fire_and_forget_ids:
+            notification_store.mark_consumed(fire_and_forget_ids)
+
         # Fire proactive wake only if idle — if busy, the in-memory queue
         # will be drained by send_message() on the next turn
         if not self._is_subprocess_idle(session_id, proc):

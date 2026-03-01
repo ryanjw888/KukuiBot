@@ -5570,6 +5570,12 @@ async function checkForUpdates() {
       if (ud.error) {
         if (tab) tab.messages.push(_sysCard('Update failed: ' + ud.error, '❌', 'Update'));
       } else {
+        // Clear update banner state so it doesn't reappear after reload
+        _updateAvailable = false;
+        _updateBehindCount = 0;
+        localStorage.setItem('kukuibot.updateAvailable', '0');
+        localStorage.setItem('kukuibot.updateBehind', '0');
+        localStorage.removeItem('kukuibot.lastUpdateCheck'); // force fresh check next load
         if (tab) tab.messages.push(_sysCard('Updated! ' + (ud.summary || '') + '\n\nReloading in 3 seconds...', '✅', 'Update'));
         requestRender({ forceStickBottom: true });
         setTimeout(() => forceRefreshApp(), 3000);
