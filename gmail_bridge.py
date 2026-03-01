@@ -21,6 +21,7 @@ Security:
   - Inbound message bodies scanned via email_sanitize.scan()
 """
 
+import base64
 import email
 import email.utils
 import imaplib
@@ -282,6 +283,28 @@ def _extract_body_both(msg: email.message.Message) -> tuple[str, str | None]:
         return text, None
 
 
+def _extract_attachments(msg: email.message.Message) -> list[dict]:
+    """Walk MIME parts and return list of {filename, content_type, size} for attachments."""
+    attachments = []
+    if not msg.is_multipart():
+        return attachments
+    for part in msg.walk():
+        content_disposition = str(part.get("Content-Disposition") or "")
+        filename = part.get_filename()
+        if not filename:
+            continue
+        # Has a filename — it's an attachment (inline or regular)
+        content_type = part.get_content_type() or "application/octet-stream"
+        payload = part.get_payload(decode=True)
+        size = len(payload) if payload else 0
+        attachments.append({
+            "filename": filename,
+            "content_type": content_type,
+            "size": size,
+        })
+    return attachments
+
+
 def _strip_html(html: str) -> str:
     """Simple HTML tag stripper."""
     import re
@@ -430,6 +453,7 @@ def get_message(folder: str, uid: str) -> dict:
         msg = email.message_from_bytes(raw)
         headers = _parse_email_headers(msg)
         body, body_html = _extract_body_both(msg)
+        attachments = _extract_attachments(msg)
 
         # Scan for sensitive content (egress-style)
         from email_sanitize import scan
@@ -458,6 +482,8 @@ def get_message(folder: str, uid: str) -> dict:
             "folder": folder,
             "sensitive_findings": len(findings),
             "injection_filtered": injection_filtered,
+            "attachments": attachments,
+            "has_attachments": bool(attachments),
         }
     finally:
         try:
@@ -483,6 +509,47 @@ def list_folders() -> list[str]:
                 name = parts[1].strip('"')
                 result.append(name)
         return result
+    finally:
+        try:
+            imap.logout()
+        except Exception:
+            pass
+
+
+def get_attachment(folder: str, uid: str, filename: str) -> tuple[bytes, str, str]:
+    """
+    Download a specific attachment from a message.
+
+    Returns: (content_bytes, content_type, filename)
+    Raises RuntimeError if attachment not found.
+    """
+    check_permission("read_inbox")
+
+    imap = _imap_connect()
+    try:
+        imap_folder = _resolve_folder(folder)
+
+        status, _ = imap.select(f'"{imap_folder}"', readonly=True)
+        if status != "OK":
+            raise RuntimeError(f"Could not open folder: {imap_folder}")
+
+        status, msg_data = imap.fetch(uid.encode(), "(RFC822)")
+        if status != "OK" or not msg_data or not msg_data[0]:
+            raise RuntimeError(f"Message {uid} not found in {folder}")
+
+        raw = msg_data[0][1]
+        msg = email.message_from_bytes(raw)
+
+        for part in msg.walk():
+            part_filename = part.get_filename()
+            if part_filename and part_filename == filename:
+                content_type = part.get_content_type() or "application/octet-stream"
+                payload = part.get_payload(decode=True)
+                if payload is None:
+                    raise RuntimeError(f"Attachment '{filename}' has no content")
+                return payload, content_type, filename
+
+        raise RuntimeError(f"Attachment '{filename}' not found in message {uid}")
     finally:
         try:
             imap.logout()

@@ -68,6 +68,7 @@ class AppState:
     db_health_monitor_task: Any = None
     db_backup_loop_task: Any = None
     system_wake_task: Any = None
+    email_sync_task: Any = None
 
     # --- Usage Cache ---
     usage_cache: dict = field(default_factory=dict)

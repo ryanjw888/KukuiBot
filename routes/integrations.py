@@ -10,6 +10,7 @@ from datetime import datetime
 import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse
+from starlette.responses import Response
 
 from auth import get_config, set_config, db_connection, is_localhost, get_request_user
 from config import KUKUIBOT_HOME, SSL_CERT, SSL_KEY
@@ -120,15 +121,49 @@ async def api_gmail_disconnect():
 
 @router.post("/api/gmail/search")
 async def api_gmail_search(req: Request):
-    """Search Gmail messages via IMAP."""
+    """Search Gmail messages — cache-first, IMAP fallback."""
     from gmail_bridge import list_messages
     body = await req.json()
     folder = body.get("folder", "INBOX")
     max_results = min(int(body.get("max_results", 20)), 50)
     search = body.get("search", "")
+    use_cache = body.get("cache", True)
+
+    # Try cache first
+    if use_cache:
+        try:
+            import email_cache
+            cached = email_cache.get_cached_messages(folder, max_results, search)
+            if cached:
+                # Remap field names to match IMAP response format
+                messages = []
+                for c in cached:
+                    messages.append({
+                        "from": c.get("from_addr", ""),
+                        "to": c.get("to_addr", ""),
+                        "subject": c.get("subject", ""),
+                        "date": c.get("date", ""),
+                        "message_id": c.get("message_id", ""),
+                        "uid": c.get("uid", ""),
+                        "folder": c.get("folder", folder),
+                        "is_read": c.get("is_read", False),
+                        "snippet": c.get("snippet", ""),
+                        "has_attachments": c.get("has_attachments", False),
+                    })
+                return {"ok": True, "messages": messages, "count": len(messages), "source": "cache"}
+        except Exception as e:
+            logger.warning(f"Gmail cache read failed, falling back to IMAP: {e}")
+
+    # IMAP fallback
     try:
         messages = list_messages(folder=folder, max_results=max_results, search=search)
-        return {"ok": True, "messages": messages, "count": len(messages)}
+        # Cache the results in background
+        try:
+            import email_cache
+            email_cache.upsert_messages(messages, folder)
+        except Exception:
+            pass
+        return {"ok": True, "messages": messages, "count": len(messages), "source": "imap"}
     except PermissionError as e:
         return JSONResponse({"error": str(e)}, status_code=403)
     except Exception as e:
@@ -138,15 +173,53 @@ async def api_gmail_search(req: Request):
 
 @router.post("/api/gmail/message")
 async def api_gmail_message(req: Request):
-    """Get a single Gmail message by folder + UID."""
+    """Get a single Gmail message — cache-first, IMAP fallback."""
     from gmail_bridge import get_message
     body = await req.json()
     folder = body.get("folder", "INBOX")
     uid = body.get("uid", "")
     if not uid:
         return JSONResponse({"error": "uid is required"}, status_code=400)
+
+    # Try cache first (only if it has the full body)
+    try:
+        import email_cache
+        cached = email_cache.get_cached_message(folder, uid)
+        if cached:
+            from injection_guard import scan_and_filter
+            body_text = scan_and_filter(cached.get("body_text", ""), source="email")
+            body_html = cached.get("body_html")
+            if body_html:
+                body_html = scan_and_filter(body_html, source="email")
+            message = {
+                "from": cached.get("from_addr", ""),
+                "to": cached.get("to_addr", ""),
+                "subject": cached.get("subject", ""),
+                "date": cached.get("date", ""),
+                "message_id": cached.get("message_id", ""),
+                "body": body_text,
+                "body_html": body_html,
+                "uid": cached.get("uid", uid),
+                "folder": cached.get("folder", folder),
+                "sensitive_findings": 0,
+                "injection_filtered": False,
+                "attachments": cached.get("attachment_info", []),
+                "has_attachments": cached.get("has_attachments", False),
+                "source": "cache",
+            }
+            return {"ok": True, "message": message}
+    except Exception as e:
+        logger.warning(f"Gmail cache message read failed, falling back to IMAP: {e}")
+
+    # IMAP fallback
     try:
         message = get_message(folder, uid)
+        # Cache the full message for next time
+        try:
+            import email_cache
+            email_cache.upsert_full_message(message, folder)
+        except Exception:
+            pass
         return {"ok": True, "message": message}
     except PermissionError as e:
         return JSONResponse({"error": str(e)}, status_code=403)
@@ -227,6 +300,12 @@ async def api_gmail_trash(req: Request):
         return JSONResponse({"error": "uid must be a single numeric message ID — bulk trash is not allowed"}, status_code=400)
     try:
         result = trash_message(folder, uid)
+        # Also remove from cache
+        try:
+            import email_cache
+            email_cache.delete_message(folder, uid)
+        except Exception:
+            pass
         return {"ok": True, **result}
     except PermissionError as e:
         return JSONResponse({"error": str(e)}, status_code=403)
@@ -249,11 +328,53 @@ async def api_gmail_flags(req: Request):
         return JSONResponse({"error": "uid must be a single numeric message ID"}, status_code=400)
     try:
         result = set_message_flags(folder, uid, flags)
+        # Also update cache
+        try:
+            import email_cache
+            if "seen" in flags:
+                email_cache.update_message_flag(folder, uid, bool(flags["seen"]))
+        except Exception:
+            pass
         return {"ok": True, **result}
     except PermissionError as e:
         return JSONResponse({"error": str(e)}, status_code=403)
     except Exception as e:
         logger.warning(f"Gmail flags failed: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.get("/api/gmail/attachment")
+async def api_gmail_attachment(folder: str = "", uid: str = "", filename: str = ""):
+    """Download an email attachment by folder, uid, and filename."""
+    from gmail_bridge import get_attachment
+    if not folder or not uid or not filename:
+        return JSONResponse({"error": "folder, uid, and filename are required"}, status_code=400)
+    if not str(uid).isdigit():
+        return JSONResponse({"error": "uid must be numeric"}, status_code=400)
+    try:
+        content_bytes, content_type, fname = get_attachment(folder, uid, filename)
+        return Response(
+            content=content_bytes,
+            media_type=content_type,
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
+    except PermissionError as e:
+        return JSONResponse({"error": str(e)}, status_code=403)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    except Exception as e:
+        logger.warning(f"Gmail attachment download failed: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.get("/api/gmail/sync-status")
+async def api_gmail_sync_status():
+    """Return email cache sync status."""
+    try:
+        import email_cache
+        return {"ok": True, **email_cache.get_sync_status()}
+    except Exception as e:
+        logger.warning(f"Gmail sync status failed: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 

@@ -37,6 +37,8 @@ const EmailModule = (function () {
   let composeData = { to: '', subject: '', body: '' }; // compose form state
   let composeSending = false;
   let aiReplyLoading = false;
+  let syncStatus = null;      // {total_cached, last_sync_ts, last_sync_ago_str, folders}
+  let syncTimer = null;
 
   // Chat state
   let chatMessages = []; // [{role, text, ts}]
@@ -258,6 +260,31 @@ const EmailModule = (function () {
       showCompose = false;
       rerender();
     }
+  }
+
+  async function fetchSyncStatus() {
+    const resp = await apiFetch('/api/gmail/sync-status');
+    if (resp.ok) {
+      syncStatus = resp;
+    }
+  }
+
+  function renderAttachments(attachments) {
+    if (!attachments || !attachments.length) return '';
+    const chips = attachments.map(a => {
+      const sizeKb = a.size ? Math.round(a.size / 1024) : 0;
+      const sizeStr = sizeKb > 1024 ? (sizeKb / 1024).toFixed(1) + ' MB' : sizeKb + ' KB';
+      const folder = selectedMessage ? encodeURIComponent(selectedMessage.folder || inboxFolder) : encodeURIComponent(inboxFolder);
+      const uid = selectedMessage ? encodeURIComponent(selectedMessage.uid || selectedUid) : encodeURIComponent(selectedUid);
+      const fname = encodeURIComponent(a.filename);
+      const url = '/api/gmail/attachment?folder=' + folder + '&uid=' + uid + '&filename=' + fname;
+      return '<a class="inbox-attachment-chip" href="' + escHtml(url) + '" download title="' + escHtml(a.filename) + '">'
+        + '<span class="inbox-attachment-icon">&#128206;</span>'
+        + '<span class="inbox-attachment-name">' + escHtml(a.filename) + '</span>'
+        + '<span class="inbox-attachment-size">' + escHtml(sizeStr) + '</span>'
+        + '</a>';
+    }).join('');
+    return '<div class="inbox-attachments">' + chips + '</div>';
   }
 
   // --- Data fetching ---
@@ -768,6 +795,14 @@ const EmailModule = (function () {
     // Fetch inbox on init
     fetchInbox();
     fetchFolders();
+    fetchSyncStatus();
+
+    // Refresh sync status every 60s
+    syncTimer = setInterval(() => {
+      if (typeof appMode !== 'undefined' && appMode === 'email') {
+        fetchSyncStatus();
+      }
+    }, 60000);
 
     // Poll for new drafts every 30s while in email mode
     pollTimer = setInterval(async () => {
@@ -783,6 +818,7 @@ const EmailModule = (function () {
     initialized = false;
     destroyProfileEditor();
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    if (syncTimer) { clearInterval(syncTimer); syncTimer = null; }
     if (chatAbortController) { try { chatAbortController.abort(); } catch {} }
   }
 
@@ -888,6 +924,7 @@ const EmailModule = (function () {
         onkeydown="if(event.key==='Enter'){EmailModule.setInboxSearch(this.value)}" />
       <button class="email-action-btn" onclick="EmailModule.openCompose()" title="Compose">Compose</button>
       <button class="email-action-btn" onclick="EmailModule.refreshInbox()" title="Refresh">Refresh</button>
+      ${syncStatus && syncStatus.last_sync_ago_str ? '<span class="inbox-sync-status">Synced ' + escHtml(syncStatus.last_sync_ago_str) + '</span>' : ''}
     </div>`;
 
     // Message list
@@ -925,6 +962,8 @@ const EmailModule = (function () {
         bodyContent = `<pre class="inbox-preview-text">${escHtml(sm.body || '(empty)')}</pre>`;
       }
 
+      const attachmentsHtml = (sm.attachments && sm.attachments.length) ? renderAttachments(sm.attachments) : '';
+
       previewHtml = `<div class="inbox-preview-header">
           <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:4px">${escHtml(sm.subject || '(no subject)')}</div>
           <div style="font-size:12px;color:var(--muted);margin-bottom:2px">From: ${escHtml(sm.from || '')}</div>
@@ -939,7 +978,7 @@ const EmailModule = (function () {
             <button class="email-action-btn" onclick="EmailModule.toggleReadStatus('${escHtml(sm.folder || inboxFolder)}', '${escHtml(String(sm.uid || selectedUid))}')">Mark Unread</button>
           </div>
         </div>
-        <div class="inbox-preview-body">${bodyContent}</div>`;
+        <div class="inbox-preview-body">${bodyContent}${attachmentsHtml}</div>`;
     } else {
       previewHtml = '<div class="inbox-empty"><div style="font-size:32px;opacity:0.3">&#9993;</div><div>Select a message to read</div></div>';
     }
@@ -948,8 +987,9 @@ const EmailModule = (function () {
       ${toolbarHtml}
       <div class="inbox-split">
         <div class="inbox-list">${listHtml}</div>
-        <div class="inbox-preview">${previewHtml}${composeHtml}</div>
+        <div class="inbox-preview">${previewHtml}</div>
       </div>
+      ${composeHtml}
     </div>`;
   }
 
@@ -1620,5 +1660,6 @@ const EmailModule = (function () {
     refreshInbox,
     sidebarSelectFolder,
     sidebarCompose,
+    fetchSyncStatus,
   };
 })();

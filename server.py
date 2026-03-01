@@ -4155,6 +4155,72 @@ async def _memory_reaper():
             logger.warning(f"Memory reaper error: {e}")
 
 
+async def _email_sync_loop():
+    """Background task: sync Gmail messages to local SQLite cache every 3 minutes."""
+    import email_cache
+    from gmail_bridge import get_gmail_status, list_messages, get_message
+    loop = asyncio.get_event_loop()
+    sync_count = 0
+    SYNC_FOLDERS = ["INBOX", "[Gmail]/Sent Mail", "[Gmail]/Drafts", "[Gmail]/Trash", "[Gmail]/Starred"]
+    logger.info("Email sync loop started (interval=180s)")
+    while True:
+        try:
+            await asyncio.sleep(180)  # 3 minutes
+            # Check if Gmail is connected
+            try:
+                status = await loop.run_in_executor(None, get_gmail_status)
+                if not status.get("connected"):
+                    continue
+            except Exception:
+                continue
+
+            total_cached = 0
+            for folder in SYNC_FOLDERS:
+                try:
+                    messages = await loop.run_in_executor(
+                        None, lambda f=folder: list_messages(f, max_results=50)
+                    )
+                    if messages:
+                        email_cache.upsert_messages(messages, folder)
+                        total_cached += len(messages)
+
+                        # Pre-fetch full bodies for messages that don't have them cached (INBOX only, batch 5)
+                        if folder == "INBOX":
+                            unfetched = []
+                            for m in messages[:20]:
+                                cached = email_cache.get_cached_message(folder, str(m.get("uid", "")))
+                                if not cached:
+                                    unfetched.append(m)
+                            for m in unfetched[:5]:
+                                try:
+                                    uid = str(m.get("uid", ""))
+                                    full_msg = await loop.run_in_executor(
+                                        None, lambda f=folder, u=uid: get_message(f, u)
+                                    )
+                                    email_cache.upsert_full_message(full_msg, folder)
+                                    await asyncio.sleep(1)  # Small delay to avoid IMAP rate limits
+                                except Exception as e:
+                                    logger.warning(f"Email sync: failed to fetch body for {m.get('uid')}: {e}")
+                except Exception as e:
+                    logger.warning(f"Email sync: folder {folder} failed: {e}")
+                    continue
+
+            sync_count += 1
+            logger.info(f"Email sync: {total_cached} messages cached across {len(SYNC_FOLDERS)} folders")
+
+            # Cleanup old messages once per hour (~20 sync cycles)
+            if sync_count % 20 == 0:
+                try:
+                    email_cache.cleanup_old_messages(30)
+                except Exception:
+                    pass
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"Email sync loop error: {e}")
+
+
 async def _token_refresh_monitor():
     """Background task: proactively refresh the Claude CLI OAuth token before expiry."""
     from claude_bridge import CLAUDE_BIN, refresh_cli_oauth_token
@@ -4271,6 +4337,9 @@ async def startup():
     _app_state.system_wake_task = asyncio.create_task(_system_wake())
     # Start proactive OAuth token refresh monitor
     _app_state.token_refresh_monitor_task = asyncio.create_task(_token_refresh_monitor())
+    # Start email cache background sync task
+    _app_state.email_sync_task = asyncio.create_task(_email_sync_loop())
+    logger.info("Email sync background task started")
     _init_worker_ports()
     logger.info(f"{APP_NAME} unified server started on {HOST}:{PORT}")
 
@@ -4296,6 +4365,7 @@ async def shutdown():
         "db_health_monitor": _app_state.db_health_monitor_task,
         "db_backup_loop": _app_state.db_backup_loop_task,
         "system_wake": _app_state.system_wake_task,
+        "email_sync": _app_state.email_sync_task,
     }
     for task_name, task in _bg_tasks.items():
         if task and not task.done():
