@@ -390,11 +390,10 @@ fi
 CLAUDE_SETTINGS_DIR="$HOME/.claude"
 CLAUDE_SETTINGS_FILE="$CLAUDE_SETTINGS_DIR/settings.json"
 if [ ! -f "$CLAUDE_SETTINGS_FILE" ]; then
-  mkdir -p "$CLAUDE_SETTINGS_DIR"
-  # Fix ownership if sudo npm install created ~/.claude as root
-  if [ -d "$CLAUDE_SETTINGS_DIR" ] && [ "$(stat -f %u "$CLAUDE_SETTINGS_DIR")" != "$(id -u)" ]; then
-    sudo chown -R "$(id -u):$(id -g)" "$CLAUDE_SETTINGS_DIR"
-  fi
+  # sudo npm install may have created ~/.claude as root — fix ownership
+  # of the entire directory before writing, then ensure it exists
+  sudo mkdir -p "$CLAUDE_SETTINGS_DIR"
+  sudo chown -R "$(id -u):$(id -g)" "$CLAUDE_SETTINGS_DIR"
   cat > "$CLAUDE_SETTINGS_FILE" << 'SETTINGS'
 {
   "env": {
