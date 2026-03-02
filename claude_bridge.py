@@ -1018,6 +1018,13 @@ class PersistentClaudeProcess:
         """
         # Build env with explicit auth strategy handling.
         env = {**os.environ, "NO_COLOR": "1"}
+        # Explicit output token limits — without these, the CLI defaults to
+        # 32K max output with 31,999 thinking budget, leaving almost nothing
+        # for actual tool-use turns.  On fresh installs where `claude` was
+        # never run interactively, thinking is on by default and eats the
+        # entire budget after ~4-10 tool calls.
+        env.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "128000")
+        env.setdefault("MAX_THINKING_TOKENS", "0")
         use_configured_auth = (self._auth_strategy or "configured") != "local"
         if use_configured_auth:
             if self._api_key_fn:
@@ -1235,6 +1242,10 @@ class PersistentClaudeProcess:
                         # The result event usage is CUMULATIVE across all API calls in the turn,
                         # so we divide by API call count to get per-call context size.
                         api_calls = self._turn_user_events + 1
+                        is_error = event.get("is_error", False)
+                        num_turns = event.get("num_turns")
+                        subtype = event.get("subtype", "")
+                        logger.info(f"Result event: is_error={is_error}, num_turns={num_turns}, subtype={subtype}")
                         logger.info(f"Result event usage (iters={iters}, api_calls={api_calls}): {usage}")
                         # Extract token usage fields from the result event.
                         uncached = usage.get("input_tokens", 0)

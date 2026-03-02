@@ -599,6 +599,10 @@ class PersistentClaudeProcess:
             # API key instead of the local login session. The .env loader
             # may have injected an expired/wrong API key into os.environ.
             _subprocess_env = {**os.environ, "NO_COLOR": "1"}
+            # Explicit output token limits — prevent thinking from consuming
+            # the entire output budget on fresh installs.
+            _subprocess_env.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "128000")
+            _subprocess_env.setdefault("MAX_THINKING_TOKENS", "0")
             _subprocess_env.pop("ANTHROPIC_API_KEY", None)
             # Only pass explicit OAuth token if set and non-empty.
             if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
@@ -713,6 +717,11 @@ class PersistentClaudeProcess:
                         if new_session and new_session != self.session_id:
                             self.session_id = new_session
                             logger.info(f"Session updated: {self.session_id}")
+                        # Log result diagnostics (is_error, num_turns help diagnose early stops)
+                        is_error = event.get("is_error", False)
+                        num_turns = event.get("num_turns")
+                        subtype = event.get("subtype", "")
+                        logger.info(f"Result event: is_error={is_error}, num_turns={num_turns}, subtype={subtype}")
                         # Track token usage
                         usage = event.get("usage", {})
                         iters = max(self._turn_iterations, 1)

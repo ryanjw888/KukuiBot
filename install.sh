@@ -384,6 +384,27 @@ else
   echo "✓ Playwright Chromium already installed"
 fi
 
+# --- Seed Claude CLI settings (if missing) ---
+# Without this, fresh installs have extended thinking on by default (31,999 token
+# budget) which consumes the 32K output token limit after ~4-10 tool calls.
+CLAUDE_SETTINGS_DIR="$HOME/.claude"
+CLAUDE_SETTINGS_FILE="$CLAUDE_SETTINGS_DIR/settings.json"
+if [ ! -f "$CLAUDE_SETTINGS_FILE" ]; then
+  mkdir -p "$CLAUDE_SETTINGS_DIR"
+  cat > "$CLAUDE_SETTINGS_FILE" << 'SETTINGS'
+{
+  "env": {
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "90",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "128000",
+    "MAX_THINKING_TOKENS": "0"
+  }
+}
+SETTINGS
+  echo "✓ Claude CLI settings created ($CLAUDE_SETTINGS_FILE)"
+else
+  echo "✓ Claude CLI settings already exist"
+fi
+
 # --- Seed default data files (only if missing — won't overwrite user customizations) ---
 echo "→ Seeding default configuration files..."
 for f in SOUL.md USER.md TOOLS.md MEMORY.md; do
