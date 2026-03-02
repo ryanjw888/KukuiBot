@@ -1,0 +1,1252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KukuiBot vs Claude Telegram Relay — Project Comparison</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+  :root {
+    --bg-primary: #0a0a0f;
+    --bg-secondary: #12121a;
+    --bg-card: #16161f;
+    --bg-card-hover: #1c1c28;
+    --border: #2a2a3a;
+    --border-glow: #3a3a5a;
+    --text-primary: #e8e8f0;
+    --text-secondary: #8888a0;
+    --text-muted: #555570;
+    --kukui-primary: #6c5ce7;
+    --kukui-secondary: #a29bfe;
+    --kukui-glow: rgba(108, 92, 231, 0.15);
+    --kukui-glow-strong: rgba(108, 92, 231, 0.3);
+    --relay-primary: #00b894;
+    --relay-secondary: #55efc4;
+    --relay-glow: rgba(0, 184, 148, 0.15);
+    --relay-glow-strong: rgba(0, 184, 148, 0.3);
+    --accent-yellow: #ffd93d;
+    --accent-red: #ff6b6b;
+    --accent-blue: #74b9ff;
+    --accent-orange: #fdcb6e;
+    --gradient-kukui: linear-gradient(135deg, #6c5ce7, #a29bfe);
+    --gradient-relay: linear-gradient(135deg, #00b894, #55efc4);
+    --gradient-hero: linear-gradient(135deg, #0a0a0f 0%, #1a1a2e 50%, #0a0a0f 100%);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+
+  /* Animated background */
+  .bg-grid {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-image:
+      radial-gradient(circle at 25% 25%, var(--kukui-glow) 0%, transparent 50%),
+      radial-gradient(circle at 75% 75%, var(--relay-glow) 0%, transparent 50%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    position: relative;
+    z-index: 1;
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+
+  /* === HERO === */
+  .hero {
+    padding: 80px 0 60px;
+    text-align: center;
+    position: relative;
+  }
+
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -200px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 800px;
+    height: 800px;
+    background: radial-gradient(circle, rgba(108,92,231,0.08) 0%, rgba(0,184,148,0.05) 40%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .hero-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 100px;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    margin-bottom: 24px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .hero-badge .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--accent-yellow);
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .hero h1 {
+    font-size: clamp(2.5rem, 5vw, 4rem);
+    font-weight: 900;
+    letter-spacing: -0.03em;
+    line-height: 1.1;
+    margin-bottom: 20px;
+  }
+
+  .hero h1 .kukui { background: var(--gradient-kukui); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .hero h1 .vs { color: var(--text-muted); font-weight: 400; font-size: 0.6em; vertical-align: middle; margin: 0 12px; }
+  .hero h1 .relay { background: var(--gradient-relay); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+
+  .hero-sub {
+    font-size: 1.15rem;
+    color: var(--text-secondary);
+    max-width: 700px;
+    margin: 0 auto 40px;
+    font-weight: 300;
+  }
+
+  .hero-tags {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .hero-tag {
+    padding: 6px 14px;
+    border-radius: 8px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    border: 1px solid var(--border);
+  }
+
+  .hero-tag.kukui { background: var(--kukui-glow); border-color: rgba(108,92,231,0.3); color: var(--kukui-secondary); }
+  .hero-tag.relay { background: var(--relay-glow); border-color: rgba(0,184,148,0.3); color: var(--relay-secondary); }
+
+  /* === QUICK STATS === */
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin-bottom: 60px;
+  }
+
+  .stat-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+    text-align: center;
+    transition: all 0.3s ease;
+  }
+
+  .stat-card:hover {
+    border-color: var(--border-glow);
+    transform: translateY(-2px);
+  }
+
+  .stat-label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 8px;
+  }
+
+  .stat-value {
+    font-size: 2rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+  }
+
+  .stat-sub {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    margin-top: 4px;
+  }
+
+  .stat-value.kukui { color: var(--kukui-secondary); }
+  .stat-value.relay { color: var(--relay-secondary); }
+  .stat-value.neutral { color: var(--accent-yellow); }
+
+  /* === SECTION HEADERS === */
+  .section {
+    margin-bottom: 60px;
+  }
+
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 24px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .section-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    flex-shrink: 0;
+  }
+
+  .section-icon.purple { background: var(--kukui-glow-strong); }
+  .section-icon.green { background: var(--relay-glow-strong); }
+  .section-icon.blue { background: rgba(116,185,255,0.2); }
+  .section-icon.orange { background: rgba(253,203,110,0.2); }
+
+  .section-title {
+    font-size: 1.4rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  /* === COMPARISON TABLE === */
+  .comparison-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    overflow: hidden;
+    font-size: 0.9rem;
+  }
+
+  .comparison-table thead th {
+    padding: 16px 20px;
+    text-align: left;
+    font-weight: 600;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .comparison-table thead th:nth-child(2) { color: var(--kukui-secondary); }
+  .comparison-table thead th:nth-child(3) { color: var(--relay-secondary); }
+
+  .comparison-table tbody td {
+    padding: 14px 20px;
+    border-bottom: 1px solid rgba(42,42,58,0.5);
+    vertical-align: top;
+  }
+
+  .comparison-table tbody tr:last-child td { border-bottom: none; }
+
+  .comparison-table tbody tr:hover {
+    background: var(--bg-card-hover);
+  }
+
+  .comparison-table .row-label {
+    font-weight: 600;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    min-width: 160px;
+  }
+
+  .comparison-table .check { color: #00b894; }
+  .comparison-table .cross { color: #636e72; }
+  .comparison-table .partial { color: var(--accent-orange); }
+
+  /* === FEATURE MATRIX === */
+  .feature-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+
+  @media (max-width: 768px) {
+    .feature-grid { grid-template-columns: 1fr; }
+  }
+
+  .feature-panel {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px;
+    transition: all 0.3s ease;
+  }
+
+  .feature-panel:hover {
+    border-color: var(--border-glow);
+  }
+
+  .feature-panel.kukui { border-top: 3px solid var(--kukui-primary); }
+  .feature-panel.relay { border-top: 3px solid var(--relay-primary); }
+
+  .panel-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+
+  .panel-title.kukui { color: var(--kukui-secondary); }
+  .panel-title.relay { color: var(--relay-secondary); }
+
+  .panel-desc {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    margin-bottom: 20px;
+  }
+
+  .feature-list {
+    list-style: none;
+  }
+
+  .feature-list li {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(42,42,58,0.3);
+    font-size: 0.88rem;
+    color: var(--text-secondary);
+  }
+
+  .feature-list li:last-child { border-bottom: none; }
+
+  .feature-list .icon {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.7rem;
+    margin-top: 2px;
+  }
+
+  .feature-list .icon.k { background: var(--kukui-glow-strong); color: var(--kukui-secondary); }
+  .feature-list .icon.r { background: var(--relay-glow-strong); color: var(--relay-secondary); }
+
+  /* === CODE SIZE BARS === */
+  .bar-chart {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .bar-item {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .bar-label {
+    width: 120px;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+    text-align: right;
+    flex-shrink: 0;
+  }
+
+  .bar-track {
+    flex: 1;
+    height: 28px;
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    overflow: hidden;
+    position: relative;
+    display: flex;
+  }
+
+  .bar-fill {
+    height: 100%;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 0 10px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+    color: rgba(255,255,255,0.9);
+    min-width: fit-content;
+    transition: width 1.5s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .bar-fill.kukui { background: var(--gradient-kukui); }
+  .bar-fill.relay { background: var(--gradient-relay); }
+
+  /* === ARCHITECTURE DIAGRAM === */
+  .arch-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+
+  @media (max-width: 768px) {
+    .arch-grid { grid-template-columns: 1fr; }
+  }
+
+  .arch-panel {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px;
+  }
+
+  .arch-panel.kukui { border-left: 3px solid var(--kukui-primary); }
+  .arch-panel.relay { border-left: 3px solid var(--relay-primary); }
+
+  .arch-title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.9rem;
+    font-weight: 600;
+    margin-bottom: 20px;
+  }
+
+  .arch-flow {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .arch-node {
+    padding: 12px 16px;
+    border-radius: 10px;
+    font-size: 0.82rem;
+    font-weight: 500;
+    text-align: center;
+    position: relative;
+  }
+
+  .arch-node.kukui-node {
+    background: var(--kukui-glow-strong);
+    border: 1px solid rgba(108,92,231,0.25);
+    color: var(--kukui-secondary);
+  }
+
+  .arch-node.relay-node {
+    background: var(--relay-glow-strong);
+    border: 1px solid rgba(0,184,148,0.25);
+    color: var(--relay-secondary);
+  }
+
+  .arch-arrow {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    padding: 4px 0;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .arch-node-sub {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-weight: 400;
+    display: block;
+    margin-top: 2px;
+  }
+
+  /* === VERDICT === */
+  .verdict {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 40px;
+    margin: 60px 0;
+  }
+
+  .verdict-title {
+    font-size: 1.6rem;
+    font-weight: 800;
+    text-align: center;
+    margin-bottom: 8px;
+    letter-spacing: -0.02em;
+  }
+
+  .verdict-sub {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    margin-bottom: 32px;
+  }
+
+  .verdict-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+
+  @media (max-width: 768px) {
+    .verdict-grid { grid-template-columns: 1fr; }
+  }
+
+  .verdict-card {
+    padding: 24px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+  }
+
+  .verdict-card.kukui { border-color: rgba(108,92,231,0.3); }
+  .verdict-card.relay { border-color: rgba(0,184,148,0.3); }
+
+  .verdict-card h3 {
+    font-size: 1rem;
+    font-weight: 700;
+    margin-bottom: 12px;
+  }
+
+  .verdict-card.kukui h3 { color: var(--kukui-secondary); }
+  .verdict-card.relay h3 { color: var(--relay-secondary); }
+
+  .verdict-card p {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    line-height: 1.7;
+  }
+
+  .verdict-card .best-for {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+    font-size: 0.8rem;
+  }
+
+  .verdict-card .best-for strong {
+    color: var(--text-primary);
+  }
+
+  /* === FOOTER === */
+  footer {
+    text-align: center;
+    padding: 40px 0;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    border-top: 1px solid var(--border);
+  }
+
+  footer a {
+    color: var(--text-secondary);
+    text-decoration: none;
+  }
+
+  footer a:hover { text-decoration: underline; }
+
+  /* === TOOLTIP === */
+  .tip {
+    position: relative;
+    cursor: help;
+    border-bottom: 1px dotted var(--text-muted);
+  }
+
+  .tip:hover::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 6px 12px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    z-index: 10;
+  }
+
+  /* Monospace highlights */
+  code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.82em;
+    background: var(--bg-secondary);
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: var(--accent-blue);
+  }
+
+  /* === DEPENDENCY SECTION === */
+  .dep-columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+
+  @media (max-width: 768px) {
+    .dep-columns { grid-template-columns: 1fr; }
+  }
+
+  .dep-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 24px;
+  }
+
+  .dep-card h4 {
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-bottom: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .dep-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(42,42,58,0.3);
+    font-size: 0.82rem;
+  }
+
+  .dep-item:last-child { border-bottom: none; }
+
+  .dep-name {
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--text-secondary);
+  }
+
+  .dep-role {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+  }
+
+  /* Radar label */
+  .radar-wrapper {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin-top: 24px;
+  }
+
+  @media (max-width: 768px) {
+    .radar-wrapper { grid-template-columns: 1fr; }
+  }
+
+  .radar-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 24px;
+  }
+
+  .radar-card h4 {
+    font-size: 0.88rem;
+    font-weight: 600;
+    margin-bottom: 16px;
+  }
+
+  .radar-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+
+  .radar-label {
+    width: 110px;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    text-align: right;
+    flex-shrink: 0;
+  }
+
+  .radar-bar-bg {
+    flex: 1;
+    height: 8px;
+    background: var(--bg-secondary);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .radar-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 1.5s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .radar-bar-fill.kukui { background: var(--gradient-kukui); }
+  .radar-bar-fill.relay { background: var(--gradient-relay); }
+
+  .radar-val {
+    width: 32px;
+    font-size: 0.75rem;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  /* Separator line */
+  .sep {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--border), transparent);
+    margin: 60px 0;
+  }
+</style>
+</head>
+<body>
+<div class="bg-grid"></div>
+<div class="container">
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="hero-badge"><span class="dot"></span> Project Deep Dive &mdash; March 2026</div>
+    <h1>
+      <span class="kukui">KukuiBot</span>
+      <span class="vs">vs</span>
+      <span class="relay">Claude Telegram Relay</span>
+    </h1>
+    <p class="hero-sub">
+      Two open-source approaches to building an always-on AI assistant with Claude.
+      One is a full-stack command center; the other is a laser-focused message relay.
+    </p>
+    <div class="hero-tags">
+      <span class="hero-tag kukui">Python + FastAPI</span>
+      <span class="hero-tag kukui">Web UI</span>
+      <span class="hero-tag kukui">Multi-Provider</span>
+      <span class="hero-tag relay">TypeScript + Bun</span>
+      <span class="hero-tag relay">Telegram</span>
+      <span class="hero-tag relay">Supabase Memory</span>
+    </div>
+  </section>
+
+  <!-- QUICK STATS -->
+  <div class="stats-row">
+    <div class="stat-card">
+      <div class="stat-label">Codebase Size</div>
+      <div class="stat-value kukui">~59K</div>
+      <div class="stat-sub">Lines of code (KukuiBot)</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Codebase Size</div>
+      <div class="stat-value relay">~600</div>
+      <div class="stat-sub">Lines of code (Relay)</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Source Files</div>
+      <div class="stat-value kukui">80+</div>
+      <div class="stat-sub">Python, JS, HTML, CSS, Shell</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Source Files</div>
+      <div class="stat-value relay">3</div>
+      <div class="stat-sub">TypeScript + PLpgSQL</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">GitHub Stars</div>
+      <div class="stat-value neutral">0 / 300</div>
+      <div class="stat-sub">KukuiBot / Relay</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">First Commit</div>
+      <div class="stat-value neutral">Feb '26</div>
+      <div class="stat-sub">Both projects &mdash; weeks apart</div>
+    </div>
+  </div>
+
+  <!-- IDENTITY -->
+  <section class="section">
+    <div class="section-header">
+      <div class="section-icon blue">&#9673;</div>
+      <h2 class="section-title">Project Identity</h2>
+    </div>
+    <table class="comparison-table">
+      <thead>
+        <tr>
+          <th style="width:22%">Attribute</th>
+          <th style="width:39%">KukuiBot</th>
+          <th style="width:39%">Claude Telegram Relay</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="row-label">Tagline</td>
+          <td>User-Friendly AI Bot Manager</td>
+          <td>Minimal pattern for running Claude Code as an always-on Telegram bot</td>
+        </tr>
+        <tr>
+          <td class="row-label">Philosophy</td>
+          <td>Full-stack, self-hosted command center &mdash; one install, everything included</td>
+          <td>Minimal relay &mdash; thin glue code between Telegram and Claude Code CLI</td>
+        </tr>
+        <tr>
+          <td class="row-label">Primary Language</td>
+          <td><code>Python 3.14</code> (64% by bytes)</td>
+          <td><code>TypeScript</code> (91% by bytes)</td>
+        </tr>
+        <tr>
+          <td class="row-label">Runtime</td>
+          <td>FastAPI + Uvicorn (ASGI, async)</td>
+          <td>Bun + grammY</td>
+        </tr>
+        <tr>
+          <td class="row-label">Interface</td>
+          <td>Responsive web UI (HTTPS, PWA-capable)</td>
+          <td>Telegram chat (mobile-native)</td>
+        </tr>
+        <tr>
+          <td class="row-label">License</td>
+          <td>None specified</td>
+          <td>MIT</td>
+        </tr>
+        <tr>
+          <td class="row-label">Setup Time</td>
+          <td>~5 min (one-line install script + web wizard)</td>
+          <td>~30 min (7-phase guided setup via CLAUDE.md)</td>
+        </tr>
+        <tr>
+          <td class="row-label">Target User</td>
+          <td>Power users &amp; teams who want a local AI workstation</td>
+          <td>Individuals who want a personal AI companion on Telegram</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ARCHITECTURE -->
+  <section class="section">
+    <div class="section-header">
+      <div class="section-icon purple">&#9881;</div>
+      <h2 class="section-title">Architecture</h2>
+    </div>
+    <div class="arch-grid">
+      <div class="arch-panel kukui">
+        <div class="arch-title" style="color:var(--kukui-secondary)">KukuiBot</div>
+        <div class="arch-flow">
+          <div class="arch-node kukui-node">
+            Browser / Mobile (HTTPS)
+            <span class="arch-node-sub">Vanilla HTML + JS, SSE streaming, responsive</span>
+          </div>
+          <div class="arch-arrow">&#x2193;</div>
+          <div class="arch-node kukui-node">
+            FastAPI Server
+            <span class="arch-node-sub">Auth, routes, SSE, WebSocket, static files</span>
+          </div>
+          <div class="arch-arrow">&#x2193; &#x2193; &#x2193; &#x2193;</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div class="arch-node kukui-node">
+              Claude Code CLI
+              <span class="arch-node-sub">Subprocess bridge</span>
+            </div>
+            <div class="arch-node kukui-node">
+              Anthropic API
+              <span class="arch-node-sub">Direct HTTP</span>
+            </div>
+            <div class="arch-node kukui-node">
+              OpenRouter
+              <span class="arch-node-sub">Multi-model gateway</span>
+            </div>
+            <div class="arch-node kukui-node">
+              OpenAI / Codex
+              <span class="arch-node-sub">OAuth + API</span>
+            </div>
+          </div>
+          <div class="arch-arrow">&#x2193;</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+            <div class="arch-node kukui-node">
+              SQLite DB
+              <span class="arch-node-sub">19 tables</span>
+            </div>
+            <div class="arch-node kukui-node">
+              Gmail API
+              <span class="arch-node-sub">OAuth 2.0</span>
+            </div>
+            <div class="arch-node kukui-node">
+              Tool Engine
+              <span class="arch-node-sub">bash, files, browser&hellip;</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="arch-panel relay">
+        <div class="arch-title" style="color:var(--relay-secondary)">Claude Telegram Relay</div>
+        <div class="arch-flow">
+          <div class="arch-node relay-node">
+            Telegram App (Mobile / Desktop)
+            <span class="arch-node-sub">Text + voice messages via grammY</span>
+          </div>
+          <div class="arch-arrow">&#x2193;</div>
+          <div class="arch-node relay-node">
+            relay.ts
+            <span class="arch-node-sub">~500 lines &mdash; message handler + CLI spawner</span>
+          </div>
+          <div class="arch-arrow">&#x2193;</div>
+          <div class="arch-node relay-node">
+            Claude Code CLI
+            <span class="arch-node-sub">Spawned per message, stdout piped back</span>
+          </div>
+          <div class="arch-arrow">&#x2193;</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <div class="arch-node relay-node">
+              Supabase
+              <span class="arch-node-sub">Postgres + Edge Functions</span>
+            </div>
+            <div class="arch-node relay-node">
+              Voice Pipeline
+              <span class="arch-node-sub">Groq / whisper.cpp</span>
+            </div>
+          </div>
+          <div class="arch-arrow">&#x2193;</div>
+          <div class="arch-node relay-node">
+            Telegram Response
+            <span class="arch-node-sub">Streamed back to user chat</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CODEBASE SIZE -->
+  <section class="section">
+    <div class="section-header">
+      <div class="section-icon orange">&#9638;</div>
+      <h2 class="section-title">Codebase Breakdown</h2>
+    </div>
+    <div class="bar-chart">
+      <div class="bar-item">
+        <div class="bar-label">Python</div>
+        <div class="bar-track">
+          <div class="bar-fill kukui" style="width:92%">1,471 KB</div>
+        </div>
+      </div>
+      <div class="bar-item">
+        <div class="bar-label">HTML</div>
+        <div class="bar-track">
+          <div class="bar-fill kukui" style="width:26%">412 KB</div>
+        </div>
+      </div>
+      <div class="bar-item">
+        <div class="bar-label">JavaScript</div>
+        <div class="bar-track">
+          <div class="bar-fill kukui" style="width:25%">400 KB</div>
+        </div>
+      </div>
+      <div class="bar-item">
+        <div class="bar-label">CSS</div>
+        <div class="bar-track">
+          <div class="bar-fill kukui" style="width:6%">100 KB</div>
+        </div>
+      </div>
+      <div class="bar-item">
+        <div class="bar-label">Shell</div>
+        <div class="bar-track">
+          <div class="bar-fill kukui" style="width:3%">36 KB</div>
+        </div>
+      </div>
+      <div class="bar-item" style="margin-top:12px; padding-top:12px; border-top:1px solid var(--border);">
+        <div class="bar-label">TypeScript</div>
+        <div class="bar-track">
+          <div class="bar-fill relay" style="width:4%">58 KB</div>
+        </div>
+      </div>
+      <div class="bar-item">
+        <div class="bar-label">PLpgSQL</div>
+        <div class="bar-track">
+          <div class="bar-fill relay" style="width:1%">6 KB</div>
+        </div>
+      </div>
+    </div>
+    <p style="text-align:center; color:var(--text-muted); font-size:0.78rem; margin-top:16px;">
+      KukuiBot is <strong style="color:var(--kukui-secondary)">~38&times;</strong> larger by byte count.
+      Different scale, different ambition.
+    </p>
+  </section>
+
+  <!-- FEATURE COMPARISON -->
+  <section class="section">
+    <div class="section-header">
+      <div class="section-icon green">&#10003;</div>
+      <h2 class="section-title">Feature Matrix</h2>
+    </div>
+    <table class="comparison-table">
+      <thead>
+        <tr>
+          <th>Capability</th>
+          <th>KukuiBot</th>
+          <th>Claude Telegram Relay</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="row-label">AI Providers</td>
+          <td>Claude Code CLI, Anthropic API, OpenAI, OpenRouter, Codex</td>
+          <td>Claude Code CLI only</td>
+        </tr>
+        <tr>
+          <td class="row-label">Chat Interface</td>
+          <td>Full web UI with SSE streaming, markdown, code blocks, work log</td>
+          <td>Telegram native chat</td>
+        </tr>
+        <tr>
+          <td class="row-label">Multi-Tab / Multi-Worker</td>
+          <td><span class="check">&#10004;</span> Multiple workers side-by-side, cross-device tab sync</td>
+          <td><span class="cross">&#10006;</span> Single bot conversation</td>
+        </tr>
+        <tr>
+          <td class="row-label">Task Delegation</td>
+          <td><span class="check">&#10004;</span> Cross-worker dispatch with async task tracking (4 slots)</td>
+          <td><span class="cross">&#10006;</span> N/A</td>
+        </tr>
+        <tr>
+          <td class="row-label">Tool Execution</td>
+          <td><span class="check">&#10004;</span> bash, read/write/edit files, browser automation, web search, spawn_agent</td>
+          <td><span class="check">&#10004;</span> Via Claude Code CLI (inherits Claude's tools)</td>
+        </tr>
+        <tr>
+          <td class="row-label">Voice Input</td>
+          <td><span class="check">&#10004;</span> Web Speech API (Safari on-device Siri STT)</td>
+          <td><span class="check">&#10004;</span> Groq cloud Whisper or local whisper.cpp</td>
+        </tr>
+        <tr>
+          <td class="row-label">Memory / Context</td>
+          <td>Auto-compaction, memory search, token tracking, session persistence</td>
+          <td>Supabase semantic search with OpenAI embeddings, auto fact extraction</td>
+        </tr>
+        <tr>
+          <td class="row-label">Email Integration</td>
+          <td><span class="check">&#10004;</span> Gmail OAuth &mdash; read, send, draft, auto-draft with sanitization</td>
+          <td><span class="cross">&#10006;</span></td>
+        </tr>
+        <tr>
+          <td class="row-label">Proactive AI</td>
+          <td><span class="cross">&#10006;</span> User-initiated only</td>
+          <td><span class="check">&#10004;</span> Scheduled check-ins, morning briefings, goal tracking</td>
+        </tr>
+        <tr>
+          <td class="row-label">Scheduler / Cron</td>
+          <td><span class="check">&#10004;</span> Built-in cron manager with UI, job history, tags</td>
+          <td><span class="partial">&#9679;</span> Via CLAUDE.md examples (launchd/PM2 plist)</td>
+        </tr>
+        <tr>
+          <td class="row-label">Security Model</td>
+          <td>Auth, elevation prompts, path guards, root mode with TTL, injection guard, email sanitizer</td>
+          <td>Single-user Telegram ID check</td>
+        </tr>
+        <tr>
+          <td class="row-label">Network Tools</td>
+          <td><span class="check">&#10004;</span> Full network audit suite (nmap, rustscan, nuclei, UniFi bridge)</td>
+          <td><span class="cross">&#10006;</span></td>
+        </tr>
+        <tr>
+          <td class="row-label">Browser Automation</td>
+          <td><span class="check">&#10004;</span> Playwright-based (navigate, click, type, extract, snapshot)</td>
+          <td><span class="cross">&#10006;</span></td>
+        </tr>
+        <tr>
+          <td class="row-label">HTTPS / TLS</td>
+          <td><span class="check">&#10004;</span> Built-in mkcert with auto-renewal</td>
+          <td>N/A (Telegram handles transport)</td>
+        </tr>
+        <tr>
+          <td class="row-label">Mobile Support</td>
+          <td><span class="check">&#10004;</span> Responsive web + PWA manifest + iOS streaming recovery</td>
+          <td><span class="check">&#10004;</span> Native via Telegram app</td>
+        </tr>
+        <tr>
+          <td class="row-label">Background Service</td>
+          <td><span class="check">&#10004;</span> launchd with auto-restart</td>
+          <td><span class="check">&#10004;</span> launchd / PM2 / systemd with crash recovery</td>
+        </tr>
+        <tr>
+          <td class="row-label">Database</td>
+          <td>SQLite (local, 19 tables, auto-backup)</td>
+          <td>Supabase PostgreSQL (cloud-hosted)</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <div class="sep"></div>
+
+  <!-- UNIQUE STRENGTHS -->
+  <section class="section">
+    <div class="section-header">
+      <div class="section-icon purple">&#9733;</div>
+      <h2 class="section-title">Unique Strengths</h2>
+    </div>
+    <div class="feature-grid">
+      <div class="feature-panel kukui">
+        <div class="panel-title kukui">KukuiBot Exclusives</div>
+        <div class="panel-desc">Features you won't find in the Relay</div>
+        <ul class="feature-list">
+          <li><span class="icon k">&#9670;</span> <div><strong>Multi-provider architecture</strong> &mdash; swap between Claude, OpenAI, OpenRouter, and Codex per-tab</div></li>
+          <li><span class="icon k">&#9670;</span> <div><strong>Worker delegation system</strong> &mdash; dispatch tasks across parallel AI sessions with slot management</div></li>
+          <li><span class="icon k">&#9670;</span> <div><strong>Full web UI</strong> &mdash; settings, chat, email, monitoring, scheduling, and setup all in-browser</div></li>
+          <li><span class="icon k">&#9670;</span> <div><strong>Gmail integration</strong> &mdash; read/send/draft with 3-tier permission model and content sanitization</div></li>
+          <li><span class="icon k">&#9670;</span> <div><strong>Network audit tooling</strong> &mdash; nmap, rustscan, nuclei scanning with report generation</div></li>
+          <li><span class="icon k">&#9670;</span> <div><strong>Browser automation</strong> &mdash; Playwright-powered navigate/click/type/extract/snapshot</div></li>
+          <li><span class="icon k">&#9670;</span> <div><strong>Security elevation model</strong> &mdash; root mode with TTL, path guards, injection scanning</div></li>
+          <li><span class="icon k">&#9670;</span> <div><strong>Cross-device tab sync</strong> &mdash; tombstone-based deletion, session persistence across devices</div></li>
+          <li><span class="icon k">&#9670;</span> <div><strong>One-line install</strong> &mdash; <code>curl | bash</code> handles Python, mkcert, certs, launchd, cron</div></li>
+        </ul>
+      </div>
+      <div class="feature-panel relay">
+        <div class="panel-title relay">Relay Exclusives</div>
+        <div class="panel-desc">Features you won't find in KukuiBot</div>
+        <ul class="feature-list">
+          <li><span class="icon r">&#9670;</span> <div><strong>Telegram-native UX</strong> &mdash; works in the app you already use, no new UI to learn</div></li>
+          <li><span class="icon r">&#9670;</span> <div><strong>Semantic memory search</strong> &mdash; OpenAI embeddings + pgvector for context-aware recall</div></li>
+          <li><span class="icon r">&#9670;</span> <div><strong>Proactive check-ins</strong> &mdash; scheduled smart messages based on goals and context</div></li>
+          <li><span class="icon r">&#9670;</span> <div><strong>Morning briefings</strong> &mdash; daily AI-generated summaries incorporating schedule and goals</div></li>
+          <li><span class="icon r">&#9670;</span> <div><strong>Auto fact extraction</strong> &mdash; conversation facts and goals stored automatically</div></li>
+          <li><span class="icon r">&#9670;</span> <div><strong>Cross-platform daemon</strong> &mdash; launchd, PM2, and systemd configs out of the box</div></li>
+          <li><span class="icon r">&#9670;</span> <div><strong>Local voice processing</strong> &mdash; whisper.cpp option for fully offline transcription</div></li>
+          <li><span class="icon r">&#9670;</span> <div><strong>Guided conversational setup</strong> &mdash; CLAUDE.md-driven 7-phase interactive onboarding</div></li>
+          <li><span class="icon r">&#9670;</span> <div><strong>Minimal footprint</strong> &mdash; 3 source files, 3 npm deps, trivial to audit and fork</div></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- DEPENDENCIES -->
+  <section class="section">
+    <div class="section-header">
+      <div class="section-icon blue">&#9881;</div>
+      <h2 class="section-title">Dependency Comparison</h2>
+    </div>
+    <div class="dep-columns">
+      <div class="dep-card">
+        <h4 style="color:var(--kukui-secondary)">KukuiBot &mdash; Python</h4>
+        <div class="dep-item"><span class="dep-name">fastapi</span> <span class="dep-role">Web framework</span></div>
+        <div class="dep-item"><span class="dep-name">uvicorn</span> <span class="dep-role">ASGI server</span></div>
+        <div class="dep-item"><span class="dep-name">hypercorn</span> <span class="dep-role">HTTP/2 server</span></div>
+        <div class="dep-item"><span class="dep-name">uvloop</span> <span class="dep-role">Fast event loop</span></div>
+        <div class="dep-item"><span class="dep-name">httpx</span> <span class="dep-role">Async HTTP client</span></div>
+        <div class="dep-item"><span class="dep-name">scikit-learn</span> <span class="dep-role">ML / similarity search</span></div>
+        <div class="dep-item"><span class="dep-name">python-multipart</span> <span class="dep-role">Form data parsing</span></div>
+        <div class="dep-item"><span class="dep-name">requests</span> <span class="dep-role">HTTP client (sync)</span></div>
+        <div class="dep-item"><span class="dep-name">openai</span> <span class="dep-role">OpenAI API client</span></div>
+        <div class="dep-item"><span class="dep-name">certifi</span> <span class="dep-role">CA certificates</span></div>
+        <div class="dep-item"><span class="dep-name">playwright</span> <span class="dep-role">Browser automation</span></div>
+        <div style="margin-top:10px; font-size:0.75rem; color:var(--text-muted);">11 declared dependencies</div>
+      </div>
+      <div class="dep-card">
+        <h4 style="color:var(--relay-secondary)">Claude Telegram Relay &mdash; TypeScript</h4>
+        <div class="dep-item"><span class="dep-name">grammy</span> <span class="dep-role">Telegram bot framework</span></div>
+        <div class="dep-item"><span class="dep-name">@supabase/supabase-js</span> <span class="dep-role">Database client</span></div>
+        <div class="dep-item"><span class="dep-name">groq-sdk</span> <span class="dep-role">Voice transcription</span></div>
+        <div style="margin-top:10px; font-size:0.75rem; color:var(--text-muted);">3 declared dependencies (+1 devDep)</div>
+        <div style="margin-top:20px; padding-top:16px; border-top:1px solid var(--border);">
+          <h4 style="color:var(--relay-secondary); margin-bottom:10px;">External Services Required</h4>
+          <div class="dep-item"><span class="dep-name">Supabase</span> <span class="dep-role">PostgreSQL + Edge Functions</span></div>
+          <div class="dep-item"><span class="dep-name">Telegram BotFather</span> <span class="dep-role">Bot token + user ID</span></div>
+          <div class="dep-item"><span class="dep-name">OpenAI API</span> <span class="dep-role">Embeddings for memory</span></div>
+          <div class="dep-item"><span class="dep-name">Groq API</span> <span class="dep-role">Voice transcription (optional)</span></div>
+          <div style="margin-top:10px; font-size:0.75rem; color:var(--text-muted);">4 external service accounts needed</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CAPABILITY RATINGS -->
+  <section class="section">
+    <div class="section-header">
+      <div class="section-icon orange">&#9733;</div>
+      <h2 class="section-title">Capability Ratings</h2>
+    </div>
+    <div class="radar-wrapper">
+      <div class="radar-card">
+        <h4 style="color:var(--kukui-secondary)">KukuiBot</h4>
+        <div class="radar-row"><span class="radar-label">Feature depth</span><div class="radar-bar-bg"><div class="radar-bar-fill kukui" style="width:95%"></div></div><span class="radar-val">9.5</span></div>
+        <div class="radar-row"><span class="radar-label">Ease of setup</span><div class="radar-bar-bg"><div class="radar-bar-fill kukui" style="width:80%"></div></div><span class="radar-val">8.0</span></div>
+        <div class="radar-row"><span class="radar-label">Modularity</span><div class="radar-bar-bg"><div class="radar-bar-fill kukui" style="width:75%"></div></div><span class="radar-val">7.5</span></div>
+        <div class="radar-row"><span class="radar-label">Security</span><div class="radar-bar-bg"><div class="radar-bar-fill kukui" style="width:90%"></div></div><span class="radar-val">9.0</span></div>
+        <div class="radar-row"><span class="radar-label">Simplicity</span><div class="radar-bar-bg"><div class="radar-bar-fill kukui" style="width:35%"></div></div><span class="radar-val">3.5</span></div>
+        <div class="radar-row"><span class="radar-label">Forkability</span><div class="radar-bar-bg"><div class="radar-bar-fill kukui" style="width:45%"></div></div><span class="radar-val">4.5</span></div>
+        <div class="radar-row"><span class="radar-label">Mobile UX</span><div class="radar-bar-bg"><div class="radar-bar-fill kukui" style="width:75%"></div></div><span class="radar-val">7.5</span></div>
+        <div class="radar-row"><span class="radar-label">Extensibility</span><div class="radar-bar-bg"><div class="radar-bar-fill kukui" style="width:90%"></div></div><span class="radar-val">9.0</span></div>
+      </div>
+      <div class="radar-card">
+        <h4 style="color:var(--relay-secondary)">Claude Telegram Relay</h4>
+        <div class="radar-row"><span class="radar-label">Feature depth</span><div class="radar-bar-bg"><div class="radar-bar-fill relay" style="width:50%"></div></div><span class="radar-val">5.0</span></div>
+        <div class="radar-row"><span class="radar-label">Ease of setup</span><div class="radar-bar-bg"><div class="radar-bar-fill relay" style="width:65%"></div></div><span class="radar-val">6.5</span></div>
+        <div class="radar-row"><span class="radar-label">Modularity</span><div class="radar-bar-bg"><div class="radar-bar-fill relay" style="width:85%"></div></div><span class="radar-val">8.5</span></div>
+        <div class="radar-row"><span class="radar-label">Security</span><div class="radar-bar-bg"><div class="radar-bar-fill relay" style="width:40%"></div></div><span class="radar-val">4.0</span></div>
+        <div class="radar-row"><span class="radar-label">Simplicity</span><div class="radar-bar-bg"><div class="radar-bar-fill relay" style="width:95%"></div></div><span class="radar-val">9.5</span></div>
+        <div class="radar-row"><span class="radar-label">Forkability</span><div class="radar-bar-bg"><div class="radar-bar-fill relay" style="width:95%"></div></div><span class="radar-val">9.5</span></div>
+        <div class="radar-row"><span class="radar-label">Mobile UX</span><div class="radar-bar-bg"><div class="radar-bar-fill relay" style="width:90%"></div></div><span class="radar-val">9.0</span></div>
+        <div class="radar-row"><span class="radar-label">Extensibility</span><div class="radar-bar-bg"><div class="radar-bar-fill relay" style="width:55%"></div></div><span class="radar-val">5.5</span></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="sep"></div>
+
+  <!-- VERDICT -->
+  <section class="verdict">
+    <div class="verdict-title">The Verdict</div>
+    <div class="verdict-sub">These aren't competitors &mdash; they're different answers to different questions.</div>
+    <div class="verdict-grid">
+      <div class="verdict-card kukui">
+        <h3>KukuiBot</h3>
+        <p>
+          A batteries-included AI workstation. Multi-provider chat, browser automation, Gmail integration,
+          network auditing, worker delegation, cron scheduling, and a full responsive web UI &mdash; all in one
+          self-hosted package. It's the "I want one tool that does everything" approach. The tradeoff is
+          complexity: 59K lines of code, 80+ source files, and a larger surface area to maintain.
+        </p>
+        <div class="best-for">
+          <strong>Best for:</strong> Power users, home lab operators, teams who want a private AI command center
+          with deep system integration and don't mind a larger codebase.
+        </div>
+      </div>
+      <div class="verdict-card relay">
+        <h3>Claude Telegram Relay</h3>
+        <p>
+          A beautifully minimal relay &mdash; 3 source files, 3 npm packages, and one clear job: pipe
+          Telegram messages through Claude Code and back. The semantic memory via Supabase and proactive
+          check-ins give it a personal-assistant feel that goes beyond simple chat. The tradeoff is scope:
+          no web UI, no multi-provider support, and heavy reliance on external services (Supabase, Telegram, OpenAI).
+        </p>
+        <div class="best-for">
+          <strong>Best for:</strong> Individuals who want a personal AI companion in Telegram with smart memory,
+          value simplicity and auditability, and are comfortable with cloud dependencies.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer>
+    <p>
+      Generated by <strong>KukuiBot Code Analyst</strong> &mdash; March 2, 2026
+      &nbsp;&bull;&nbsp;
+      <a href="https://github.com/ryanjw888/KukuiBot">KukuiBot on GitHub</a>
+      &nbsp;&bull;&nbsp;
+      <a href="https://github.com/godagoo/claude-telegram-relay">Claude Telegram Relay on GitHub</a>
+    </p>
+    <p style="margin-top:8px; color:var(--text-muted);">
+      Data sourced from GitHub API, codebase analysis, and project documentation. Ratings are editorial.
+    </p>
+  </footer>
+
+</div>
+</body>
+</html>
