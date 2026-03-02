@@ -966,7 +966,7 @@ class PersistentClaudeProcess:
                     last_event_time = time.time()
                 except asyncio.TimeoutError:
                     silence = int(time.time() - last_event_time)
-                    if silence > 120:
+                    if silence > 900:
                         logger.error(f"No events for {silence}s — giving up")
                         yield {"type": "error", "error": f"No response for {silence}s"}
                         break

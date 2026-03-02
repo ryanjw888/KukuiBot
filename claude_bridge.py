@@ -292,7 +292,7 @@ DELEG_IDLE_TIMEOUT_S = 15 * 60  # Kill idle delegation processes after 15 minute
 # execute (only non-broadcast assistant events).  We track stdout activity
 # separately; this timeout is only checked when _both_ the subscriber queue
 # and the raw stdout are silent.  Default 300s (5 min); override via env var.
-RESPONSE_SILENCE_TIMEOUT_S = int(os.environ.get("CLAUDE_RESPONSE_TIMEOUT", "300"))
+RESPONSE_SILENCE_TIMEOUT_S = int(os.environ.get("CLAUDE_RESPONSE_TIMEOUT", "900"))
 
 # Resume timeout: skip --resume if last activity was more than this many seconds ago.
 # Claude CLI sessions expire after some time; attempting to resume a stale session
