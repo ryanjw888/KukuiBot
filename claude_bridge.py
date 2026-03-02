@@ -48,7 +48,7 @@ from config import (
 )
 from auth import db_connection
 from log_store import log_query, log_write
-from skill_loader import load_skills_for_worker
+from skill_loader import load_core_skills, build_skill_index
 
 logger = logging.getLogger("kukuibot.claude_bridge")
 
@@ -443,7 +443,7 @@ def _append_to_file_log(tool: str, path: str):
         logger.warning(f"Failed to append to file log: {e}")
 
 
-def _load_chat_log_tail(max_chars: int = 20_000, max_line_chars: int = 10_000, kukuibot_session_id: str = "", worker_identity: str = "") -> Optional[str]:
+def _load_chat_log_tail(max_chars: int = 5_000, max_line_chars: int = 10_000, kukuibot_session_id: str = "", worker_identity: str = "") -> Optional[str]:
     """Read recent chat log content from SQLite.
 
     Lines longer than max_line_chars are truncated.
@@ -622,7 +622,7 @@ def _build_available_workers_section(current_session_id: str = "") -> str:
 def build_system_prompt(worker_identity: str = "", include_chat_log: bool = True, kukuibot_session_id: str = "", model: str = "") -> tuple[str, list[str]]:
     """Build the full system prompt for fresh start context injection.
 
-    Loads: SOUL, USER, TOOLS, Model Identity, Worker Identity, chat log tail (20KB).
+    Loads: SOUL, USER, TOOLS, Model Identity, Worker Identity, chat log tail (5KB).
 
     Args:
         worker_identity: Worker role key (e.g. "developer", "it-admin")
@@ -679,18 +679,24 @@ def build_system_prompt(worker_identity: str = "", include_chat_log: bool = True
             sections.append(f"# Worker Role\n{worker_content}")
             loaded_files.append(str(worker_file))
 
-    # Load skills for this worker
+    # Load core skills eagerly + build index for on-demand skills
     if worker_identity:
-        skill_sections = load_skills_for_worker(worker_identity, SKILLS_DIR)
-        if skill_sections:
+        core_sections = load_core_skills(worker_identity, SKILLS_DIR)
+        skill_index = build_skill_index(worker_identity, SKILLS_DIR)
+        if core_sections or skill_index:
             skills_header = (
                 "# Skills (Mandatory Operating Rules)\n"
-                "The following skills are binding operational constraints. "
+                "The following core skills are binding operational constraints. "
                 "If a skill applies with >=1% probability, invoke it BEFORE acting. "
                 "Rationalization thoughts are compliance triggers, not exemptions."
             )
-            sections.append(skills_header + "\n\n" + "\n\n".join(skill_sections))
-            loaded_files.append(f"skills ({len(skill_sections)} loaded)")
+            parts = [skills_header]
+            if core_sections:
+                parts.append("\n\n".join(core_sections))
+            if skill_index:
+                parts.append(skill_index)
+            sections.append("\n\n".join(parts))
+            loaded_files.append(f"skills ({len(core_sections)} core, on-demand index)")
 
     # Project report (shared, concise context for all workers)
     project_report_path = WORKSPACE / "PROJECT-REPORT.md"
@@ -705,12 +711,12 @@ def build_system_prompt(worker_identity: str = "", include_chat_log: bool = True
         sections.append(workers_section)
         loaded_files.append("tab_meta (available workers)")
 
-    # Recent chat history (20KB tail — survives compaction, filtered by session)
+    # Recent chat history (5KB tail — survives compaction, filtered by session)
     if include_chat_log:
         chat_tail = _load_chat_log_tail(kukuibot_session_id=kukuibot_session_id, worker_identity=worker_identity)
         if chat_tail:
             sections.append(f"# Recent Chat History\n{chat_tail}")
-            loaded_files.append("chat_log (20KB tail)")
+            loaded_files.append("chat_log (5KB tail)")
 
     return "\n\n---\n\n".join(sections), loaded_files
 

@@ -2,7 +2,7 @@
 compaction.py — Smart compaction for KukuiBot.
 
 Re-injects the same context as a fresh tab (SOUL, USER, TOOLS, Model Identity,
-Worker Identity) plus the last 20KB of the per-worker chat log for continuity.
+Worker Identity) plus the last 5KB of the per-worker chat log for continuity.
 No LLM call — purely programmatic.
 
 The append-only chat log preserves everything permanently.
@@ -21,12 +21,12 @@ from config import (
     WORKSPACE,
 )
 from log_store import log_query
-from skill_loader import load_skills_for_worker
+from skill_loader import load_core_skills, build_skill_index
 
 logger = logging.getLogger("kukuibot.compact")
 
 
-def _load_chat_log_tail(worker_identity: str = "", model_key: str = "", session_id: str = "", max_chars: int = 20_000) -> str:
+def _load_chat_log_tail(worker_identity: str = "", model_key: str = "", session_id: str = "", max_chars: int = 5_000) -> str:
     """Read recent chat history from SQLite.
 
     - Queries by worker and/or session_id for per-tab continuity.
@@ -192,23 +192,29 @@ def compact_messages(
         if content:
             sections.append(f"# Worker Role\n{content}")
 
-    # Load skills for this worker (survives compaction)
+    # Load core skills eagerly + build index for on-demand skills (survives compaction)
     if worker_identity:
-        skill_sections = load_skills_for_worker(worker_identity, SKILLS_DIR)
-        if skill_sections:
+        core_sections = load_core_skills(worker_identity, SKILLS_DIR)
+        skill_index = build_skill_index(worker_identity, SKILLS_DIR)
+        if core_sections or skill_index:
             skills_header = (
                 "# Skills (Mandatory Operating Rules)\n"
-                "The following skills are binding operational constraints. "
+                "The following core skills are binding operational constraints. "
                 "If a skill applies with >=1% probability, invoke it BEFORE acting. "
                 "Rationalization thoughts are compliance triggers, not exemptions."
             )
-            sections.append(skills_header + "\n\n" + "\n\n".join(skill_sections))
+            parts = [skills_header]
+            if core_sections:
+                parts.append("\n\n".join(core_sections))
+            if skill_index:
+                parts.append(skill_index)
+            sections.append("\n\n".join(parts))
 
     project_report = _load_project_report(WORKSPACE / "PROJECT-REPORT.md")
     if project_report:
         sections.append(f"# Project Report\n{project_report}")
 
-    # Chat log tail (20KB)
+    # Chat log tail (5KB)
     chat_tail = _load_chat_log_tail(
         worker_identity=worker_identity,
         model_key=model_key,

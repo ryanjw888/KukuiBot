@@ -77,7 +77,7 @@ CHAT_LOG_FILE = WORKSPACE / ".bridge_chat.log"          # Per-worker bridge log
 SHARED_CHAT_LOG = WORKSPACE / "logs" / "chat.log"       # Shared log for nightly reports
 FILE_LOG_FILE = WORKSPACE / ".bridge_files.log"
 FILE_LOG_MAX_LINES = 1000
-CHAT_LOG_MAX_CHARS = 20_000
+CHAT_LOG_MAX_CHARS = 5_000
 CHAT_LOG_MAX_LINE = 10_000
 
 # Session resume timeout — if the last activity was longer than this ago,
@@ -280,7 +280,7 @@ def load_context_file(path: Path) -> Optional[str]:
 
 def build_system_prompt(user_system: Optional[str] = None) -> tuple[str, list[str]]:
     """
-    Build context payload — SOUL + USER + TOOLS + Model Identity + Worker Identity + 20KB chat log.
+    Build context payload — SOUL + USER + TOOLS + Model Identity + Worker Identity + 5KB chat log.
     Used for ALL context injection: fresh start, smart compact, etc.
 
     KukuiBot context files live at ~/.kukuibot/ (root level):
