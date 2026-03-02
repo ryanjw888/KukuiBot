@@ -14,7 +14,10 @@ Usage:
   # Run specific phase only
   python3 audit.py --subnet 192.168.1.0/24 --phase discovery
 
-  # Render report from existing scan data + AI analysis
+  # Generate branded HTML report from scan data + AI analysis
+  python3 audit.py --report --scan-data /path/scan.json --analysis /path/analysis.json
+
+  # Legacy render mode (same as --report)
   python3 audit.py --render --scan-data /path/scan.json --analysis /path/analysis.json
 
   # Run without sudo (limited scan quality)
@@ -55,6 +58,7 @@ from .phases.probes import run_probes
 from .phases.classify import run_classify
 from .phases.vulns import run_vulns
 from .report.renderer import render_report
+from .report.generator import generate_report
 
 
 def parse_args() -> argparse.Namespace:
@@ -81,8 +85,12 @@ def parse_args() -> argparse.Namespace:
         help="Run a single phase only",
     )
     parser.add_argument(
+        "--report", action="store_true",
+        help="Generate branded HTML report from scan data + analysis JSON",
+    )
+    parser.add_argument(
         "--render", action="store_true",
-        help="Render mode: generate HTML report from scan data + analysis JSON",
+        help="(Legacy alias for --report) Generate HTML report from scan data + analysis JSON",
     )
     parser.add_argument(
         "--scan-data", type=str, default="",
@@ -271,13 +279,13 @@ async def run_single_phase(config: AuditConfig, phase: str) -> Path:
     return audit_log.path
 
 
-def render_mode(args: argparse.Namespace) -> Path:
-    """Render HTML report from existing scan data + analysis."""
+def report_mode(args: argparse.Namespace) -> Path:
+    """Generate branded HTML report from existing scan data + analysis."""
     if not args.scan_data:
-        print("ERROR: --scan-data is required in render mode")
+        print("ERROR: --scan-data is required in report mode")
         sys.exit(1)
     if not args.analysis:
-        print("ERROR: --analysis is required in render mode")
+        print("ERROR: --analysis is required in report mode")
         sys.exit(1)
 
     scan_path = Path(args.scan_data)
@@ -293,14 +301,8 @@ def render_mode(args: argparse.Namespace) -> Path:
     scan_data = json.loads(scan_path.read_text())
     analysis = json.loads(analysis_path.read_text())
 
-    if args.output:
-        output_path = Path(args.output)
-        if output_path.is_dir() or not output_path.suffix:
-            output_path = output_path / "report.html"
-    else:
-        output_path = scan_path.parent / "report.html"
-
-    report_path = render_report(scan_data, analysis, output_path)
+    output_dir = Path(args.output) if args.output else scan_path.parent
+    report_path = generate_report(scan_data, analysis, output_dir)
     print(f"Report generated: {report_path}")
     return report_path
 
@@ -308,8 +310,8 @@ def render_mode(args: argparse.Namespace) -> Path:
 def main():
     args = parse_args()
 
-    if args.render:
-        render_mode(args)
+    if args.report or args.render:
+        report_mode(args)
         return
 
     config = AuditConfig(
