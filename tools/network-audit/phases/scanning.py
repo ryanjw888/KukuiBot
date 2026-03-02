@@ -267,6 +267,36 @@ async def run_scanning(config: AuditConfig, audit_log: AuditLog) -> None:
             else:
                 print("    No new ports found beyond nmap top-1000", flush=True)
 
+    # ── Step 4: Retry pass for "silent" hosts ──
+    # Hosts that responded to ARP/ping during discovery but returned 0 open
+    # ports from the batched nmap scan.  These are typically slow or flaky
+    # devices (e.g. pool controllers, legacy IoT) whose service-detection
+    # probes cause nmap to hit its per-host timeout when batched with 15
+    # other hosts.  Re-scan them individually with lighter parameters.
+    silent_ips = _find_silent_hosts(audit_log)
+    if silent_ips:
+        print(f"[Phase 2] Retry pass: {len(silent_ips)} silent hosts identified, "
+              f"rescanning individually...", flush=True)
+        retry_tasks = [
+            _retry_silent_host(ip, xml_dir, config, audit_log)
+            for ip in silent_ips
+        ]
+        # Run retries with high parallelism — each host gets its own nmap
+        # process so slow devices don't hold up others.  Most will finish
+        # quickly (genuinely portless) so effective wall-clock is low.
+        retry_results = await run_parallel(retry_tasks, max_workers=8)
+        retry_found = 0
+        for r in retry_results:
+            if isinstance(r, dict):
+                errors.extend(r.get("errors", []))
+                commands_run.extend(r.get("commands", []))
+                retry_found += r.get("ports_found", 0)
+        if retry_found:
+            print(f"    Retry pass recovered {retry_found} open port(s)", flush=True)
+        else:
+            print(f"    Retry pass: no additional ports found (hosts may be offline)",
+                  flush=True)
+
     elapsed = time.monotonic() - start
     audit_log.log_phase(
         phase=2,
@@ -486,3 +516,112 @@ async def _scan_batch_nmap(
               f"({result.duration:.0f}s)", flush=True)
 
     return {"errors": errors, "commands": commands}
+
+
+# ── Retry pass helpers ──────────────────────────────────────────────
+
+
+def _find_silent_hosts(audit_log: AuditLog) -> list[str]:
+    """Return IPs of hosts that were discovered alive but have 0 open ports.
+
+    These are candidates for a retry scan — they likely timed out during
+    the batched nmap scan due to slow network stacks (legacy IoT, pool
+    controllers, etc.).
+
+    Filters out:
+      - Multicast/broadcast addresses (224.x, 239.x, 255.x)
+      - Link-local addresses (169.254.x)
+      - Ping-sweep-only discoveries with no vendor (likely dead IPs
+        responding to broadcast)
+      - Hosts discovered via ARP with a known vendor are the best
+        retry candidates — they are real devices
+    """
+    silent = []
+    for host in audit_log.get_live_hosts():
+        ip = host["ip"]
+
+        # Skip multicast, broadcast, link-local
+        first_octet = int(ip.split(".")[0])
+        if first_octet in (224, 239, 255) or ip.startswith("169.254."):
+            continue
+
+        ports = host.get("ports", [])
+        if ports:
+            continue  # Already has results
+
+        # Prioritise ARP-confirmed devices with a known vendor
+        discovery = host.get("discovery_method", "")
+        vendor = host.get("vendor", "")
+
+        if discovery == "arp" and vendor:
+            # Real device confirmed by ARP + OUI lookup — always retry
+            silent.append(ip)
+        elif discovery == "arp":
+            # ARP-confirmed but unknown vendor — still retry
+            silent.append(ip)
+        # Skip ping_sweep-only with no vendor/MAC — high false-positive rate
+
+    return silent
+
+
+RETRY_HOST_TIMEOUT = 120  # Give slow devices extra time when scanned alone
+RETRY_TOP_PORTS = 200     # Broader than quick-scan, narrower than full
+
+
+async def _retry_silent_host(
+    ip: str,
+    xml_dir: Path,
+    config: AuditConfig,
+    audit_log: AuditLog,
+) -> dict:
+    """Retry a single silent host with lighter nmap parameters.
+
+    Strategy:
+      - Scan one host at a time (no batching competition)
+      - No -sC scripts (service probes only — scripts cause the timeouts)
+      - Top-200 ports (covers all common services without excessive probing)
+      - 120s host timeout (vs 90s in the batch scan)
+      - T3 timing (gentler than T4 — reduces probe retransmission storms)
+    """
+    errors = []
+    commands = []
+
+    xml_path = xml_dir / f"retry_{ip.replace('.', '_')}.xml"
+
+    nmap_cmd = []
+    if config.use_sudo:
+        nmap_cmd = ["sudo", "nmap", "-sS"]
+    else:
+        nmap_cmd = ["nmap", "-sT"]
+
+    nmap_cmd.extend([
+        "-sV",                    # Service version detection only (no scripts)
+        "--top-ports", str(RETRY_TOP_PORTS),
+        "-T3",                    # Gentler timing for slow devices
+        "--host-timeout", f"{RETRY_HOST_TIMEOUT}s",
+        "--max-retries", "2",     # Fewer retries to avoid overwhelming device
+        "-oX", str(xml_path),
+        ip,
+    ])
+
+    result = await run_command(nmap_cmd, timeout=RETRY_HOST_TIMEOUT + 30, retries=0)
+    commands.append({
+        "cmd": result.command,
+        "exit_code": result.exit_code,
+        "duration": round(result.duration, 2),
+    })
+
+    ports_found = 0
+    if result.exit_code != 0 and not result.timed_out:
+        errors.append(f"Retry scan failed for {ip}: {result.stderr[:200]}")
+
+    if xml_path.exists():
+        parsed_hosts = parse_nmap_xml(xml_path)
+        for ph in parsed_hosts:
+            ph_ports = len(ph.get("ports", []))
+            if ph_ports > 0:
+                audit_log.add_host(ph)
+                ports_found += ph_ports
+                print(f"    {ip}: retry found {ph_ports} port(s)", flush=True)
+
+    return {"errors": errors, "commands": commands, "ports_found": ports_found}
