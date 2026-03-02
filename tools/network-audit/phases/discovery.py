@@ -151,7 +151,7 @@ async def _discover_nmap_ping(config: AuditConfig) -> list[dict]:
     # /23 subnets (512 hosts) need 60-90s; /24 needs ~15-30s
     nmap_timeout = 120 if "/23" in config.subnet or "/22" in config.subnet else 60
     result = await run_command(
-        ["nmap", "-sn", "--max-retries", "1", "-T4", config.subnet],
+        ["nmap", "-sn", "-n", "--max-retries", "1", "-T4", config.subnet],
         timeout=nmap_timeout,
     )
     hosts = []

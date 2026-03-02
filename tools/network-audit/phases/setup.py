@@ -9,6 +9,7 @@ from ..audit_log import AuditLog
 from ..config import (
     DEFAULT_REPORT_DIR,
     AuditConfig,
+    check_sudo,
     detect_all_tools,
     detect_network,
 )
@@ -33,6 +34,10 @@ async def run_setup(config: AuditConfig) -> AuditLog:
     # Detect tools
     tools = detect_all_tools()
     config.tools = tools
+
+    # Auto-detect sudo availability (passwordless sudo required for headless use)
+    has_sudo = check_sudo()
+    config.use_sudo = has_sudo
 
     if not tools.get("nmap", None) or not tools["nmap"].available:
         errors.append("nmap not found — required for scanning")
@@ -83,6 +88,10 @@ async def run_setup(config: AuditConfig) -> AuditLog:
     for name, info in tools.items():
         status = f"v{info.version}" if info.available else "NOT FOUND"
         print(f"  {name}: {status}", flush=True)
+    if config.use_sudo:
+        print("  Sudo: available (passwordless) — SYN scans enabled", flush=True)
+    else:
+        print("  Sudo: not available — falling back to unprivileged scans", flush=True)
     if errors:
         for e in errors:
             print(f"  WARNING: {e}", flush=True)

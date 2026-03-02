@@ -41,7 +41,7 @@ class AuditConfig:
     subnet: str = ""
     output_dir: Path = DEFAULT_REPORT_DIR
     client_name: str = ""
-    use_sudo: bool = True
+    use_sudo: bool = False
     max_hosts: int = MAX_CONCURRENT_HOSTS
     tools: dict = field(default_factory=dict)
     network: NetworkInfo = field(default_factory=NetworkInfo)
