@@ -2231,9 +2231,30 @@ def _start_oauth_callback_server(state: str, code_verifier: str, settings_url_ba
                 self._shutdown()
                 return
 
-            # Save the token
+            # Save access token, refresh token, and expiry
             tok = _sanitize_bearer_token(access_token)
+            refresh_token = token_data.get("refresh_token", "")
+            expires_in = token_data.get("expires_in", 0)
             set_config("claude_code.oauth_token", tok)
+            if refresh_token:
+                set_config("claude_code.oauth_refresh_token", refresh_token)
+            if expires_in:
+                import time as _t
+                expires_at = int(_t.time() + expires_in)
+                set_config("claude_code.oauth_expires_at", str(expires_at))
+                logger.info(f"[OAUTH-CB] Token expires in {expires_in}s ({expires_in / 3600:.1f}h)")
+
+            # Write to ~/.claude/.credentials.json so the CLI and
+            # refresh_cli_oauth_token() can use the refresh token
+            try:
+                from claude_bridge import _write_creds
+                import time as _t2
+                expires_at_ms = int((_t2.time() + expires_in) * 1000) if expires_in else 0
+                _write_creds(tok, refresh_token, expires_at_ms)
+                logger.info("[OAUTH-CB] Credentials written to ~/.claude/.credentials.json")
+            except Exception as cred_err:
+                logger.warning(f"[OAUTH-CB] Failed to write credentials file: {cred_err}")
+
             set_config("claude_code.auth_strategy", "configured")
             pool = get_claude_pool()
             if pool:
@@ -4444,22 +4465,60 @@ async def _email_sync_loop():
 
 
 async def _token_refresh_monitor():
-    """Background task: proactively refresh the Claude CLI OAuth token before expiry."""
-    from claude_bridge import CLAUDE_BIN, refresh_cli_oauth_token
+    """Background task: proactively refresh the Claude CLI OAuth token before expiry.
+
+    Checks two sources for expiry info:
+      1. ~/.claude/.credentials.json (written by CLI and by our OAuth callback)
+      2. DB config claude_code.oauth_expires_at (fallback if credentials file missing)
+
+    Uses refresh_cli_oauth_token() which reads the refresh token from .credentials.json,
+    falling back to DB-stored claude_code.oauth_refresh_token.
+    """
+    from claude_bridge import refresh_cli_oauth_token, _read_creds, _write_creds
     logger.info("Token refresh monitor started (interval=300s, threshold=900s)")
     while True:
         try:
             await asyncio.sleep(300)  # Check every 5 minutes
+
+            # Check credentials file first
             _, expires_s = _read_cli_credentials_raw()
+
+            # Fallback: check DB-stored expiry if credentials file has no info
             if not expires_s:
-                continue  # No credentials file or no expiry info
+                db_expires = get_config("claude_code.oauth_expires_at", "")
+                if db_expires:
+                    try:
+                        expires_s = int(db_expires)
+                    except (ValueError, TypeError):
+                        pass
+
+            if not expires_s:
+                continue  # No expiry info anywhere
+
             remaining = expires_s - time.time()
             if remaining > 900:  # More than 15 min left — nothing to do
                 continue
+
             logger.info(f"OAuth token expiring in {remaining:.0f}s — triggering proactive refresh")
+
+            # Ensure .credentials.json has the refresh token from DB if it's missing
+            _, cred_refresh, _ = _read_creds()
+            if not cred_refresh:
+                db_refresh = get_config("claude_code.oauth_refresh_token", "")
+                db_access = get_config("claude_code.oauth_token", "")
+                if db_refresh and db_access:
+                    _write_creds(db_access, db_refresh, int(expires_s * 1000))
+                    logger.info("Synced refresh token from DB to .credentials.json for refresh")
+
             ok, new_tok = await refresh_cli_oauth_token()
             if ok and new_tok:
                 set_config("claude_code.oauth_token", new_tok)
+                # Update DB expiry and refresh token from refreshed credentials
+                new_tok_creds, new_refresh, new_exp_ms = _read_creds()
+                if new_refresh:
+                    set_config("claude_code.oauth_refresh_token", new_refresh)
+                if new_exp_ms:
+                    set_config("claude_code.oauth_expires_at", str(int(new_exp_ms / 1000)))
                 logger.info("Proactive token refresh succeeded — DB synced")
                 continue
             # First attempt failed — retry after 30s
@@ -4468,6 +4527,11 @@ async def _token_refresh_monitor():
             ok, new_tok = await refresh_cli_oauth_token()
             if ok and new_tok:
                 set_config("claude_code.oauth_token", new_tok)
+                new_tok_creds, new_refresh, new_exp_ms = _read_creds()
+                if new_refresh:
+                    set_config("claude_code.oauth_refresh_token", new_refresh)
+                if new_exp_ms:
+                    set_config("claude_code.oauth_expires_at", str(int(new_exp_ms / 1000)))
                 logger.info("Proactive token refresh succeeded on retry — DB synced")
             else:
                 logger.error("Proactive token refresh failed after 2 attempts — token may expire soon")

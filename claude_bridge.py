@@ -126,11 +126,23 @@ async def refresh_cli_oauth_token() -> tuple[bool, str]:
     Strategy:
       1. Try direct refresh via the OAuth token endpoint (works even if token
          is already expired, as long as refresh_token is valid)
+      1b. If no refresh_token in .credentials.json, check DB config as fallback
       2. Fall back to spawning a throwaway CLI process (older method)
 
     Returns (success, new_token).
     """
     old_tok, refresh_tok, old_exp = _read_creds()
+
+    # Fallback: check DB-stored refresh token if credentials file has none
+    if not refresh_tok:
+        try:
+            from auth import get_config
+            db_refresh = (get_config("claude_code.oauth_refresh_token", "") or "").strip()
+            if db_refresh:
+                refresh_tok = db_refresh
+                logger.info("refresh_cli_oauth_token: using DB-stored refresh token (not in .credentials.json)")
+        except Exception:
+            pass
 
     # Strategy 1: Direct refresh using the refresh_token
     if refresh_tok:
