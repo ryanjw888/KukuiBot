@@ -233,6 +233,22 @@ async def run_scanning(config: AuditConfig, audit_log: AuditLog) -> None:
                     print(f"    {ip}: RustScan found {len(new_ports)} new ports: "
                           f"{', '.join(str(p) for p in sorted(new_ports))}", flush=True)
 
+            # Record RustScan ports immediately (nmap -sV may fail to connect)
+            for ip, ports in extra_ports.items():
+                audit_log.add_host({
+                    "ip": ip,
+                    "ports": [{
+                        "port": p,
+                        "protocol": "tcp",
+                        "state": "open",
+                        "service": "",
+                        "version": "",
+                        "banner": "",
+                        "scripts": {},
+                        "source": "rustscan",
+                    } for p in ports],
+                })
+
             # Step 4: nmap service-enum on just the NEW ports
             if extra_ports:
                 print(f"  nmap service-enum on {len(extra_ports)} hosts with new ports...",

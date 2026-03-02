@@ -115,6 +115,19 @@ async def run_classify(config: AuditConfig, audit_log: AuditLog) -> None:
     print(f"[Phase 4] Classification complete in {elapsed:.1f}s — {summary}", flush=True)
 
 
+SERVICE_BANNER_CATEGORIES = {
+    "synology": "NAS", "qnap": "NAS", "dsm": "NAS",
+    "unifi": "Network Equipment", "ubiquiti": "Network Equipment",
+    "home assistant": "Smart Home", "homebridge": "Smart Home",
+    "plex": "Media Server", "emby": "Media Server", "jellyfin": "Media Server",
+    "pihole": "DNS/Ad Blocker", "adguard": "DNS/Ad Blocker",
+    "proxmox": "Server", "esxi": "Server", "vmware": "Server",
+    "cups": "Printer", "ipp": "Printer",
+    "rtsp": "Camera", "ipcam": "Camera",
+    "mosquitto": "IoT", "mqtt": "IoT",
+}
+
+
 def _classify_device(host: dict, vendor: str) -> str:
     """Determine device category from ports, vendor, and other signals."""
     open_ports = {p["port"] for p in host.get("ports", []) if p.get("state") == "open"}
@@ -157,4 +170,55 @@ def _classify_device(host: dict, vendor: str) -> str:
             return "Server"
         return "Computer"
 
+    # Banner/probe-based classification — check HTTP titles, server headers,
+    # TLS certs, and service version strings for device identification
+    banner_category = _classify_from_banners(host)
+    if banner_category:
+        return banner_category
+
     return "Unknown"
+
+
+def _classify_from_banners(host: dict) -> str | None:
+    """Check security_probes and service banners for device identification."""
+    text_signals = []
+
+    # Collect HTTP title and server header from probes
+    probes = host.get("security_probes", {})
+    http_probe = probes.get("http", {})
+    if isinstance(http_probe, dict):
+        if http_probe.get("title"):
+            text_signals.append(http_probe["title"])
+        if http_probe.get("server"):
+            text_signals.append(http_probe["server"])
+
+    # Collect TLS certificate CN/org
+    tls_probe = probes.get("tls", {})
+    if isinstance(tls_probe, dict):
+        certs = tls_probe.get("certificates", [])
+        if isinstance(certs, list):
+            for cert in certs:
+                if isinstance(cert, dict):
+                    for field in ("subject", "issuer", "commonName"):
+                        if cert.get(field):
+                            text_signals.append(str(cert[field]))
+        # Also check as a string/dict directly
+        if isinstance(certs, str) and certs:
+            text_signals.append(certs)
+
+    # Collect service+version strings from port data
+    for p in host.get("ports", []):
+        if p.get("version"):
+            text_signals.append(p["version"])
+        if p.get("service"):
+            text_signals.append(p["service"])
+        if p.get("banner"):
+            text_signals.append(p["banner"])
+
+    # Match against known banner keywords
+    combined = " ".join(text_signals).lower()
+    for keyword, category in SERVICE_BANNER_CATEGORIES.items():
+        if keyword in combined:
+            return category
+
+    return None

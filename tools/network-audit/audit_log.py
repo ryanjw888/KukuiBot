@@ -50,6 +50,10 @@ class AuditLog:
             if h.get("ip") == ip:
                 # Merge: keep existing data, overlay new
                 merged = {**h, **host_dict}
+                # Don't let empty strings overwrite non-empty values
+                for key in ("vendor", "category", "hostname", "discovery_method", "mac"):
+                    if not host_dict.get(key) and h.get(key):
+                        merged[key] = h[key]
                 # Merge ports by port number
                 existing_ports = {(p["port"], p["protocol"]): p for p in h.get("ports", [])}
                 for p in host_dict.get("ports", []):

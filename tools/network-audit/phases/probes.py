@@ -88,6 +88,28 @@ async def run_probes(config: AuditConfig, audit_log: AuditLog) -> None:
             all_ports.update(open_ports & AFP_PORTS)
             all_scripts.update(PROTO_SCRIPTS["afp"].split(","))
 
+        # Dynamic detection: probe any port with HTTP/TLS/SSH/SMB service
+        # regardless of port number (catches non-standard ports)
+        for p in host.get("ports", []):
+            if p.get("state") != "open":
+                continue
+            svc = (p.get("service", "") or "").lower()
+            port_num = p["port"]
+            if "http" in svc and port_num not in all_ports:
+                all_ports.add(port_num)
+                all_scripts.update(PROTO_SCRIPTS["http"].split(","))
+                if "https" in svc or "ssl" in svc:
+                    all_scripts.update(PROTO_SCRIPTS["tls"].split(","))
+            elif ("ssl" in svc or "tls" in svc) and port_num not in all_ports:
+                all_ports.add(port_num)
+                all_scripts.update(PROTO_SCRIPTS["tls"].split(","))
+            elif "ssh" in svc and port_num not in all_ports:
+                all_ports.add(port_num)
+                all_scripts.update(PROTO_SCRIPTS["ssh"].split(","))
+            elif ("smb" in svc or "microsoft-ds" in svc) and port_num not in all_ports:
+                all_ports.add(port_num)
+                all_scripts.update(PROTO_SCRIPTS["smb"].split(","))
+
         if all_ports and all_scripts:
             host_probes[ip] = {"ports": all_ports, "scripts": all_scripts}
 

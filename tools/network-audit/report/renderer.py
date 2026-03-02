@@ -185,11 +185,53 @@ def _render_positive_practices(analysis: dict) -> str:
     return "\n".join(rows)
 
 
+def _host_has_findings(host: dict) -> bool:
+    """Check if a host has vulnerabilities or noteworthy security probe warnings."""
+    if host.get("vulnerabilities"):
+        return True
+    probes = host.get("security_probes", {})
+    if not isinstance(probes, dict):
+        return False
+    # Check for weak TLS, default creds, open shares, etc.
+    tls = probes.get("tls", {})
+    if isinstance(tls, dict):
+        for cipher in tls.get("ciphers", []):
+            if isinstance(cipher, dict) and cipher.get("strength", "").lower() in ("weak", "broken"):
+                return True
+    smb = probes.get("smb", {})
+    if isinstance(smb, dict) and smb.get("shares"):
+        return True
+    http = probes.get("http", {})
+    if isinstance(http, dict) and http.get("auth") and "401" not in str(http.get("auth", "")):
+        return True
+    return False
+
+
 def _render_device_inventory(hosts: list[dict]) -> str:
     if not hosts:
         return "<p style=\"color: #666;\">No devices discovered.</p>"
 
-    header = """
+    # Split hosts into those with findings and clean devices
+    hosts_with_findings = []
+    clean_hosts = []
+    for h in hosts:
+        if _host_has_findings(h):
+            hosts_with_findings.append(h)
+        else:
+            clean_hosts.append(h)
+
+    parts = []
+    parts.append(f"<p style=\"margin: 0 0 12px 0; font-size: 13px; color: #555;\">"
+                 f"<strong>{len(hosts)}</strong> devices discovered &mdash; "
+                 f"<strong>{len(hosts_with_findings)}</strong> with findings, "
+                 f"<strong>{len(clean_hosts)}</strong> clean.</p>")
+
+    # Section 1: Devices with findings (full detail)
+    if hosts_with_findings:
+        parts.append("<p style=\"margin: 15px 0 8px 0; font-weight: 600; font-size: 14px; "
+                     "color: #333;\">Devices with Findings</p>")
+
+        header = """
 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%"
        style="border-collapse: collapse; font-size: 13px;">
 <tr style="background-color: #5aad1a; color: #fff;">
@@ -200,15 +242,15 @@ def _render_device_inventory(hosts: list[dict]) -> str:
 <td style="padding: 8px 12px; font-weight: 600; border: 1px solid #4a9615;">Open Ports</td>
 </tr>"""
 
-    rows = []
-    for i, h in enumerate(sorted(hosts, key=lambda x: _ip_sort_key(x.get("ip", "")))):
-        bg = "#ffffff" if i % 2 == 0 else "#f8f9fa"
-        ports = sorted(p["port"] for p in h.get("ports", []) if p.get("state") == "open")
-        ports_str = ", ".join(str(p) for p in ports[:15])
-        if len(ports) > 15:
-            ports_str += f" (+{len(ports) - 15} more)"
+        rows = []
+        for i, h in enumerate(sorted(hosts_with_findings, key=lambda x: _ip_sort_key(x.get("ip", "")))):
+            bg = "#ffffff" if i % 2 == 0 else "#f8f9fa"
+            ports = sorted(p["port"] for p in h.get("ports", []) if p.get("state") == "open")
+            ports_str = ", ".join(str(p) for p in ports[:15])
+            if len(ports) > 15:
+                ports_str += f" (+{len(ports) - 15} more)"
 
-        rows.append(f"""
+            rows.append(f"""
 <tr style="background-color: {bg};">
 <td style="padding: 6px 12px; border: 1px solid #e9ecef; font-family: monospace;">{_esc(h.get('ip', ''))}</td>
 <td style="padding: 6px 12px; border: 1px solid #e9ecef;">{_esc(h.get('hostname', '') or '-')}</td>
@@ -217,7 +259,38 @@ def _render_device_inventory(hosts: list[dict]) -> str:
 <td style="padding: 6px 12px; border: 1px solid #e9ecef; font-family: monospace; font-size: 12px;">{_esc(ports_str) or '-'}</td>
 </tr>""")
 
-    return header + "\n".join(rows) + "\n</table>"
+        parts.append(header + "\n".join(rows) + "\n</table>")
+
+    # Section 2: Network summary — compact category counts for clean devices
+    if clean_hosts:
+        parts.append("<p style=\"margin: 15px 0 8px 0; font-weight: 600; font-size: 14px; "
+                     "color: #333;\">Network Summary</p>")
+
+        categories: dict[str, int] = {}
+        for h in clean_hosts:
+            cat = h.get("category", "") or "Unknown"
+            categories[cat] = categories.get(cat, 0) + 1
+
+        summary_header = """
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%"
+       style="border-collapse: collapse; font-size: 13px; max-width: 400px;">
+<tr style="background-color: #6c757d; color: #fff;">
+<td style="padding: 6px 12px; font-weight: 600; border: 1px solid #5a6268;">Category</td>
+<td style="padding: 6px 12px; font-weight: 600; border: 1px solid #5a6268; text-align: right;">Count</td>
+</tr>"""
+
+        summary_rows = []
+        for i, (cat, count) in enumerate(sorted(categories.items(), key=lambda x: -x[1])):
+            bg = "#ffffff" if i % 2 == 0 else "#f8f9fa"
+            summary_rows.append(f"""
+<tr style="background-color: {bg};">
+<td style="padding: 5px 12px; border: 1px solid #e9ecef;">{_esc(cat)}</td>
+<td style="padding: 5px 12px; border: 1px solid #e9ecef; text-align: right; font-weight: 600;">{count}</td>
+</tr>""")
+
+        parts.append(summary_header + "\n".join(summary_rows) + "\n</table>")
+
+    return "\n".join(parts)
 
 
 def _render_priority_actions(analysis: dict) -> str:
