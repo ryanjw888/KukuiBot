@@ -4572,6 +4572,68 @@ async def _openai_token_refresh_monitor():
             logger.warning(f"OpenAI token refresh monitor error: {e}")
 
 
+def _run_auto_drafter_sync():
+    """Wrapper to run async check_and_draft in a new event loop (for run_in_executor)."""
+    import asyncio as _ad_asyncio
+    from email_drafter import check_and_draft
+    loop = _ad_asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(check_and_draft(dry_run=False))
+    finally:
+        loop.close()
+
+
+async def _auto_drafter_loop():
+    """Background task: periodically run check_and_draft() based on drafter config."""
+    logger.info("Auto-drafter background task started")
+    loop = asyncio.get_event_loop()
+    await asyncio.sleep(60)  # Initial delay to let server fully initialize
+    while True:
+        try:
+            # Read interval each cycle (allows live config changes)
+            from auth import get_config as _ad_get_config
+            interval_min = max(5, min(60, int(_ad_get_config("drafter.check_interval_min", "15"))))
+            await asyncio.sleep(interval_min * 60)
+
+            # Check if drafter is enabled
+            enabled = _ad_get_config("drafter.enabled", "0")
+            if enabled != "1":
+                logger.debug("Auto-drafter: disabled, skipping")
+                continue
+
+            # Check prerequisites via get_status()
+            from email_drafter import get_status as _ad_get_status
+            status = await loop.run_in_executor(None, _ad_get_status)
+            if not status.get("gmail_connected"):
+                logger.debug("Auto-drafter: Gmail not connected, skipping")
+                continue
+            if not status.get("has_api_key"):
+                logger.debug("Auto-drafter: no AI API key configured, skipping")
+                continue
+            if not status.get("has_auto_draft_perm"):
+                logger.debug("Auto-drafter: auto_draft permission not granted, skipping")
+                continue
+            if not status.get("profile_exists"):
+                logger.debug("Auto-drafter: no style profile built, skipping")
+                continue
+
+            logger.info("Auto-drafter: starting scheduled run")
+            result = await loop.run_in_executor(None, _run_auto_drafter_sync)
+            drafted = result.get("drafted", 0)
+            skipped = result.get("skipped", 0)
+            spam = result.get("spam", 0)
+            errors = result.get("errors", 0)
+            logger.info(
+                f"Auto-drafter: completed — drafted={drafted}, skipped={skipped}, "
+                f"spam={spam}, errors={errors}"
+            )
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"Auto-drafter loop error: {e}")
+
+
 @app.on_event("startup")
 async def startup():
     global _MAIN_LOOP
@@ -4660,6 +4722,8 @@ async def startup():
     # Start email cache background sync task
     _app_state.email_sync_task = asyncio.create_task(_email_sync_loop())
     logger.info("Email sync background task started")
+    # Start auto-drafter background scheduler (periodic check_and_draft)
+    _app_state.auto_drafter_task = asyncio.create_task(_auto_drafter_loop())
     _init_worker_ports()
     logger.info(f"{APP_NAME} unified server started on {HOST}:{PORT}")
 
@@ -4686,6 +4750,7 @@ async def shutdown():
         "db_backup_loop": _app_state.db_backup_loop_task,
         "system_wake": _app_state.system_wake_task,
         "email_sync": _app_state.email_sync_task,
+        "auto_drafter": getattr(_app_state, "auto_drafter_task", None),
     }
     for task_name, task in _bg_tasks.items():
         if task and not task.done():
