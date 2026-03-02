@@ -50,6 +50,17 @@ If ANY item is missing, rewrite the prompt before dispatching.
 - For Codex targets: prompts need MORE structure (explicit headers, numbered steps)
 - For Opus targets: prompts can be more open-ended but still need deliverables
 
+## Model Routing
+
+| Task type | Model | Why |
+|---|---|---|
+| Deep analysis, architecture, security | claude_opus | Best reasoning |
+| Standard implementation, single-file | claude_sonnet | Fast, cost-effective |
+| Batch extraction, mechanical work | codex | Cheapest, structured |
+| Reports, creative output | opus or sonnet | Opus for nuance |
+
+Default: cheaper/faster unless ambiguity, security, or architecture is involved.
+
 ## Hard Gate
 
 `delegate_task` is BLOCKED unless the prompt passes the 9-point Pre-Dispatch Checklist above. If you catch yourself about to dispatch without checking — STOP. Review the checklist. Rewrite if needed.

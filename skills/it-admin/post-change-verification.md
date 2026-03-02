@@ -39,3 +39,13 @@ After EVERY infrastructure change, verify it worked AND nothing else broke. Not 
 ## Hard Gate
 
 No change COMPLETE until VERIFICATION block shows PASS. FAIL = rollback or fix first.
+
+## Delegation After Completion
+
+After audit scans or complex operations complete, delegate specialist work:
+
+- **Analysis enhancement** -> delegate to code-analyst (review findings, adjust severity, add business context)
+- **Report delivery** -> delegate to assistant (email with sanitization checks)
+- **Code-level bugs** -> delegate to code-analyst or developer (when DIAGNOSIS confidence is LOW and root cause is in application code, not infrastructure)
+
+Include the full context (file paths, findings, symptoms) in the delegation prompt. IT admin focuses on infrastructure — document polishing and code debugging go to specialists.

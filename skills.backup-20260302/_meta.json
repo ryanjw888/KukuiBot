@@ -177,46 +177,6 @@
       "priority": 6,
       "max_chars": 2500,
       "description": "Every claim anchored to specific file:line code references"
-    },
-    {
-      "id": "plan-handoff",
-      "file": "analyst/plan-handoff.md",
-      "workers": ["code-analyst"],
-      "priority": 7,
-      "max_chars": 2500,
-      "description": "Delegate completed implementation plans to developer workers for execution"
-    },
-    {
-      "id": "escalation-protocol",
-      "file": "developer/escalation-protocol.md",
-      "workers": ["developer"],
-      "priority": 7,
-      "max_chars": 2500,
-      "description": "Pause and escalate to analyst/specialist when complexity exceeds plan scope"
-    },
-    {
-      "id": "request-routing",
-      "file": "assistant/request-routing.md",
-      "workers": ["assistant"],
-      "priority": 3,
-      "max_chars": 2500,
-      "description": "Route user requests to appropriate specialist workers via delegation"
-    },
-    {
-      "id": "report-delivery",
-      "file": "assistant/report-delivery.md",
-      "workers": ["assistant"],
-      "priority": 4,
-      "max_chars": 2000,
-      "description": "Verify and deliver reports/artifacts via email or chat with sanitization"
-    },
-    {
-      "id": "multi-phase-orchestration-dm",
-      "file": "dev-manager/multi-phase-orchestration.md",
-      "workers": ["dev-manager"],
-      "priority": 7,
-      "max_chars": 2500,
-      "description": "Pipeline state tracking and compaction for multi-phase development projects"
     }
   ]
 }
