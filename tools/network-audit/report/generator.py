@@ -13,7 +13,6 @@ Usage:
 """
 
 import html
-import json
 import re
 from datetime import datetime
 from pathlib import Path
@@ -78,29 +77,11 @@ GRADE_OFFSETS = {
     "F": 306,
 }
 
-CATEGORY_CHIPS = {
-    "Router/Gateway": ("&#x1F4E1;", "#dbeafe", "#1e40af", "Gateway"),
-    "Network Equipment": ("&#x1F4E1;", "#dbeafe", "#1e40af", "Network"),
-    "Server": ("&#x1F5A5;", "#e0e7ff", "#3730a3", "Server"),
-    "NAS": ("&#x1F5A5;", "#e0e7ff", "#3730a3", "Server"),
-    "Computer": ("&#x1F4BB;", "#f3e8ff", "#6b21a8", "Computer"),
-    "Smart Home": ("&#x1F3E0;", "#fef3c7", "#92400e", "Smart Home"),
-    "IoT": ("&#x1F4A1;", "#fce7f3", "#9d174d", "IoT"),
-    "Unknown": ("&#x2753;", "#f1f5f9", "#475569", "Unknown"),
-}
-
 
 def _esc(text) -> str:
     """HTML-escape a value, handling None."""
     return html.escape(str(text or ""))
 
-
-def _ip_sort_key(ip: str) -> tuple:
-    """Sort key for IP addresses."""
-    try:
-        return tuple(int(x) for x in ip.split("."))
-    except (ValueError, AttributeError):
-        return (999, 999, 999, 999)
 
 
 def _mask_mac(mac: str) -> str:
@@ -172,8 +153,6 @@ def generate_report(
 
     client_name = meta.get("client_name", "Network Security Audit")
     subnet = meta.get("subnet", "")
-    duration = meta.get("duration_seconds", 0)
-    tools = meta.get("tools_versions", {})
     report_id = f"{client_name[:2].upper()}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
     # Build HTML
@@ -186,9 +165,7 @@ def generate_report(
     parts.append(_render_executive_summary(analysis.get("executive_summary", "")))
     parts.append(_render_findings_section(findings_sorted, sev_counts))
     parts.append(_render_positives_section(positives))
-    parts.append(_render_inventory_section(hosts, hosts_with_ports, findings_sorted))
     parts.append(_render_action_plan(actions))
-    parts.append(_render_methodology(subnet, duration, tools, len(hosts), total_ports))
     parts.append(_render_footer(client_name, date_display, report_id))
     parts.append(_render_container_close())
 
@@ -219,8 +196,6 @@ img{border:0;outline:none;text-decoration:none}
   .stat-cell{display:block!important;width:100%!important;text-align:center!important;padding:6px 0!important}
   .finding-grid td{display:block!important;width:100%!important;padding:4px 0!important}
   .section-title{font-size:18px!important}
-  .inventory-table{font-size:11px!important}
-  .inventory-table td,.inventory-table th{padding:6px 4px!important}
   .positive-cell{display:block!important;width:100%!important}
 }
 @media print{
@@ -527,99 +502,6 @@ def _render_positives_section(positives: list) -> str:
 </table>"""
 
 
-def _render_inventory_section(all_hosts: list, hosts_with_ports: list,
-                               findings: list) -> str:
-    """Render notable device inventory — only devices referenced in findings."""
-
-    # Build a set of IPs mentioned in findings
-    finding_ips = {}
-    for f in findings:
-        fid = f.get("id", "")
-        affected = f.get("affected_device", "")
-        # Extract IPs from affected_device string
-        for token in re.findall(r'\d+\.\d+\.\d+\.\d+', affected):
-            finding_ips.setdefault(token, []).append(fid)
-
-    # Collect notable devices (those in findings)
-    notable = []
-    for h in all_hosts:
-        ip = h.get("ip", "")
-        if ip in finding_ips:
-            notable.append((h, finding_ips[ip]))
-
-    # Sort by IP
-    notable.sort(key=lambda x: _ip_sort_key(x[0].get("ip", "")))
-
-    # Build table rows
-    rows = []
-    for i, (h, fids) in enumerate(notable):
-        ip = h.get("ip", "")
-        hostname = h.get("hostname", "") or h.get("vendor", "") or "-"
-        vendor = h.get("vendor", "Unknown")
-        category = h.get("category", "Unknown")
-        cat_cfg = CATEGORY_CHIPS.get(category, CATEGORY_CHIPS["Unknown"])
-        ports = sorted(p["port"] for p in h.get("ports", []) if p.get("state") == "open")
-        ports_str = ", ".join(str(p) for p in ports[:8])
-        if len(ports) > 8:
-            ports_str += f" (+{len(ports) - 8})"
-        fid_str = ", ".join(fids)
-        bg = "#fafbfc" if i % 2 else "#ffffff"
-
-        # Color finding refs by max severity
-        fid_color = "#64748b"
-        for f in findings:
-            if f.get("id") in fids:
-                s = f.get("severity", "info").lower()
-                if s in ("critical", "high"):
-                    fid_color = "#ef4444"
-                    break
-                elif s == "medium":
-                    fid_color = "#f59e0b"
-                elif s == "low" and fid_color != "#f59e0b":
-                    fid_color = "#3b82f6"
-
-        rows.append(
-            f'<tr style="border-bottom:1px solid #f1f5f9;background:{bg}">'
-            f'<td style="padding:8px">{_esc(ip)}</td>'
-            f'<td style="padding:8px">{_esc(hostname)}</td>'
-            f'<td style="padding:8px">{_esc(vendor)}</td>'
-            f'<td style="padding:8px"><span style="display:inline-block;padding:2px 8px;border-radius:10px;'
-            f'background:{cat_cfg[1]};color:{cat_cfg[2]};font-size:10px;font-weight:600">'
-            f'{cat_cfg[0]} {cat_cfg[3]}</span></td>'
-            f'<td style="padding:8px;font-size:12px">{_esc(ports_str) or "-"}</td>'
-            f'<td style="padding:8px"><span style="color:{fid_color};font-weight:600">{_esc(fid_str)}</span></td>'
-            f'</tr>'
-        )
-
-    total_scanned = len(hosts_with_ports)
-
-    return f"""
-<!-- DEVICE INVENTORY -->
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:24px">
-<tr><td class="card" style="background:#ffffff;border-radius:16px;padding:28px 32px;border:1px solid #e8ecf1;box-shadow:0 4px 24px rgba(0,0,0,0.06)">
-  <h2 class="section-title" style="font-size:20px;font-weight:700;color:#1e293b;margin:0 0 6px 0;border-bottom:3px solid #5aad1a;padding-bottom:10px">&#x1F4F1; Notable Device Inventory</h2>
-  <p style="margin:0 0 16px;font-size:12px;color:#64748b">{total_scanned} hosts scanned &mdash; showing devices referenced in findings. Full inventory available on request.</p>
-  <div style="overflow-x:auto;-webkit-overflow-scrolling:touch">
-  <table class="inventory-table" role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="font-size:12px;min-width:600px">
-  <thead>
-  <tr style="background:#f8fafc">
-    <th style="padding:10px 8px;text-align:left;font-weight:700;color:#64748b;border-bottom:2px solid #e2e8f0;font-size:11px;text-transform:uppercase;letter-spacing:0.5px">IP</th>
-    <th style="padding:10px 8px;text-align:left;font-weight:700;color:#64748b;border-bottom:2px solid #e2e8f0;font-size:11px;text-transform:uppercase;letter-spacing:0.5px">Hostname</th>
-    <th style="padding:10px 8px;text-align:left;font-weight:700;color:#64748b;border-bottom:2px solid #e2e8f0;font-size:11px;text-transform:uppercase;letter-spacing:0.5px">Vendor</th>
-    <th style="padding:10px 8px;text-align:left;font-weight:700;color:#64748b;border-bottom:2px solid #e2e8f0;font-size:11px;text-transform:uppercase;letter-spacing:0.5px">Category</th>
-    <th style="padding:10px 8px;text-align:left;font-weight:700;color:#64748b;border-bottom:2px solid #e2e8f0;font-size:11px;text-transform:uppercase;letter-spacing:0.5px">Ports</th>
-    <th style="padding:10px 8px;text-align:left;font-weight:700;color:#64748b;border-bottom:2px solid #e2e8f0;font-size:11px;text-transform:uppercase;letter-spacing:0.5px">Finding</th>
-  </tr>
-  </thead>
-  <tbody>
-  {chr(10).join(rows)}
-  </tbody>
-  </table>
-  </div>
-</td></tr>
-</table>"""
-
-
 def _render_action_plan(actions: list) -> str:
     if not actions:
         return ""
@@ -668,57 +550,6 @@ def _render_action_plan(actions: list) -> str:
   </tbody>
   </table>
   </div>
-</td></tr>
-</table>"""
-
-
-def _render_methodology(subnet: str, duration: float, tools: dict,
-                         host_count: int, port_count: int) -> str:
-    tool_str = ", ".join(f"{k} {v}" for k, v in tools.items()) if tools else "nmap"
-    minutes = int(duration // 60)
-    seconds = int(duration % 60)
-    duration_str = f"{minutes} minutes {seconds} seconds ({duration:.0f}s)" if minutes else f"{seconds} seconds"
-
-    return f"""
-<!-- METHODOLOGY -->
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:24px">
-<tr><td class="card" style="background:#ffffff;border-radius:16px;padding:28px 32px;border:1px solid #e8ecf1;box-shadow:0 4px 24px rgba(0,0,0,0.06)">
-  <h2 class="section-title" style="font-size:20px;font-weight:700;color:#1e293b;margin:0 0 16px 0;border-bottom:3px solid #5aad1a;padding-bottom:10px">&#x1F52C; Scan Methodology</h2>
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="8" border="0">
-  <tr>
-    <td width="50%" valign="top" style="background:#f8fafc;border-radius:10px;padding:14px 16px">
-      <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">&#x1F50D; Target</div>
-      <div style="font-size:13px;color:#1e293b">{_esc(subnet)}</div>
-    </td>
-    <td width="50%" valign="top" style="background:#f8fafc;border-radius:10px;padding:14px 16px">
-      <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">&#x23F1; Duration</div>
-      <div style="font-size:13px;color:#1e293b">{duration_str}</div>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top" style="background:#f8fafc;border-radius:10px;padding:14px 16px">
-      <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">&#x1F6E0; Tools</div>
-      <div style="font-size:13px;color:#1e293b">{_esc(tool_str)}</div>
-    </td>
-    <td width="50%" valign="top" style="background:#f8fafc;border-radius:10px;padding:14px 16px">
-      <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">&#x1F4CA; Results</div>
-      <div style="font-size:13px;color:#1e293b">{host_count} hosts &bull; {port_count} open ports</div>
-    </td>
-  </tr>
-  <tr>
-    <td colspan="2" valign="top" style="background:#f8fafc;border-radius:10px;padding:14px 16px">
-      <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">&#x1F4DD; Phases</div>
-      <div style="font-size:12px;color:#334155;line-height:1.8">
-        <strong>0. Setup</strong> &mdash; Tool detection, network config &bull;
-        <strong>1. Discovery</strong> &mdash; ARP, ping sweep, mDNS &bull;
-        <strong>2. Port Scanning</strong> &mdash; nmap + RustScan deep sweep &bull;
-        <strong>3. Security Probes</strong> &mdash; SSH, TLS, HTTP analysis &bull;
-        <strong>4. Classification</strong> &mdash; OUI vendor + heuristics &bull;
-        <strong>5. Vulnerability Assessment</strong> &mdash; Nuclei CVE scanning
-      </div>
-    </td>
-  </tr>
-  </table>
 </td></tr>
 </table>"""
 
