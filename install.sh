@@ -342,7 +342,25 @@ sudo xcodebuild -license accept </dev/null 2>/dev/null || true
 # --- Clone or update source ---
 if [ -d "$SRC_DIR/.git" ]; then
   echo "→ Updating existing source at $SRC_DIR"
-  cd "$SRC_DIR" && git pull --ff-only 2>/dev/null || git pull --rebase 2>/dev/null || true
+  cd "$SRC_DIR"
+  git fetch origin --quiet 2>/dev/null || true
+  # Strategy 1: fast-forward (cleanest)
+  if ! git pull --ff-only 2>/dev/null; then
+    echo "  Fast-forward failed, trying rebase..."
+    # Strategy 2: rebase (handles diverged history)
+    if ! git pull --rebase 2>/dev/null; then
+      echo "  Rebase failed, performing clean reset..."
+      git rebase --abort 2>/dev/null || true
+      # Strategy 3: nuclear reset (guaranteed to match origin)
+      git reset --hard origin/main
+    fi
+  fi
+  # Repair any tracked files missing from the working tree
+  MISSING_FILES=$(git diff --name-only --diff-filter=D HEAD 2>/dev/null | head -5)
+  if [ -n "$MISSING_FILES" ]; then
+    echo "  Restoring missing tracked files..."
+    git checkout HEAD -- .
+  fi
 else
   echo "→ Cloning KukuiBot to $SRC_DIR"
   git clone "$REPO_URL" "$SRC_DIR" </dev/null || {

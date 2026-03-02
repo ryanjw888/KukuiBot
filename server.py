@@ -3952,6 +3952,24 @@ def _git_head(src_dir: str) -> str:
     return _git(src_dir, "rev-parse", "HEAD", timeout=5).stdout.strip()
 
 
+def _git_repair_working_tree(src_dir: str) -> int:
+    """Restore any tracked files missing from the working tree.
+
+    After rebase/reset, files can go missing if delete/re-add history
+    causes conflicts.  ``git checkout HEAD -- .`` restores them.
+    Returns the number of files restored (0 = clean).
+    """
+    # Ask git which tracked files are missing from the working tree
+    diff_result = _git(src_dir, "diff", "--name-only", "--diff-filter=D", "HEAD", timeout=10)
+    missing = [f for f in diff_result.stdout.strip().split("\n") if f.strip()]
+    if not missing:
+        return 0
+    # Restore them from HEAD
+    _git(src_dir, "checkout", "HEAD", "--", ".", timeout=30)
+    logger.info(f"Repaired {len(missing)} missing file(s) after update: {missing}")
+    return len(missing)
+
+
 def _schedule_restart():
     """Rate-limited delayed restart. Returns (scheduled: bool, reason: str|None)."""
     limited, reason = _restart_rate_limited()
@@ -3995,6 +4013,9 @@ async def update_check(req: Request):
                 behind_count = int(behind_s) if behind_s.isdigit() else 0
                 ahead_count = 0
 
+        # Always repair working tree — files can go missing after rebase
+        repaired = _git_repair_working_tree(src_dir)
+
         commit = _git_head(src_dir)
         rollback_available = _UPDATE_ROLLBACK_FILE.is_file()
 
@@ -4002,6 +4023,7 @@ async def update_check(req: Request):
             "up_to_date": behind_count == 0,
             "behind": behind_count,
             "ahead": ahead_count,
+            "repaired_files": repaired,
             "commit": commit,
             "branch": branch,
             "rollback_available": rollback_available,
@@ -4073,6 +4095,9 @@ async def update_apply(req: Request):
         if result.returncode != 0:
             return JSONResponse({"error": f"Update failed (all strategies): {result.stderr.strip()}"}, status_code=500)
 
+        # Repair any tracked files missing from working tree after pull/rebase
+        repaired = _git_repair_working_tree(src_dir)
+
         _git(src_dir, "stash", "pop", "--quiet", timeout=5)
 
         new_commit = _git_head(src_dir)
@@ -4083,6 +4108,7 @@ async def update_apply(req: Request):
             "ok": True,
             "summary": summary,
             "nuclear": nuclear,
+            "repaired_files": repaired,
             "pre_update_commit": pre_commit[:7],
             "new_commit": new_commit[:7],
         }
