@@ -235,9 +235,9 @@ Save your analysis to the same output directory as the scan results:
 
 ---
 
-## Step 4: Generate the Branded HTML Report
+## Step 4: Generate a Beautiful Branded HTML Report - Gmail compatible
 
-Generate a professional, Kukui IT-branded HTML report from your analysis. Write the report directly as an HTML file. You have creative freedom to arrange sections and adapt the layout to fit the data — but follow these branding and design guidelines.
+Generate a beautiful, professional, Kukui IT-branded HTML report from your analysis, that uses common HTML elements designed to be responsive and compatible with various email clients. Write the report directly as an HTML file. You have creative freedom to arrange sections and adapt the layout to fit the data — but follow these branding and design guidelines.
 
 ### Branding
 
@@ -328,7 +328,7 @@ Include `@media print` with:
 
 ### Technical Notes
 
-- All styles must be inline in `<style>` (no external CSS) — the report is email-safe
+- All styles must be inline in `<style>` (no external CSS) — the report is email-safe and Gmail app compatible
 - Use HTML entities for emojis where possible (e.g., `&#x1F512;` for 🔒)
 - MAC addresses in evidence blocks should be partially masked (e.g., `XX:XX:XX:XX:B5:01`)
 - No local file paths in the report body
