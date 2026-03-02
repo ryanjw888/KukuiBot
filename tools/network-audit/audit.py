@@ -59,6 +59,7 @@ from .phases.classify import run_classify
 from .phases.vulns import run_vulns
 from .report.renderer import render_report
 from .report.generator import generate_report
+from .analyzer import analyze
 
 
 def parse_args() -> argparse.Namespace:
@@ -237,6 +238,22 @@ async def run_full_audit(config: AuditConfig) -> Path:
                 f"{total_ports} ports, {total_vulns} findings",
         scan_results_path=str(audit_log.path),
     )
+
+    # ── Auto-analyze + render report ─────────────────────────────
+    print(flush=True)
+    print("[Report] Analyzing scan results...", flush=True)
+    scan_data = json.loads(audit_log.path.read_text())
+    analysis = analyze(scan_data, client_name=config.client_name)
+
+    # Save analysis.json for reference / AI override
+    analysis_path = config.output_dir / "analysis.json"
+    analysis_path.write_text(json.dumps(analysis, indent=2))
+    print(f"[Report] Analysis saved: {analysis_path}", flush=True)
+
+    # Render branded HTML report
+    report_path = generate_report(scan_data, analysis, config.output_dir)
+    print(f"[Report] Report generated: {report_path}", flush=True)
+    print("=" * 60, flush=True)
 
     return audit_log.path
 

@@ -160,9 +160,8 @@ def generate_report(
     parts.append(_render_doctype())
     parts.append(_render_hero(client_name, date_display, subnet, sev_counts, len(positives)))
     parts.append(_render_container_open())
-    parts.append(_render_score_ring(grade, analysis.get("overall_grade_explanation", "")))
-    parts.append(_render_stats_row(len(hosts_with_ports), total_ports, len(findings), len(positives)))
     parts.append(_render_executive_summary(analysis.get("executive_summary", "")))
+    parts.append(_render_stats_row(len(hosts_with_ports), total_ports, len(findings), len(positives)))
     parts.append(_render_findings_section(findings_sorted, sev_counts))
     parts.append(_render_positives_section(positives))
     parts.append(_render_action_plan(actions))
@@ -200,7 +199,7 @@ img{border:0;outline:none;text-decoration:none}
 }
 @media print{
   body{background:#fff!important}
-  .hero-bg{background:#1a2332!important}
+  .hero-bg{background:#ffffff!important}
   .card{box-shadow:none!important;border:1px solid #e2e8f0!important;break-inside:avoid}
   .finding-card{break-inside:avoid}
 }
@@ -211,26 +210,26 @@ img{border:0;outline:none;text-decoration:none}
 
 def _render_hero(client_name: str, date_display: str, subnet: str,
                  sev_counts: dict, positive_count: int) -> str:
-    # Build severity badges
+    # Build severity badges (light-background compatible)
     badges = []
     for sev, label_cfg in [
-        ("critical", ("&#x1F534;", "rgba(220,38,38,0.25)")),
-        ("high", ("&#x26A0;", "rgba(239,68,68,0.2)")),
-        ("medium", ("&#x26A0;", "rgba(245,158,11,0.18)")),
-        ("low", ("&#x2139;", "rgba(59,130,246,0.18)")),
+        ("critical", ("&#x1F534;", "#fef2f2", "#dc2626", "#fecaca")),
+        ("high", ("&#x26A0;", "#fef2f2", "#ef4444", "#fecaca")),
+        ("medium", ("&#x26A0;", "#fffbeb", "#d97706", "#fed7aa")),
+        ("low", ("&#x2139;", "#eff6ff", "#3b82f6", "#bfdbfe")),
     ]:
         count = sev_counts.get(sev, 0)
         if count > 0:
-            emoji, bg = label_cfg
+            emoji, bg, text_color, border_color = label_cfg
             badges.append(
                 f'<td style="padding:5px 12px;border-radius:8px;font-size:12px;font-weight:600;'
-                f'color:rgba(255,255,255,0.9);background:{bg};border:1px solid rgba(255,255,255,0.08)">'
+                f'color:{text_color};background:{bg};border:1px solid {border_color}">'
                 f'{emoji} {count} {sev.capitalize()}</td>'
             )
     if positive_count > 0:
         badges.append(
             f'<td style="padding:5px 12px;border-radius:8px;font-size:12px;font-weight:600;'
-            f'color:rgba(255,255,255,0.9);background:rgba(90,173,26,0.18);border:1px solid rgba(255,255,255,0.08)">'
+            f'color:#166534;background:#f0fdf4;border:1px solid #bbf7d0">'
             f'&#x2705; {positive_count} Positive</td>'
         )
     badges_html = "\n    ".join(badges)
@@ -241,12 +240,12 @@ def _render_hero(client_name: str, date_display: str, subnet: str,
 
 <!-- HERO HEADER -->
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-<tr><td class="hero-bg" style="background:linear-gradient(160deg,#080e14 0%,#0d1f12 35%,#0a1a1a 65%,#0f1923 100%);padding:50px 20px 40px;text-align:center">
+<tr><td class="hero-bg" style="background:linear-gradient(160deg,#ffffff 0%,#f0fdf4 30%,#e8f5d9 60%,#f0fdf4 100%);padding:50px 20px 40px;text-align:center">
   <img src="{LOGO_URL}" alt="Kukui IT" width="56" height="56" referrerpolicy="no-referrer" style="display:inline-block;max-height:56px;margin-bottom:18px">
-  <h1 class="hero-title" style="font-size:28px;font-weight:800;color:#ffffff;letter-spacing:-0.5px;margin:0 0 6px 0">&#x1F512; Network Security Audit Report</h1>
-  <p class="hero-subtitle" style="color:rgba(255,255,255,0.5);font-size:12px;font-weight:400;letter-spacing:1.5px;text-transform:uppercase;margin:0 0 16px 0">{_esc(client_name)} &mdash; Comprehensive Vulnerability Assessment</p>
+  <h1 class="hero-title" style="font-size:28px;font-weight:800;color:#1e293b;letter-spacing:-0.5px;margin:0 0 6px 0">&#x1F512; Network Security Audit Report</h1>
+  <p class="hero-subtitle" style="color:#64748b;font-size:12px;font-weight:400;letter-spacing:1.5px;text-transform:uppercase;margin:0 0 16px 0">{_esc(client_name)} &mdash; Comprehensive Vulnerability Assessment</p>
   <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center">
-  <tr><td style="padding:7px 22px;border-radius:100px;background:rgba(90,173,26,0.12);border:1px solid rgba(90,173,26,0.25);color:rgba(255,255,255,0.85);font-size:13px;font-weight:500">
+  <tr><td style="padding:7px 22px;border-radius:100px;background:rgba(90,173,26,0.10);border:1px solid rgba(90,173,26,0.30);color:#3d7a0e;font-size:13px;font-weight:500">
     &#x1F334; Performed by Kukui IT &mdash; {_esc(date_display)} &bull; {_esc(subnet)}
   </td></tr>
   </table>
@@ -256,7 +255,7 @@ def _render_hero(client_name: str, date_display: str, subnet: str,
   </tr>
   </table>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:20px">
-  <tr><td style="height:3px;background:linear-gradient(90deg,transparent,#5aad1a,rgba(59,130,246,0.6),#5aad1a,transparent)">&nbsp;</td></tr>
+  <tr><td style="height:3px;background:linear-gradient(90deg,transparent,#5aad1a,rgba(59,130,246,0.4),#5aad1a,transparent)">&nbsp;</td></tr>
   </table>
 </td></tr>
 </table>"""
