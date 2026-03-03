@@ -354,6 +354,12 @@ _app_state.runtime_config = {
     "self_compact": DEFAULT_SELF_COMPACT,
     "auto_name_enabled": get_config("auto_name_enabled", "0") == "1",
     "claude_auto_compact_pct": get_config("claude_auto_compact_pct", "none"),
+    "listener_enabled": get_config("listener_enabled", "0") == "1",
+    "listener_mode": get_config("listener_mode", "local"),
+    "listener_remote_ip": get_config("listener_remote_ip", ""),
+    "listener_remote_port": get_config("listener_remote_port", "7000"),
+    "listener_username": get_config("listener_username", ""),
+    "listener_room": get_config("listener_room", ""),
 }
 # Module-level aliases — existing code (and lazy imports from routes) can still use these.
 # All point to the same dict/list objects on _app_state, so mutations are shared.
@@ -2835,6 +2841,40 @@ async def api_global_events(req: Request):
     )
 
 
+# --- Listener Wake Endpoint ---
+
+_last_wake_event_time = 0.0
+
+@app.post("/api/listener/wake")
+async def api_listener_wake(req: Request):
+    """Receive wake word event from remote Jarvis listener."""
+    global _last_wake_event_time
+    now = time.time()
+    if now - _last_wake_event_time < 2.0:
+        return {"ok": True, "debounced": True}
+    _last_wake_event_time = now
+
+    if not _runtime_config.get("listener_enabled"):
+        return JSONResponse({"ok": False, "error": "Listener not enabled"}, status_code=403)
+    if _runtime_config.get("listener_mode") != "remote":
+        return JSONResponse({"ok": False, "error": "Listener not in remote mode"}, status_code=403)
+
+    try:
+        body = await req.json()
+    except Exception:
+        body = {}
+
+    _broadcast_global_event({
+        "type": "listener_wake",
+        "score": body.get("score", 0),
+        "source": body.get("source", "unknown"),
+        "username": body.get("username", ""),
+        "room": body.get("room", ""),
+        "ts": int(now * 1000),
+    })
+    return {"ok": True}
+
+
 # --- OpenRouter Config ---
 
 @app.get("/api/openrouter/config")
@@ -3345,6 +3385,21 @@ async def api_config_set(req: Request):
             set_config("claude_auto_compact_pct", val)
 
     # (Claude token now handled by /api/claude/config)
+
+    # --- Listener config keys ---
+    for lk in ("listener_enabled", "listener_mode", "listener_remote_ip",
+               "listener_remote_port", "listener_username", "listener_room"):
+        if lk in body:
+            val = body[lk]
+            if lk == "listener_enabled":
+                _runtime_config[lk] = bool(val)
+                set_config(lk, "1" if val else "0")
+            elif lk == "listener_mode" and str(val) in ("local", "remote"):
+                _runtime_config[lk] = str(val)
+                set_config(lk, str(val))
+            else:
+                _runtime_config[lk] = str(val)[:200]
+                set_config(lk, str(val)[:200])
 
     return {"ok": True, **_runtime_config}
 

@@ -7,6 +7,13 @@
 const API = '';
 let APP_NAME = 'KukuiBot'; // Updated from /api/status on init
 
+// --- Listener CSS ---
+(function() {
+  const s = document.createElement('style');
+  s.textContent = '.listener-on { box-shadow: 0 0 0 2px rgba(74,222,128,0.5); }';
+  document.head.appendChild(s);
+})();
+
 // --- Auth 401 guard ---
 // Redirect to login on 401 from any API call (session expired / not authenticated).
 let _redirectingToLogin = false;
@@ -211,6 +218,12 @@ const SILENCE_TIMEOUT_MS = 15000;
 const MIC_IDLE_TIMEOUT_MS = 15000;
 const hasSpeechAPI = (typeof webkitSpeechRecognition !== 'undefined') || (typeof SpeechRecognition !== 'undefined');
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+// --- Listener (always-on voice) ---
+let listenerActive = false;
+let listenerMode = 'local';
+let _listenerRearmTimer = null;
+const LISTENER_REARM_DELAY_MS = 1500;
 
 // --- Input button state (mic vs send) ---
 let inputHasText = false;
@@ -653,6 +666,17 @@ function connectGlobalEvents() {
           const changed = await syncTabsFromServerSessions(80, { forceServerLabels: true, serverAuthoritative: true });
           if (changed) requestRender({ preserveScroll: true });
         }, 1000);
+      } else if (evt.type === 'listener_wake') {
+        if (listenerActive && listenerMode === 'remote' && document.hasFocus()) {
+          const input = document.getElementById('input');
+          if (!input || !input.value.trim()) {
+            console.log('[Listener] Wake from ' + (evt.username || '?') + ' in ' + (evt.room || '?') + ' (score=' + evt.score + ')');
+            beep();
+            if (!voiceActive && !isTabLoading(activeTab())) {
+              startVoice();
+            }
+          }
+        }
       }
     } catch (err) { console.warn('Global SSE parse error:', err); }
   };
@@ -3582,12 +3606,14 @@ function voiceAutoSend() {
     if (tab) { tab.draft = text; persistTabs(); }
     requestRender();
     setTimeout(() => send(), 50);
+    if (listenerActive && listenerMode === 'local') listenerRearm();
   } else {
     // Preserve any existing text in the input box
     const input = document.getElementById('input');
     const tab = activeTab();
     if (input && tab) { tab.draft = input.value || ''; persistTabs(); }
     requestRender();
+    if (listenerActive && listenerMode === 'local') listenerRearm();
   }
 }
 
@@ -3703,6 +3729,7 @@ function stopVoice(shouldSend) {
   } else {
     requestRender({ preserveScroll: true });
   }
+  if (listenerActive && listenerMode === 'local') listenerRearm();
 }
 
 function cancelVoice() {
@@ -3721,6 +3748,37 @@ function cancelVoice() {
     if (input) { input.value = text; input.focus(); }
     if (tab) { tab.draft = text; persistTabs(); }
   }, 30);
+}
+
+// --- Continuous Listener ---
+function startListener() {
+  if (listenerActive) return;
+  listenerActive = true;
+  requestRender({ preserveScroll: true });
+  if (listenerMode === 'local') {
+    startVoice();
+  }
+  // Remote mode: passive — wake events arrive via SSE
+}
+
+function stopListener() {
+  listenerActive = false;
+  if (_listenerRearmTimer) { clearTimeout(_listenerRearmTimer); _listenerRearmTimer = null; }
+  if (voiceActive) { cleanupVoice(); voiceActive = false; voiceTranscript = ''; }
+  const _inp = document.getElementById('input');
+  if (_inp && isIOS) _inp.inputMode = '';
+  requestRender({ preserveScroll: true });
+}
+
+function listenerRearm() {
+  if (!listenerActive || listenerMode !== 'local') return;
+  if (_listenerRearmTimer) clearTimeout(_listenerRearmTimer);
+  _listenerRearmTimer = setTimeout(() => {
+    _listenerRearmTimer = null;
+    if (listenerActive && listenerMode === 'local' && !voiceActive && !isTabLoading(activeTab())) {
+      startVoice();
+    }
+  }, LISTENER_REARM_DELAY_MS);
 }
 
 function handleMicClick() {
@@ -3808,6 +3866,7 @@ function updateInputBtn() {
 
   btn.classList.toggle('has-text', hasText);
   btn.classList.toggle('voice-active', listening);
+  btn.classList.toggle('listener-on', listenerActive);
 
   if (listening) {
     btn.title = 'Send voice message';
@@ -5863,6 +5922,10 @@ async function refreshMeta() {
   try {
     const cfg = await fetch(API + '/api/config').then(r => r.json());
     if (cfg.reasoning_effort) reasoningEffort = cfg.reasoning_effort;
+    if (cfg.listener_enabled) {
+      listenerMode = cfg.listener_mode || 'local';
+      startListener();
+    }
   } catch {}
   requestRender({ preserveScroll: true });
 }
