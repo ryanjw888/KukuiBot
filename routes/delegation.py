@@ -797,15 +797,27 @@ async def _deliver_or_queue_parent_notification(
                             "SELECT session_id FROM tab_meta WHERE worker_identity = ? ORDER BY rowid DESC",
                             ("dev-manager",)
                         ).fetchall()
+                    # Prefer a dev-manager session with an active subprocess
+                    alive_candidate = None
+                    any_candidate = None
                     for (_fb_sid,) in _fb_rows:
-                        if _fb_sid.startswith("tab-claude"):
-                            target_sid = _fb_sid
-                            resolved = True
-                            logger.info(
-                                f"Delegation notify: fallback routed {parent_sid} → {_fb_sid} (dev-manager) "
-                                f"({task_id}:{to_status})"
-                            )
+                        if not _fb_sid.startswith("tab-claude"):
+                            continue
+                        if any_candidate is None:
+                            any_candidate = _fb_sid
+                        proc = pool.get(_fb_sid)
+                        if proc and proc.proc is not None and proc.proc.returncode is None:
+                            alive_candidate = _fb_sid
                             break
+                    chosen = alive_candidate or any_candidate
+                    if chosen:
+                        target_sid = chosen
+                        resolved = True
+                        logger.info(
+                            f"Delegation notify: fallback routed {parent_sid} → {chosen} "
+                            f"(dev-manager, alive={alive_candidate is not None}) "
+                            f"({task_id}:{to_status})"
+                        )
                 except Exception as e:
                     logger.warning(f"Delegation notify: dev-manager fallback lookup failed: {e}")
             if not resolved:
@@ -1177,12 +1189,27 @@ async def _system_wake():
         ]
         for ntp in non_tab_parents:
             # _deliver_or_queue_parent_notification routes claude-code-api to
-            # dev-manager tabs. Pre-compute which tabs will be fallback targets.
+            # dev-manager tabs. Pre-compute which tab will be the fallback target
+            # using the same alive-subprocess preference as the routing logic.
             if _is_claude_session(ntp):
                 pool = get_claude_pool()
                 if pool and not pool.get(ntp):
-                    # No direct subprocess — will fallback to dev-manager tab
-                    fallback_targets.update(mgr_tab_sids & wake_sessions)
+                    # No direct subprocess — will fallback to dev-manager tab.
+                    # Mirror the routing logic: prefer alive subprocess.
+                    alive_candidate = None
+                    any_candidate = None
+                    for msid in sorted(mgr_tab_sids & wake_sessions):
+                        if not msid.startswith("tab-claude"):
+                            continue
+                        if any_candidate is None:
+                            any_candidate = msid
+                        proc = pool.get(msid)
+                        if proc and proc.proc is not None and proc.proc.returncode is None:
+                            alive_candidate = msid
+                            break
+                    resolved_target = alive_candidate or any_candidate
+                    if resolved_target:
+                        fallback_targets.add(resolved_target)
 
         # Process non-tab parents first (their fallback routing delivers to manager tabs).
         # Merge any tasks owned by the fallback target into the message so only one
