@@ -55,15 +55,10 @@ def _openrouter_model(session_id: str) -> str:
 
 def _or_model_config(model: str) -> dict:
     """Get config for an OpenRouter model — merged built-in + user overrides."""
-    from server_helpers import _or_builtin_models  # avoid circular at module level
-    # Lazy import the functions from server.py that manage OR model config
-    # These are still in server.py for now since they're also used by settings endpoints
     try:
-        # Import the live functions
         import server as _srv
         return _srv._or_model_config(model)
     except (ImportError, AttributeError):
-        # Fallback — return safe defaults
         return {"max_tokens": 16384, "reasoning": "", "temperature": 0.7}
 
 
@@ -154,6 +149,13 @@ async def process_chat_openrouter(
         api_key = _openrouter_api_key()
         if not api_key:
             await _emit_event(session_id, queue, {"type": "error", "message": "No OpenRouter API key configured. Add it in Settings."}, run_id=run_id)
+            # Save error to history so delegation monitor can detect the failure
+            try:
+                items_err, _, _ = load_history(session_id)
+                items_err.append({"role": "assistant", "content": "[ERROR] No OpenRouter API key configured. Add it in Settings."})
+                save_history(session_id, items_err)
+            except Exception:
+                pass
             return
 
         model = _openrouter_model(session_id)
@@ -243,16 +245,37 @@ async def process_chat_openrouter(
                     final_text = stream_text
                     break
 
-            resp = await run_with_keepalive(
-                openrouter_chat(
-                    messages, model=model, api_key=api_key,
-                    max_tokens=model_max_tokens, temperature=model_temperature,
-                    tools=TOOL_DEFINITIONS if tools_enabled else None,
-                    tool_choice="auto", reasoning_effort=effort,
-                    client=_or_client,
-                ),
-                session_id, queue, run_id, emit_event=_emit_event,
-            )
+            _TOOL_CALL_TIMEOUT_S = 120  # Hard timeout for tool-calling requests
+            try:
+                resp = await asyncio.wait_for(
+                    run_with_keepalive(
+                        openrouter_chat(
+                            messages, model=model, api_key=api_key,
+                            max_tokens=model_max_tokens, temperature=model_temperature,
+                            tools=TOOL_DEFINITIONS if tools_enabled else None,
+                            tool_choice="auto", reasoning_effort=effort,
+                            client=_or_client,
+                        ),
+                        session_id, queue, run_id, emit_event=_emit_event,
+                    ),
+                    timeout=_TOOL_CALL_TIMEOUT_S,
+                )
+            except asyncio.TimeoutError:
+                if tools_enabled:
+                    logger.warning(f"[openrouter] Tool-calling request timed out for {model} after {_TOOL_CALL_TIMEOUT_S}s — retrying without tools")
+                    tools_enabled = False
+                    openrouter_tools_unsupported_until[model] = time.time() + _OPENROUTER_TOOLS_UNSUPPORTED_TTL_S
+                    await _emit_event(session_id, queue, {
+                        "type": "info",
+                        "message": f"Tool-calling request timed out for {model} — retrying without tools.",
+                    }, run_id=run_id)
+                    continue
+                # Timeout on a no-tools request — save error and bail
+                logger.error(f"[openrouter] Non-tool request also timed out for {model} after {_TOOL_CALL_TIMEOUT_S}s")
+                items.append({"role": "assistant", "content": f"[ERROR] OpenRouter request timed out after {_TOOL_CALL_TIMEOUT_S}s."})
+                save_history(session_id, items, last_api_usage=usage_info or {"provider": "openrouter", "model": model})
+                await _emit_event(session_id, queue, {"type": "error", "message": f"OpenRouter request timed out after {_TOOL_CALL_TIMEOUT_S}s."}, run_id=run_id)
+                return
             if not resp.get("ok"):
                 err = str(resp.get("error", "OpenRouter request failed"))
                 status_code = int(resp.get("status_code", 0) or 0)
@@ -408,6 +431,8 @@ async def process_chat_openrouter(
             save_history(session_id, items, last_api_usage=usage_info or {"provider": "openrouter", "model": model})
 
         if not final_text.strip():
+            # Save error marker so delegation monitor can detect the failure
+            items.append({"role": "assistant", "content": "[ERROR] OpenRouter returned empty response."})
             save_history(session_id, items, last_api_usage=usage_info or {"provider": "openrouter", "model": model})
             _or_log_msg = f"{attachment_summary(attachments)}\n{user_message}" if attachments else user_message
             _append_to_chat_log(session_id, "user", _or_log_msg)
