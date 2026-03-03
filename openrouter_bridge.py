@@ -54,6 +54,7 @@ DEFAULT_MODELS = {
     "google/gemini-2.5-flash": "Gemini 2.5 Flash",
     "google/gemini-2.5-pro": "Gemini 2.5 Pro",
     "google/gemini-3.1-pro-preview": "Gemini 3.1 Pro Preview",
+    "moonshotai/kimi-k2.5": "Kimi K2.5 (Moonshot)",
     "x-ai/grok-3": "Grok 3",
     "x-ai/grok-3-mini": "Grok 3 Mini",
     "meta-llama/llama-4-maverick": "Llama 4 Maverick",
@@ -120,6 +121,7 @@ async def openrouter_chat(
         "Content-Type": "application/json",
         "HTTP-Referer": "https://kukuibot.local",
         "X-Title": "KukuiBot",
+        "X-OpenRouter-Privacy": "enabled",  # Enable Zero Data Retention (ZDR)
     }
 
     payload = {
@@ -218,6 +220,7 @@ async def openrouter_stream(
         "Content-Type": "application/json",
         "HTTP-Referer": "https://kukuibot.local",
         "X-Title": "KukuiBot",
+        "X-OpenRouter-Privacy": "enabled",  # Enable Zero Data Retention (ZDR)
     }
 
     payload = {

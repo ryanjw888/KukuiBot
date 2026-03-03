@@ -1253,15 +1253,14 @@
         </div>
 
         <div id="listener-remote-panel" style="margin-top:12px;padding:10px;background:var(--surface2);border-radius:8px;display:none;">
-          <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Receives wake events from a remote Jarvis listener. When "Hey Jarvis" is detected, browser activates STT.</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Wake word detection → record speech → Whisper STT → Jarvis chat → Sonos TTS response.</div>
           <div style="display:flex;flex-direction:column;gap:8px;">
             <div>
-              <label style="font-size:12px;color:var(--muted);">IP Address</label>
-              <input type="text" id="listener-remote-ip" placeholder="192.168.1.x" style="width:100%;">
+              <label style="font-size:12px;color:var(--muted);">Jarvis Backend</label>
+              <input type="text" id="listener-remote-ip" style="width:100%;" readonly>
             </div>
-            <div>
-              <label style="font-size:12px;color:var(--muted);">Port</label>
-              <input type="number" id="listener-remote-port" placeholder="7000" value="7000" style="width:100%;">
+            <div style="display:none;">
+              <input type="number" id="listener-remote-port" value="5080">
             </div>
             <div>
               <label style="font-size:12px;color:var(--muted);">Username</label>
@@ -1817,8 +1816,8 @@ function loadListenerConfig() {
   const mode = config.listener_mode || 'local';
   document.getElementById('listener-enabled-toggle').className = 'toggle' + (enabled ? ' on' : '');
   document.getElementById('listener-mode-select').value = mode;
-  document.getElementById('listener-remote-ip').value = config.listener_remote_ip || '';
-  document.getElementById('listener-remote-port').value = config.listener_remote_port || '7000';
+  document.getElementById('listener-remote-ip').value = 'http://127.0.0.1:5080';
+  document.getElementById('listener-remote-port').value = config.listener_remote_port || '5080';
   document.getElementById('listener-username').value = config.listener_username || '';
   document.getElementById('listener-room').value = config.listener_room || '';
   document.getElementById('listener-local-panel').style.display = mode === 'local' ? 'block' : 'none';

@@ -214,6 +214,7 @@ let voiceTranscript = '';
 let speechRecognition = null;
 let silenceTimer = null;
 let lastTranscriptTime = 0;
+let _wakeTriggeredVoice = false;
 const SILENCE_TIMEOUT_MS = 15000;
 const MIC_IDLE_TIMEOUT_MS = 15000;
 const hasSpeechAPI = (typeof webkitSpeechRecognition !== 'undefined') || (typeof SpeechRecognition !== 'undefined');
@@ -671,9 +672,8 @@ function connectGlobalEvents() {
           const input = document.getElementById('input');
           if (!input || !input.value.trim()) {
             console.log('[Listener] Wake from ' + (evt.username || '?') + ' in ' + (evt.room || '?') + ' (score=' + evt.score + ')');
-            beep();
             if (!voiceActive && !isTabLoading(activeTab())) {
-              startVoice();
+              startVoice({fromWake: true});
             }
           }
         }
@@ -806,23 +806,27 @@ async function _loadOpenRouterModels(force) {
     const r = await fetch(API + '/api/openrouter/config', { headers: { 'Accept': 'application/json' } });
     if (!r.ok) return;
     const d = await r.json();
-    if (!d.has_api_key) { _orModelsLoaded = false; return; }
     const models = d.models || [];
+
+    // Load models into MODELS registry even without API key (they'll be marked unavailable)
     for (const m of models) {
       // Build a safe key from model ID: "google/gemini-3.1-pro-preview" → "openrouter_gemini_3_1_pro_preview"
       const safeKey = 'openrouter_' + m.id.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
       if (MODELS[safeKey]) continue; // don't overwrite if already exists
       const reasoning = m.reasoning ? ` · reasoning: ${m.reasoning}` : '';
-      
+
       // Detect provider-specific models and use custom icons
       const isAnthropic = m.id.toLowerCase().includes('anthropic') || m.id.toLowerCase().includes('claude');
       const isGoogle = m.id.toLowerCase().includes('google') || m.id.toLowerCase().includes('gemini');
+      const isMoonshot = m.id.toLowerCase().includes('moonshot') || m.id.toLowerCase().includes('kimi');
       const icon = isAnthropic
         ? '<img src="/claude-icon.svg" style="width:1em;height:1em;vertical-align:-0.1em">'
         : isGoogle
         ? '<img src="https://brandlogos.net/wp-content/uploads/2025/03/gemini_icon-logo_brandlogos.net_aacx5.png" style="width:1em;height:1em;vertical-align:-0.1em">'
+        : isMoonshot
+        ? '🌙'
         : '🌐';
-      
+
       MODELS[safeKey] = {
         name: `${m.label} (OpenRouter)`,
         shortName: m.label,
@@ -836,6 +840,8 @@ async function _loadOpenRouterModels(force) {
         openrouterModel: m.id,
       };
     }
+
+    // Mark as loaded (models will show in dropdown; API key checked at runtime)
     _orModelsLoaded = true;
   } catch (e) {
     console.warn('Failed to load OpenRouter models:', e);
@@ -2727,8 +2733,8 @@ function _isModelAvailable(key, m) {
   if (_isClaudeModel(key)) return _claudeBridgeUp;
   // Anthropic API models require the API key to be validated (only loaded if has_api_key)
   if (m.model === 'anthropic') return _anthropicApiConnected;
-  // OpenRouter models require the API key (only loaded if config returned models)
-  if (m.model === 'openrouter') return _orModelsLoaded;
+  // OpenRouter models: always show in dropdown (will error gracefully if no API key at runtime)
+  if (m.model === 'openrouter') return true;
   // Codex/Spark — available only when OpenAI is connected
   if (key === 'codex' || key === 'spark') return _openaiConnected;
   return true;
@@ -3592,6 +3598,7 @@ function cleanupVoice() {
     try { speechRecognition.abort(); } catch {}
     speechRecognition = null;
   }
+  _wakeTriggeredVoice = false;
 }
 
 function voiceAutoSend() {
@@ -3637,7 +3644,27 @@ function startSilenceDetection() {
   }, 500);
 }
 
-function startVoice() {
+function startWakeIdleDetection() {
+  // Wake-triggered: only shut off mic if no speech at all for 15s.
+  // No auto-send — user decides when to send.
+  if (silenceTimer) clearInterval(silenceTimer);
+  silenceTimer = setInterval(() => {
+    const elapsed = Date.now() - lastTranscriptTime;
+    if (elapsed >= MIC_IDLE_TIMEOUT_MS && !voiceTranscript.trim()) {
+      console.log("[Voice] Wake: no speech detected — mic off after 15s");
+      const input = document.getElementById('input');
+      const tab = activeTab();
+      if (input && tab) { tab.draft = input.value || ''; persistTabs(); }
+      cleanupVoice();
+      voiceActive = false;
+      _wakeTriggeredVoice = false;
+      requestRender();
+    }
+  }, 500);
+}
+
+function startVoice(opts) {
+  const _fromWake = opts && opts.fromWake;
   const tab = activeTab();
   if (!hasSpeechAPI) {
     const tab = activeTab();
@@ -3706,8 +3733,16 @@ function startVoice() {
 
   recognition.start();
   speechRecognition = recognition;
-  startSilenceDetection();
-  beep();
+  if (_fromWake) {
+    // Wake-triggered: play chime immediately as voice activates
+    _wakeTriggeredVoice = true;
+    beep();
+    startWakeIdleDetection();
+  } else {
+    _wakeTriggeredVoice = false;
+    startSilenceDetection();
+    beep();
+  }
   console.log('[Voice] Started (Web Speech API)');
 }
 
@@ -6067,14 +6102,10 @@ async function loadOlderMessages(tab) {
 }
 
 // --- Beep ---
+const _beepAudio = new Audio('/blow.mp3');
+_beepAudio.volume = 0.3;
 function beep() {
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const osc = ctx.createOscillator(); const gain = ctx.createGain();
-    osc.type = 'sine'; osc.frequency.value = 880; gain.gain.value = 0.06;
-    osc.connect(gain); gain.connect(ctx.destination);
-    osc.start(); setTimeout(() => { osc.stop(); ctx.close(); }, 120);
-  } catch {}
+  try { _beepAudio.currentTime = 0; _beepAudio.play(); } catch {}
 }
 
 // --- Countdown ---

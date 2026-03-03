@@ -385,6 +385,7 @@ _OPENROUTER_BUILTIN_MODELS: dict[str, dict] = {
     "google/gemini-2.5-flash": {"label": "Gemini 2.5 Flash", "max_tokens": 16384, "reasoning": "high", "temperature": 0.4},
     "google/gemini-2.5-pro": {"label": "Gemini 2.5 Pro", "max_tokens": 32768, "reasoning": "high", "temperature": 0.4},
     "google/gemini-3.1-pro-preview": {"label": "Gemini 3.1 Pro", "max_tokens": 32768, "reasoning": "high", "temperature": 0.3},
+    "moonshotai/kimi-k2.5": {"label": "Kimi K2.5 (Moonshot)", "max_tokens": 32768, "reasoning": "high", "temperature": 0.7},
     "x-ai/grok-3": {"label": "Grok 3", "max_tokens": 16384},
     "x-ai/grok-3-mini": {"label": "Grok 3 Mini", "max_tokens": 16384},
     "meta-llama/llama-4-maverick": {"label": "Llama 4 Maverick", "max_tokens": 16384},

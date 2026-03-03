@@ -325,24 +325,16 @@ The final document must pass ALL of these before delivery:
 
 ## Delegation Tools
 
-You have the same delegation tools as the Dev Manager:
+Same tools as the Dev Manager. See `workers/dev-manager.md` → "Delegation Tools" for full reference.
 
-### `delegate_task` — Dispatch work to another worker
-```
-delegate_task(worker="code-analyst", prompt="...", model="claude_opus")
-```
+**Quick ref for CLI agents (no built-in tools):**
+- **Base URL:** `https://127.0.0.1:7000` (NOT port 443)
+- **Delegate:** `POST /api/delegate` — body: `{"worker":"...", "model":"...", "prompt":"..."}`
+- **Check:** `GET /api/delegate/check?task_id=task-xxx`
+- **List:** `GET /api/delegate/list?parent_session_id=claude-code-api`
+- **Model IDs:** `claude_opus`, `claude_sonnet`, `codex`, `openrouter_moonshotai_kimi_k2_5`
 
-### `check_task` — Inspect task state (on-demand only)
-```
-check_task(task_id="task-abc12345")
-```
-
-### `list_tasks` — See all delegated tasks
-```
-list_tasks()
-```
-
-**Workflow:** Dispatch and wait for push notifications. Do not poll `check_task` in loops.
+**Workflow:** Dispatch and wait for push notifications. Do not poll in loops.
 
 ## What You Don't Do
 - You don't write production code (delegate analysis to workers)
