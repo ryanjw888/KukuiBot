@@ -142,7 +142,7 @@ def _fts_available(db: sqlite3.Connection) -> bool:
         return False
 
 
-def get_cached_messages(folder: str, max_results: int = 50, search: str = "") -> list[dict]:
+def get_cached_messages(folder: str, max_results: int = 50, search: str = "", offset: int = 0) -> list[dict]:
     """Get messages from cache. Uses FTS5 for search when available, LIKE as fallback."""
     try:
         db = _get_db()
@@ -161,8 +161,8 @@ def get_cached_messages(folder: str, max_results: int = 50, search: str = "") ->
                                FROM messages m
                                JOIN messages_fts fts ON m.id = fts.rowid
                                WHERE m.folder = ? AND messages_fts MATCH ?
-                               ORDER BY m.date_ts DESC LIMIT ?""",
-                            (folder, f'"{safe_search}"', max_results),
+                               ORDER BY m.date_ts DESC LIMIT ? OFFSET ?""",
+                            (folder, f'"{safe_search}"', max_results, offset),
                         ).fetchall()
                         return [_row_to_dict(r) for r in rows]
                     except Exception as e:
@@ -174,8 +174,8 @@ def get_cached_messages(folder: str, max_results: int = 50, search: str = "") ->
                               date_ts, snippet, is_read, has_attachments, attachment_info, synced_at
                        FROM messages
                        WHERE folder = ? AND (from_addr LIKE ? OR to_addr LIKE ? OR subject LIKE ? OR snippet LIKE ?)
-                       ORDER BY date_ts DESC LIMIT ?""",
-                    (folder, like, like, like, like, max_results),
+                       ORDER BY date_ts DESC LIMIT ? OFFSET ?""",
+                    (folder, like, like, like, like, max_results, offset),
                 ).fetchall()
             else:
                 rows = db.execute(
@@ -183,8 +183,8 @@ def get_cached_messages(folder: str, max_results: int = 50, search: str = "") ->
                               date_ts, snippet, is_read, has_attachments, attachment_info, synced_at
                        FROM messages
                        WHERE folder = ?
-                       ORDER BY date_ts DESC LIMIT ?""",
-                    (folder, max_results),
+                       ORDER BY date_ts DESC LIMIT ? OFFSET ?""",
+                    (folder, max_results, offset),
                 ).fetchall()
             return [_row_to_dict(r) for r in rows]
         finally:

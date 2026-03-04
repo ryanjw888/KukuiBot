@@ -144,6 +144,7 @@ async def api_gmail_search(req: Request):
     folder = body.get("folder", "INBOX")
     max_results = min(int(body.get("max_results", 20)), 50)
     search = body.get("search", "")
+    offset = int(body.get("offset", 0))
     use_cache = body.get("cache", True)
     loop = asyncio.get_event_loop()
 
@@ -152,14 +153,14 @@ async def api_gmail_search(req: Request):
     if search:
         try:
             messages = await loop.run_in_executor(
-                None, lambda: list_messages(folder=folder, max_results=max_results, search=search))
+                None, lambda: list_messages(folder=folder, max_results=max_results, search=search, offset=offset))
             # Cache the results
             try:
                 import email_cache
                 email_cache.upsert_messages(messages, folder)
             except Exception:
                 pass
-            return {"ok": True, "messages": messages, "count": len(messages), "source": "imap"}
+            return {"ok": True, "messages": messages, "count": len(messages), "source": "imap", "has_more": len(messages) == max_results}
         except PermissionError as e:
             return JSONResponse({"error": str(e)}, status_code=403)
         except Exception as e:
@@ -170,7 +171,7 @@ async def api_gmail_search(req: Request):
     if use_cache:
         try:
             import email_cache
-            cached = email_cache.get_cached_messages(folder, max_results, search)
+            cached = email_cache.get_cached_messages(folder, max_results, search, offset)
             if cached:
                 # Remap field names to match IMAP response format
                 messages = []
@@ -187,21 +188,21 @@ async def api_gmail_search(req: Request):
                         "snippet": c.get("snippet", ""),
                         "has_attachments": c.get("has_attachments", False),
                     })
-                return {"ok": True, "messages": messages, "count": len(messages), "source": "cache"}
+                return {"ok": True, "messages": messages, "count": len(messages), "source": "cache", "has_more": len(messages) == max_results}
         except Exception as e:
             logger.warning(f"Gmail cache read failed, falling back to IMAP: {e}")
 
     # IMAP fallback
     try:
         messages = await loop.run_in_executor(
-            None, lambda: list_messages(folder=folder, max_results=max_results, search=search))
+            None, lambda: list_messages(folder=folder, max_results=max_results, search=search, offset=offset))
         # Cache the results in background
         try:
             import email_cache
             email_cache.upsert_messages(messages, folder)
         except Exception:
             pass
-        return {"ok": True, "messages": messages, "count": len(messages), "source": "imap"}
+        return {"ok": True, "messages": messages, "count": len(messages), "source": "imap", "has_more": len(messages) == max_results}
     except PermissionError as e:
         return JSONResponse({"error": str(e)}, status_code=403)
     except Exception as e:

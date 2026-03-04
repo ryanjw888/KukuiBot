@@ -35,6 +35,8 @@ const EmailModule = (function () {
   let inboxSearch = '';          // IMAP search query
   let inboxLoading = false;
   let searchLoading = false;     // true while a search query is in-flight
+  let inboxLoadingMore = false;  // true while fetching next page (infinite scroll)
+  let inboxHasMore = true;       // false when server says no more messages
   let selectedMessage = null;   // full message object from /api/gmail/message
   let selectedUid = null;       // uid of currently selected message
   let messageLoading = false;
@@ -260,6 +262,7 @@ const EmailModule = (function () {
   // --- Inbox data fetching ---
 
   async function fetchInbox(skipCache) {
+    inboxHasMore = true;
     const hadMessages = inboxMessages.length > 0;
     if (!hadMessages) {
       inboxLoading = true;
@@ -278,12 +281,35 @@ const EmailModule = (function () {
     });
     if (resp.ok && resp.messages) {
       inboxMessages = resp.messages;
+      inboxHasMore = resp.has_more !== false && resp.messages.length > 0;
       selectedUids.clear();
     } else if (resp.error) {
       console.error('fetchInbox error:', resp.error);
     }
     inboxLoading = false;
     searchLoading = false;
+    patchInboxList();
+  }
+
+  async function fetchInboxMore() {
+    if (inboxLoadingMore || !inboxHasMore || inboxLoading) return;
+    inboxLoadingMore = true;
+    patchInboxList(); // show spinner at bottom
+    const payload = { folder: inboxFolder, max_results: 50, offset: inboxMessages.length, search: inboxSearch };
+    const resp = await apiFetch('/api/gmail/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (resp.ok && resp.messages) {
+      const existingUids = new Set(inboxMessages.map(m => String(m.uid)));
+      const newMsgs = resp.messages.filter(m => !existingUids.has(String(m.uid)));
+      inboxMessages = [...inboxMessages, ...newMsgs];
+      inboxHasMore = resp.has_more !== false && resp.messages.length > 0;
+    } else {
+      inboxHasMore = false;
+    }
+    inboxLoadingMore = false;
     patchInboxList();
   }
 
@@ -1460,6 +1486,11 @@ const EmailModule = (function () {
           </div>
         </div>`;
       }).join('');
+      if (inboxLoadingMore) {
+        html += '<div class="inbox-load-more"><span class="email-spinner"></span></div>';
+      } else if (!inboxHasMore && inboxMessages.length > 0) {
+        html += '<div class="inbox-load-more" style="opacity:0.4;font-size:12px">No more messages</div>';
+      }
     }
     return html;
   }
@@ -1475,6 +1506,16 @@ const EmailModule = (function () {
       const someChecked = inboxMessages.some(m => selectedUids.has(String(m.uid)));
       const allChecked = inboxMessages.length > 0 && inboxMessages.every(m => selectedUids.has(String(m.uid)));
       selAllEl.indeterminate = someChecked && !allChecked;
+    }
+    // Attach scroll listener for infinite scroll
+    const listEl = document.querySelector('.inbox-list');
+    if (listEl && !listEl._scrollAttached) {
+      listEl._scrollAttached = true;
+      listEl.addEventListener('scroll', () => {
+        if (listEl.scrollTop + listEl.clientHeight >= listEl.scrollHeight - 80) {
+          fetchInboxMore();
+        }
+      });
     }
   }
 
@@ -2661,6 +2702,7 @@ const EmailModule = (function () {
       activeTab = 'inbox';
     }
     inboxFolder = folderKey;
+    inboxHasMore = true;
     selectedMessage = null;
     selectedUid = null;
     selectedUids.clear();

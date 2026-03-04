@@ -575,7 +575,7 @@ def _build_imap_search(query: str) -> str | tuple:
 
 # --- Read Operations ---
 
-def list_messages(folder: str = "INBOX", max_results: int = 20, search: str = "") -> list[dict]:
+def list_messages(folder: str = "INBOX", max_results: int = 20, search: str = "", offset: int = 0) -> list[dict]:
     """
     List messages from a Gmail folder via IMAP.
 
@@ -616,8 +616,13 @@ def list_messages(folder: str = "INBOX", max_results: int = 20, search: str = ""
         if not msg_nums:
             return []
 
-        # Get the most recent N messages
-        msg_nums = msg_nums[-max_results:]
+        # Get the most recent N messages (with offset for pagination)
+        total = len(msg_nums)
+        end_idx = total - offset
+        start_idx = max(0, end_idx - max_results)
+        if end_idx <= 0:
+            return []
+        msg_nums = msg_nums[start_idx:end_idx]
         msg_nums.reverse()  # newest first
 
         from injection_guard import scan_and_filter
