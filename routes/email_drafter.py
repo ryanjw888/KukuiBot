@@ -127,6 +127,22 @@ async def api_drafter_drafts():
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@router.get("/api/drafter/drafts/{uid}/original")
+async def api_drafter_original(uid: str):
+    """Fetch the original email that a draft is replying to."""
+    from email_drafter import get_original_for_draft
+    try:
+        result = await asyncio.to_thread(get_original_for_draft, uid)
+        if result.get("not_found"):
+            return JSONResponse(result, status_code=404)
+        return result
+    except PermissionError as e:
+        return JSONResponse({"error": str(e)}, status_code=403)
+    except Exception as e:
+        logger.warning(f"get original error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @router.post("/api/drafter/drafts/{uid}/send")
 async def api_drafter_send(uid: str):
     """Send a specific auto-drafted email."""

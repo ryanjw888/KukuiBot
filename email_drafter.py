@@ -1555,6 +1555,79 @@ def list_drafts() -> list[dict]:
     return drafts
 
 
+def get_original_for_draft(uid: str) -> dict:
+    """Fetch the original email that a draft is replying to, via In-Reply-To header.
+
+    Returns {"ok": True, "from": ..., "to": ..., "subject": ..., "date": ..., "body": ..., "body_html": ...}
+    or {"ok": False, "error": "not_reply"} / {"ok": False, "not_found": True}.
+    """
+    from gmail_bridge import check_permission, _extract_body_both
+    check_permission("read_inbox")
+
+    imap = _imap_connect()
+    try:
+        status, _ = imap.select('"[Gmail]/Drafts"', readonly=True)
+        if status != "OK":
+            return {"ok": False, "error": "Could not open Drafts folder"}
+
+        status, msg_data = imap.fetch(uid.encode(), "(BODY.PEEK[])")
+        if status != "OK" or not msg_data or not msg_data[0]:
+            return {"ok": False, "error": f"Draft {uid} not found"}
+
+        raw = msg_data[0][1]
+        msg = email.message_from_bytes(raw)
+
+        original_message_id = msg.get("In-Reply-To", "").strip()
+        if not original_message_id:
+            return {"ok": False, "error": "not_reply"}
+
+        # Search for original in multiple folders
+        clean_id = original_message_id.strip("<>")
+        search_folders = ["INBOX", '"[Gmail]/All Mail"', '"[Gmail]/Sent Mail"']
+
+        for folder in search_folders:
+            try:
+                status, _ = imap.select(folder, readonly=True)
+                if status != "OK":
+                    continue
+                status, data = imap.search(None, f'HEADER Message-ID "<{clean_id}>"')
+                if status != "OK" or not data[0]:
+                    continue
+
+                num = data[0].split()[0]
+                status, orig_data = imap.fetch(num, "(BODY.PEEK[])")
+                if status != "OK" or not orig_data or not orig_data[0]:
+                    continue
+
+                orig_msg = email.message_from_bytes(orig_data[0][1])
+                orig_from = orig_msg.get("From", "")
+                orig_to = orig_msg.get("To", "")
+                orig_subject = _parse_header(orig_msg.get("Subject", ""))
+                orig_date = orig_msg.get("Date", "")
+                orig_plain, orig_html = _extract_body_both(orig_msg)
+
+                return {
+                    "ok": True,
+                    "from": orig_from,
+                    "to": orig_to,
+                    "subject": orig_subject,
+                    "date": orig_date,
+                    "body": orig_plain,
+                    "body_html": orig_html,
+                }
+            except Exception as e:
+                logger.debug(f"Original search error in {folder}: {e}")
+                continue
+
+        return {"ok": False, "not_found": True}
+
+    finally:
+        try:
+            imap.logout()
+        except Exception:
+            pass
+
+
 def send_draft(uid: str) -> dict:
     """Send an auto-drafted email by UID. Reads from Drafts, sends via SMTP, trashes draft."""
     from gmail_bridge import check_permission, _get_config as gmail_config
