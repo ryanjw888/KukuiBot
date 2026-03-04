@@ -2625,6 +2625,19 @@ body {
 }
 .inbox-compose-field:focus { outline: none; border-color: var(--accent); }
 .inbox-compose-body { resize: vertical; min-height: 200px; flex: 1; }
+/* Quill rich text editor in compose */
+.inbox-compose-quill { min-height: 200px; flex: 1; }
+.inbox-compose-quill .ql-editor { min-height: 180px; color: var(--text); font-size: 13px; font-family: inherit; }
+.inbox-compose-quill .ql-editor.ql-blank::before { color: var(--muted); font-style: normal; }
+.inbox-compose-form .ql-toolbar.ql-snow { background: var(--surface); border-color: var(--border-light); border-radius: 6px 6px 0 0; }
+.inbox-compose-form .ql-container.ql-snow { border-color: var(--border-light); border-radius: 0 0 6px 6px; background: var(--bg); }
+.inbox-compose-form .ql-toolbar .ql-stroke { stroke: var(--text); }
+.inbox-compose-form .ql-toolbar .ql-fill { fill: var(--text); }
+.inbox-compose-form .ql-toolbar .ql-picker-label { color: var(--text); }
+.inbox-compose-form .ql-toolbar button:hover .ql-stroke { stroke: var(--accent); }
+.inbox-compose-form .ql-toolbar button:hover .ql-fill { fill: var(--accent); }
+.inbox-compose-form .ql-toolbar button.ql-active .ql-stroke { stroke: var(--accent); }
+.inbox-compose-form .ql-toolbar button.ql-active .ql-fill { fill: var(--accent); }
 .inbox-compose-footer {
   display: flex; align-items: center; gap: 6px;
   padding: 8px 14px; border-top: 1px solid var(--border);

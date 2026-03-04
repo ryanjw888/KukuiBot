@@ -35,8 +35,10 @@ const EmailModule = (function () {
   let messageLoading = false;
   let inboxFolders = [];        // available IMAP folders
   let showCompose = false;      // compose form visible
-  let composeData = { to: '', subject: '', body: '' }; // compose form state
+  let composeData = { to: '', subject: '', body: '', body_html: null }; // compose form state
   let composeSending = false;
+  let composeRichMode = true;   // true = Quill rich text, false = plain textarea
+  let composeQuill = null;      // Quill editor instance
   let aiReplyLoading = false;
   let syncStatus = null;      // {total_cached, last_sync_ts, last_sync_ago_str, folders}
   let syncTimer = null;
@@ -241,19 +243,29 @@ const EmailModule = (function () {
       alert('To and Subject are required.');
       return;
     }
+    // Extract content from Quill if active
+    if (composeRichMode && composeQuill) {
+      composeData.body = composeQuill.getText().trim();
+      composeData.body_html = composeQuill.root.innerHTML;
+    } else {
+      composeData.body_html = null;
+    }
     composeSending = true;
     rerender();
+    const payload = { to: composeData.to, subject: composeData.subject, body: composeData.body };
+    if (composeData.body_html) payload.body_html = composeData.body_html;
     const resp = await apiFetch('/api/gmail/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(composeData),
+      body: JSON.stringify(payload),
     });
     composeSending = false;
     if (resp.error) {
       alert('Send error: ' + resp.error);
       rerender();
     } else {
-      composeData = { to: '', subject: '', body: '' };
+      _destroyComposeQuill();
+      composeData = { to: '', subject: '', body: '', body_html: null };
       showCompose = false;
       rerender();
       // Brief success feedback
@@ -264,15 +276,25 @@ const EmailModule = (function () {
 
   async function saveDraftCompose() {
     if (!composeData.to && !composeData.subject && !composeData.body) return;
+    // Extract content from Quill if active
+    if (composeRichMode && composeQuill) {
+      composeData.body = composeQuill.getText().trim();
+      composeData.body_html = composeQuill.root.innerHTML;
+    } else {
+      composeData.body_html = null;
+    }
+    const payload = { to: composeData.to, subject: composeData.subject, body: composeData.body };
+    if (composeData.body_html) payload.body_html = composeData.body_html;
     const resp = await apiFetch('/api/gmail/draft', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(composeData),
+      body: JSON.stringify(payload),
     });
     if (resp.error) {
       alert('Draft error: ' + resp.error);
     } else {
-      composeData = { to: '', subject: '', body: '' };
+      _destroyComposeQuill();
+      composeData = { to: '', subject: '', body: '', body_html: null };
       showCompose = false;
       rerender();
     }
@@ -997,6 +1019,67 @@ const EmailModule = (function () {
     el.innerHTML = html;
   }
 
+  // --- Quill Rich Text Editor ---
+
+  function _initComposeQuill() {
+    if (composeQuill) return;
+    if (typeof Quill === 'undefined') {
+      // Load Quill from CDN if not yet loaded
+      if (!document.getElementById('quill-css')) {
+        const link = document.createElement('link');
+        link.id = 'quill-css';
+        link.rel = 'stylesheet';
+        link.href = 'https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.snow.css';
+        document.head.appendChild(link);
+      }
+      if (!document.getElementById('quill-js')) {
+        const script = document.createElement('script');
+        script.id = 'quill-js';
+        script.src = 'https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js';
+        script.onload = () => requestAnimationFrame(() => _initComposeQuill());
+        document.head.appendChild(script);
+      }
+      return;
+    }
+    const container = document.getElementById('compose-editor');
+    if (!container) return;
+    composeQuill = new Quill('#compose-editor', {
+      theme: 'snow',
+      placeholder: 'Compose your message...',
+      modules: {
+        toolbar: [
+          ['bold', 'italic', 'underline', 'strike'],
+          [{ header: [1, 2, 3, false] }],
+          [{ list: 'ordered' }, { list: 'bullet' }],
+          ['link', 'clean'],
+        ],
+      },
+    });
+    // Set initial content if switching from plain text
+    if (composeData.body) {
+      composeQuill.setText(composeData.body);
+    }
+  }
+
+  function _destroyComposeQuill() {
+    if (composeQuill) {
+      composeQuill = null;
+    }
+  }
+
+  function toggleComposeMode() {
+    if (composeRichMode && composeQuill) {
+      // Switching to plain text: extract text from Quill
+      composeData.body = composeQuill.getText().trim();
+      _destroyComposeQuill();
+    }
+    composeRichMode = !composeRichMode;
+    rerender();
+    if (composeRichMode) {
+      requestAnimationFrame(() => _initComposeQuill());
+    }
+  }
+
   // --- Render: Inbox Tab ---
 
   function renderInboxTab() {
@@ -1004,9 +1087,16 @@ const EmailModule = (function () {
     let composeHtml = '';
     if (showCompose) {
       const title = composeData.subject && composeData.subject.startsWith('Re: ') ? 'Reply' : 'New Message';
+      const bodyEditor = composeRichMode
+        ? `<div id="compose-editor" class="inbox-compose-quill"></div>`
+        : `<textarea class="inbox-compose-field inbox-compose-body" rows="8" placeholder="Message body..."
+            oninput="EmailModule.updateCompose('body', this.value)">${escHtml(composeData.body)}</textarea>`;
+      const modeLabel = composeRichMode ? 'Rich Text' : 'Plain Text';
+      const toggleLabel = composeRichMode ? 'Switch to Plain Text' : 'Switch to Rich Text';
       composeHtml = `<div class="inbox-compose-overlay">
         <div class="inbox-compose-titlebar">
           <span class="inbox-compose-title">${title}</span>
+          <span class="inbox-compose-mode-label" style="font-size:11px;color:var(--muted);margin-left:8px">${modeLabel}</span>
           <button class="inbox-compose-close" onclick="EmailModule.closeCompose()" title="Close">&times;</button>
         </div>
         <div class="inbox-compose-form">
@@ -1014,17 +1104,21 @@ const EmailModule = (function () {
             oninput="EmailModule.updateCompose('to', this.value)" />
           <input class="inbox-compose-field" type="text" placeholder="Subject" value="${escHtml(composeData.subject)}"
             oninput="EmailModule.updateCompose('subject', this.value)" />
-          <textarea class="inbox-compose-field inbox-compose-body" rows="8" placeholder="Message body..."
-            oninput="EmailModule.updateCompose('body', this.value)">${escHtml(composeData.body)}</textarea>
+          ${bodyEditor}
         </div>
         <div class="inbox-compose-footer">
           <button class="email-action-btn primary" onclick="EmailModule.sendCompose()" ${composeSending ? 'disabled' : ''}>
             ${composeSending ? '<span class="email-spinner"></span> Sending...' : 'Send'}
           </button>
           <button class="email-action-btn" onclick="EmailModule.saveDraftCompose()">Save Draft</button>
+          <button class="email-action-btn" onclick="EmailModule.toggleComposeMode()" style="font-size:11px">${toggleLabel}</button>
           <button class="email-action-btn danger" onclick="EmailModule.closeCompose()" style="margin-left:auto">Discard</button>
         </div>
       </div>`;
+      // Initialize Quill after the DOM renders
+      if (composeRichMode) {
+        requestAnimationFrame(() => _initComposeQuill());
+      }
     }
 
     // Message list (with search bar at top)
@@ -1117,12 +1211,17 @@ const EmailModule = (function () {
   // --- Inbox UI actions ---
 
   function openCompose() {
+    _destroyComposeQuill();
     showCompose = true;
-    composeData = { to: '', subject: '', body: '' };
+    composeData = { to: '', subject: '', body: '', body_html: null };
     rerender();
+    if (composeRichMode) {
+      requestAnimationFrame(() => _initComposeQuill());
+    }
   }
 
   function closeCompose() {
+    _destroyComposeQuill();
     showCompose = false;
     rerender();
   }
@@ -1133,12 +1232,16 @@ const EmailModule = (function () {
 
   function replyTo() {
     if (!selectedMessage) return;
+    _destroyComposeQuill();
     const sm = selectedMessage;
     const reSubject = (sm.subject || '').startsWith('Re: ') ? sm.subject : 'Re: ' + (sm.subject || '');
     const quotedBody = '\n\n--- Original Message ---\nFrom: ' + (sm.from || '') + '\nDate: ' + (sm.date || '') + '\n\n' + (sm.body || '');
-    composeData = { to: sm.from || '', subject: reSubject, body: quotedBody };
+    composeData = { to: sm.from || '', subject: reSubject, body: quotedBody, body_html: null };
     showCompose = true;
     rerender();
+    if (composeRichMode) {
+      requestAnimationFrame(() => _initComposeQuill());
+    }
   }
 
   async function aiReply() {
@@ -1166,9 +1269,13 @@ const EmailModule = (function () {
     const reSubject = resp.subject || ('Re: ' + (sm.subject || ''));
     const aiText = (resp.reply_text || '').trimEnd();
     const quotedOriginal = '\n\n--- Original Message ---\nFrom: ' + (sm.from || '') + '\nDate: ' + (sm.date || '') + '\n\n' + (sm.body || '');
-    composeData = { to: sm.from || '', subject: reSubject, body: aiText + quotedOriginal };
+    _destroyComposeQuill();
+    composeData = { to: sm.from || '', subject: reSubject, body: aiText + quotedOriginal, body_html: null };
     showCompose = true;
     rerender();
+    if (composeRichMode) {
+      requestAnimationFrame(() => _initComposeQuill());
+    }
   }
 
   function openRedirect() {
@@ -1770,9 +1877,13 @@ const EmailModule = (function () {
     if (activeTab !== 'inbox') {
       activeTab = 'inbox';
     }
+    _destroyComposeQuill();
     showCompose = true;
-    composeData = { to: '', subject: '', body: '' };
+    composeData = { to: '', subject: '', body: '', body_html: null };
     rerender();
+    if (composeRichMode) {
+      requestAnimationFrame(() => _initComposeQuill());
+    }
   }
 
   function renderSidebar() {
@@ -1887,6 +1998,7 @@ const EmailModule = (function () {
     updateCompose,
     replyTo,
     aiReply,
+    toggleComposeMode,
     openRedirect,
     closeRedirect,
     updateRedirect,

@@ -288,11 +288,12 @@ async def api_gmail_draft(req: Request):
     to = body.get("to", "")
     subject = body.get("subject", "")
     email_body = body.get("body", "")
+    body_html = body.get("body_html") or None
     if not to or not subject:
         return JSONResponse({"error": "to and subject are required"}, status_code=400)
     try:
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, lambda: create_draft(to, subject, email_body))
+        result = await loop.run_in_executor(None, lambda: create_draft(to, subject, email_body, body_html=body_html))
         return {"ok": True, **result}
     except PermissionError as e:
         return JSONResponse({"error": str(e)}, status_code=403)
@@ -311,11 +312,12 @@ async def api_gmail_send(req: Request):
     to = body.get("to", "")
     subject = body.get("subject", "")
     email_body = body.get("body", "")
+    body_html = body.get("body_html") or None
     if not to or not subject:
         return JSONResponse({"error": "to and subject are required"}, status_code=400)
     try:
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, lambda: send_email(to, subject, email_body))
+        result = await loop.run_in_executor(None, lambda: send_email(to, subject, email_body, body_html=body_html))
         return {"ok": True, **result}
     except PermissionError as e:
         return JSONResponse({"error": str(e)}, status_code=403)
@@ -329,7 +331,7 @@ async def api_gmail_send(req: Request):
 @router.post("/api/gmail/redirect")
 async def api_gmail_redirect(req: Request):
     """Redirect (bounce) an email to a new recipient as-is.
-    Preserves full MIME (HTML, attachments). No permission checks, no sanitization."""
+    Preserves full MIME (HTML, attachments). Permission-checked and sanitized."""
     from gmail_bridge import redirect_email
     body = await req.json()
     folder = body.get("folder", "INBOX")
@@ -345,6 +347,10 @@ async def api_gmail_redirect(req: Request):
         result = await loop.run_in_executor(
             None, lambda: redirect_email(folder, uid, to, subject))
         return {"ok": True, **result}
+    except PermissionError as e:
+        return JSONResponse({"error": str(e)}, status_code=403)
+    except ValueError as e:
+        return JSONResponse({"error": str(e), "blocked": True}, status_code=422)
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=500)
     except Exception as e:

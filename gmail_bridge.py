@@ -31,6 +31,7 @@ import re as _re_module
 import smtplib
 import threading
 import time
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from config import KUKUIBOT_HOME
@@ -478,6 +479,37 @@ def _strip_html(html: str) -> str:
     return text.strip()
 
 
+def _html_to_plain(html: str) -> str:
+    """Convert HTML to readable plain text, preserving links and structure."""
+    import re
+    text = html
+    # Remove style/script blocks
+    text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<script[^>]*>.*?</script>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    # Convert links: <a href="url">text</a> -> text (url)
+    text = re.sub(r'<a\b[^>]*href\s*=\s*["\']([^"\']+)["\'][^>]*>(.*?)</a>',
+                  lambda m: f"{m.group(2).strip()} ({m.group(1)})" if m.group(2).strip() != m.group(1) else m.group(1),
+                  text, flags=re.IGNORECASE | re.DOTALL)
+    # List items
+    text = re.sub(r"<li[^>]*>", "- ", text, flags=re.IGNORECASE)
+    # Block elements to newlines
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</(p|div|tr|li|h[1-6])>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<(p|div|h[1-6])[^>]*>", "\n", text, flags=re.IGNORECASE)
+    # Strip remaining tags
+    text = re.sub(r"<[^>]+>", "", text)
+    # Decode entities
+    text = re.sub(r"&nbsp;", " ", text)
+    text = re.sub(r"&amp;", "&", text)
+    text = re.sub(r"&lt;", "<", text)
+    text = re.sub(r"&gt;", ">", text)
+    text = re.sub(r"&quot;", '"', text)
+    text = re.sub(r"&#\d+;", "", text)
+    # Clean up whitespace
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 def _resolve_folder(folder: str) -> str:
     """Map shorthand folder names to Gmail IMAP folder paths."""
     upper = folder.upper()
@@ -859,14 +891,49 @@ def _get_owner_emails() -> set[str]:
     return emails
 
 
-def _smtp_send(to: str, subject: str, body: str, subtype: str = "plain"):
-    """Send an email via SMTP. subtype can be 'plain' or 'html'."""
+def _enforce_send_permissions(to: str, perms: dict, owner_emails: set[str]):
+    """Shared permission enforcement for all send operations.
+
+    Raises PermissionError if the recipient is not allowed by the current permission level.
+    """
+    to_lower = to.strip().lower()
+
+    if not (perms.get("send_owner_only") or perms.get("send_within_org") or perms.get("send_anyone")):
+        raise PermissionError("No send permission enabled")
+
+    if perms.get("send_anyone"):
+        return  # No restrictions
+    elif perms.get("send_within_org"):
+        gmail_email = _get_config("gmail.email", "")
+        owner_domain = gmail_email.split('@')[-1] if '@' in gmail_email else None
+        to_domain = to_lower.split('@')[-1] if '@' in to_lower else None
+        if not owner_domain or not to_domain or to_domain != owner_domain:
+            raise PermissionError(
+                f"Send within organization only: recipient must be @{owner_domain}, not {to}"
+            )
+    elif perms.get("send_owner_only"):
+        if to_lower not in owner_emails:
+            raise PermissionError(
+                f"Send to owner only: allowed recipients are {', '.join(sorted(owner_emails))}, not {to}"
+            )
+
+
+def _smtp_send(to: str, subject: str, body_text: str, body_html: str | None = None, subtype: str = "plain"):
+    """Send an email via SMTP. Builds multipart/alternative when body_html is provided."""
     email_addr = _get_config("gmail.email", "")
     app_password = _get_config("gmail.app_password", "")
     if not email_addr or not app_password:
         raise RuntimeError("No Gmail credentials")
 
-    msg = MIMEText(body, subtype)
+    if body_html:
+        # Auto-generate plain text fallback if body_text is empty
+        plain = body_text if body_text.strip() else _html_to_plain(body_html)
+        msg = MIMEMultipart("alternative")
+        msg.attach(MIMEText(plain, "plain"))
+        msg.attach(MIMEText(body_html, "html"))
+    else:
+        msg = MIMEText(body_text, subtype)
+
     msg["From"] = email_addr
     msg["To"] = to
     msg["Subject"] = subject
@@ -877,7 +944,7 @@ def _smtp_send(to: str, subject: str, body: str, subtype: str = "plain"):
         server.sendmail(email_addr, [to], msg.as_string())
 
 
-def create_draft(to: str, subject: str, body: str) -> dict:
+def create_draft(to: str, subject: str, body: str, body_html: str | None = None) -> dict:
     """
     Create a Gmail draft via IMAP APPEND to [Gmail]/Drafts.
     Requires create_drafts permission. Content sanitized first.
@@ -885,7 +952,7 @@ def create_draft(to: str, subject: str, body: str) -> dict:
     check_permission("create_drafts")
 
     from email_sanitize import preflight_email
-    passed, findings = preflight_email(subject, body)
+    passed, findings = preflight_email(subject, body, body_html=body_html)
     if not passed:
         finding_strs = [f"[{f['severity']}] {f['rule']}: \"{f['match']}\"" for f in findings[:5]]
         raise ValueError(
@@ -894,10 +961,19 @@ def create_draft(to: str, subject: str, body: str) -> dict:
         )
 
     email_addr = _get_config("gmail.email", "")
-    msg = MIMEText(body)
-    msg["From"] = email_addr
-    msg["To"] = to
-    msg["Subject"] = subject
+    if body_html:
+        plain = body if body.strip() else _html_to_plain(body_html)
+        msg = MIMEMultipart("alternative")
+        msg["From"] = email_addr
+        msg["To"] = to
+        msg["Subject"] = subject
+        msg.attach(MIMEText(plain, "plain"))
+        msg.attach(MIMEText(body_html, "html"))
+    else:
+        msg = MIMEText(body)
+        msg["From"] = email_addr
+        msg["To"] = to
+        msg["Subject"] = subject
 
     imap = _get_imap()
     errored = False
@@ -921,44 +997,18 @@ def create_draft(to: str, subject: str, body: str) -> dict:
             _return_imap(imap)
 
 
-def send_email(to: str, subject: str, body: str) -> dict:
+def send_email(to: str, subject: str, body: str, body_html: str | None = None) -> dict:
     """
     Send an email via Gmail SMTP.
     Requires send_owner_only, send_within_org, or send_anyone permission.
     Enforces recipient restrictions server-side. Content sanitized first.
     """
     perms = get_permissions()
-    to_lower = to.strip().lower()
-
-    # Check if ANY send permission is enabled
-    if not (perms.get("send_owner_only") or perms.get("send_within_org") or perms.get("send_anyone")):
-        raise PermissionError("No send permission enabled")
-
-    # Enforce recipient restrictions based on enabled permissions
     owner_emails = _get_owner_emails()
-
-    # Most permissive: send_anyone
-    if perms.get("send_anyone"):
-        pass  # No restrictions
-    # Medium: send_within_org
-    elif perms.get("send_within_org"):
-        gmail_email = _get_config("gmail.email", "")
-        owner_domain = gmail_email.split('@')[-1] if '@' in gmail_email else None
-        to_domain = to_lower.split('@')[-1] if '@' in to_lower else None
-
-        if not owner_domain or not to_domain or to_domain != owner_domain:
-            raise PermissionError(
-                f"Send within organization only: recipient must be @{owner_domain}, not {to}"
-            )
-    # Most restrictive: send_owner_only
-    elif perms.get("send_owner_only"):
-        if to_lower not in owner_emails:
-            raise PermissionError(
-                f"Send to owner only: allowed recipients are {', '.join(sorted(owner_emails))}, not {to}"
-            )
+    _enforce_send_permissions(to, perms, owner_emails)
 
     from email_sanitize import preflight_email
-    passed, findings = preflight_email(subject, body)
+    passed, findings = preflight_email(subject, body, body_html=body_html)
     if not passed:
         finding_strs = [f"[{f['severity']}] {f['rule']}: \"{f['match']}\"" for f in findings[:5]]
         raise ValueError(
@@ -966,8 +1016,17 @@ def send_email(to: str, subject: str, body: str) -> dict:
             "\n".join(finding_strs)
         )
 
-    subtype = "html" if body.strip().startswith(("<!", "<html", "<HTML")) else "plain"
-    _smtp_send(to, subject, body, subtype=subtype)
+    # Signature injection for HTML emails
+    if body_html:
+        sig_html = _get_config("drafter.signature_html", "")
+        if sig_html:
+            body_html += f'<br><div class="signature">{sig_html}</div>'
+            # Append plain text signature
+            sig_plain = _html_to_plain(sig_html)
+            if sig_plain:
+                body = (body or "") + f"\n-- \n{sig_plain}"
+
+    _smtp_send(to, subject, body, body_html=body_html)
     logger.info(f"Gmail sent: to={to} subject={subject[:50]}")
     return {"ok": True, "to": to, "subject": subject}
 
@@ -980,34 +1039,8 @@ def send_html_report(to: str, subject: str, html_path: str) -> dict:
     """
     import os
     perms = get_permissions()
-    to_lower = to.strip().lower()
-
-    # Check if ANY send permission is enabled
-    if not (perms.get("send_owner_only") or perms.get("send_within_org") or perms.get("send_anyone")):
-        raise PermissionError("No send permission enabled")
-
-    # Enforce recipient restrictions based on enabled permissions
     owner_emails = _get_owner_emails()
-
-    # Most permissive: send_anyone
-    if perms.get("send_anyone"):
-        pass  # No restrictions
-    # Medium: send_within_org
-    elif perms.get("send_within_org"):
-        gmail_email = _get_config("gmail.email", "")
-        owner_domain = gmail_email.split('@')[-1] if '@' in gmail_email else None
-        to_domain = to_lower.split('@')[-1] if '@' in to_lower else None
-
-        if not owner_domain or not to_domain or to_domain != owner_domain:
-            raise PermissionError(
-                f"Send within organization only: recipient must be @{owner_domain}, not {to}"
-            )
-    # Most restrictive: send_owner_only
-    elif perms.get("send_owner_only"):
-        if to_lower not in owner_emails:
-            raise PermissionError(
-                f"Send to owner only: allowed recipients are {', '.join(sorted(owner_emails))}, not {to}"
-            )
+    _enforce_send_permissions(to, perms, owner_emails)
 
     # Validate the file exists and is under KUKUIBOT_HOME
     abs_path = os.path.abspath(html_path)
@@ -1111,8 +1144,13 @@ def redirect_email(folder: str, uid: str, to: str, subject_override: str | None 
 
     Fetches the original raw message, rewrites From/To/Subject headers,
     and sends via SMTP preserving the full MIME structure (HTML, attachments).
-    No permission checks. No sanitization. Intended for forwarding reports intact.
+    Requires at least send_within_org permission. Content sanitized.
     """
+    # Enforce send permissions
+    perms = get_permissions()
+    owner_emails = _get_owner_emails()
+    _enforce_send_permissions(to, perms, owner_emails)
+
     email_addr = _get_config("gmail.email", "")
     app_password = _get_config("gmail.app_password", "")
     if not email_addr or not app_password:
@@ -1145,6 +1183,18 @@ def redirect_email(folder: str, uid: str, to: str, subject_override: str | None 
         if subject_override is not None and subject_override.strip():
             del msg["Subject"]
             msg["Subject"] = subject_override
+
+        # Sanitize redirected content
+        redirect_body = _extract_body(msg)
+        redirect_subject = msg.get("Subject", "")
+        from email_sanitize import preflight_email
+        passed, findings = preflight_email(redirect_subject, redirect_body)
+        if not passed:
+            finding_strs = [f"[{f['severity']}] {f['rule']}: \"{f['match']}\"" for f in findings[:5]]
+            raise ValueError(
+                f"Redirect blocked — {len(findings)} sensitive item(s) detected:\n" +
+                "\n".join(finding_strs)
+            )
 
         # Send via SMTP with full MIME intact
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:

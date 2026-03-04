@@ -40,6 +40,19 @@ RULES: list[Rule] = [
     )),
 ]
 
+# HTML/XSS-specific rules for outbound HTML email content
+HTML_RULES: list[Rule] = [
+    Rule("script tag", re.compile(r"<script\b", re.IGNORECASE), severity="critical"),
+    Rule("iframe tag", re.compile(r"<iframe\b", re.IGNORECASE), severity="critical"),
+    Rule("object tag", re.compile(r"<object\b", re.IGNORECASE), severity="high"),
+    Rule("embed tag", re.compile(r"<embed\b", re.IGNORECASE), severity="high"),
+    Rule("javascript URL", re.compile(r"javascript\s*:", re.IGNORECASE), severity="critical"),
+    Rule("event handler", re.compile(r"\bon\w+\s*=", re.IGNORECASE), severity="critical"),
+    Rule("data URL (non-image)", re.compile(r"data\s*:(?!image/)", re.IGNORECASE), severity="high"),
+    Rule("form tag", re.compile(r"<form\b", re.IGNORECASE), severity="high"),
+    Rule("meta refresh", re.compile(r'<meta\b[^>]*http-equiv\s*=\s*["\']?refresh', re.IGNORECASE), severity="high"),
+]
+
 
 def redact_preview(text: str, start: int, end: int, width: int = 28) -> str:
     """Show context around a finding."""
@@ -64,12 +77,45 @@ def scan(text: str) -> list[dict]:
     return findings
 
 
-def preflight_email(subject: str, body: str) -> tuple[bool, list[dict]]:
+def scan_html(html: str) -> list[dict]:
+    """Scan HTML content for XSS/injection patterns. Returns list of findings."""
+    findings = []
+    for rule in HTML_RULES:
+        for m in rule.pattern.finditer(html):
+            findings.append({
+                "rule": rule.name,
+                "severity": rule.severity,
+                "match": m.group(0),
+                "start": m.start(),
+                "end": m.end(),
+                "preview": redact_preview(html, m.start(), m.end()),
+            })
+    return findings
+
+
+def preflight_html_email(subject: str, body_text: str, body_html: str) -> tuple[bool, list[dict]]:
+    """
+    Preflight check for outbound HTML email.
+    Runs secret scanning on text content and XSS scanning on raw HTML.
+    Returns (passed: bool, findings: list).
+    """
+    # Secret scanning on the plain text version
+    text = f"Subject:\n{subject}\n\nBody:\n{body_text}"
+    findings = scan(text)
+    # HTML/XSS scanning on raw HTML
+    findings.extend(scan_html(body_html))
+    return (len(findings) == 0, findings)
+
+
+def preflight_email(subject: str, body: str, body_html: str | None = None) -> tuple[bool, list[dict]]:
     """
     Preflight check for outbound email.
     Returns (passed: bool, findings: list).
     If passed is False, email must NOT be sent.
+    If body_html is provided, delegates to preflight_html_email().
     """
+    if body_html:
+        return preflight_html_email(subject, body, body_html)
     text = f"Subject:\n{subject}\n\nBody:\n{body}"
     findings = scan(text)
     return (len(findings) == 0, findings)
