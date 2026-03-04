@@ -64,6 +64,105 @@ _AUTOMATED_PATTERNS = re.compile(
 # Headers that indicate mailing lists / bulk mail
 _BULK_HEADERS = ["List-Unsubscribe", "List-Id", "X-Mailer-Daemon", "X-Auto-Response-Suppress"]
 
+# 2FA / MFA / verification code detection
+_2FA_SENDER_DOMAINS = re.compile(
+    r"@(?:.*\.)?(accounts\.google\.com|accountprotection\.microsoft\.com|"
+    r"id\.apple\.com|icloud\.com|"
+    r"verify\.facebook\.com|facebookmail\.com|"
+    r"noreply\.github\.com|"
+    r"login\.coinbase\.com|"
+    r"no-reply\.sns\.amazonaws\.com|"
+    r"duosecurity\.com|okta\.com|auth0\.com|twilio\.com|"
+    r"steampowered\.com|login\.uber\.com)$",
+    re.IGNORECASE,
+)
+
+_2FA_SUBJECT_RE = re.compile(
+    r"\b(?:verification\s+code|security\s+code|one[\s-]?time\s+(?:pass)?code|"
+    r"your\s+otp|sign[\s-]?in\s+code|login\s+code|"
+    r"confirm\s+your\s+(?:email|identity|account)|"
+    r"two[\s-]?factor|2fa|mfa\s+code|"
+    r"password\s+reset|reset\s+your\s+password|"
+    r"backup\s+codes?|recovery\s+code|"
+    r"authentication\s+code)\b",
+    re.IGNORECASE,
+)
+
+_2FA_BODY_CODE_RE = re.compile(
+    r"(?:(?:verification|security|login|sign[\s-]?in|one[\s-]?time|confirmation|authentication)\s+code"
+    r"[\s:]*\d{4,8}\b|"
+    r"\byour\s+code\s+is[\s:]*\d{4,8}\b|"
+    r"\benter\s+(?:this\s+)?code[\s:]*\d{4,8}\b|"
+    r"\b\d{4,8}\s+is\s+your\s+(?:verification|security|login)\s+code\b)",
+    re.IGNORECASE,
+)
+
+_2FA_EXPIRY_RE = re.compile(
+    r"\b(?:expires?|valid\s+for)\s+(?:in\s+)?\d{1,3}\s*(?:minutes?|mins?|hours?)\b",
+    re.IGNORECASE,
+)
+
+# Financial / banking content detection
+_FINANCIAL_SENDER_DOMAINS = re.compile(
+    r"@(?:.*\.)?(chase\.com|jpmorgan\.com|"
+    r"bankofamerica\.com|bofa\.com|"
+    r"wellsfargo\.com|"
+    r"citibank\.com|citi\.com|"
+    r"americanexpress\.com|aexp\.com|"
+    r"capitalone\.com|discover\.com|"
+    r"usbank\.com|pnc\.com|"
+    r"td\.com|tdbank\.com|tdameritrade\.com|"
+    r"ally\.com|navyfederal\.org|"
+    r"fidelity\.com|schwab\.com|vanguard\.com|etrade\.com|"
+    r"robinhood\.com|sofi\.com|"
+    r"coinbase\.com|binance\.com|kraken\.com|"
+    r"paypal\.com|venmo\.com|zellepay\.com|cash\.app|"
+    r"wise\.com|revolut\.com|"
+    r"hsbc\.com|barclays\.com|santander\.com|"
+    r"scotiabank\.com|rbc\.com|bmo\.com|cibc\.com|"
+    r"irs\.gov|turbotax\.intuit\.com|hrblock\.com)$",
+    re.IGNORECASE,
+)
+
+_FINANCIAL_SUBJECT_RE = re.compile(
+    r"\b(?:statement\s+(?:is\s+)?ready|account\s+statement|"
+    r"transaction\s+alert|fraud\s+alert|"
+    r"payment\s+(?:received|sent|due|failed|confirmed)|"
+    r"deposit\s+(?:received|posted)|"
+    r"balance\s+(?:update|alert|available)|"
+    r"account\s+activity|purchase\s+alert|"
+    r"wire\s+transfer|ach\s+(?:credit|debit|transfer)|"
+    r"bill\s+(?:due|paid)|autopay|"
+    r"credit\s+card\s+(?:statement|alert|activity)|"
+    r"(?:your\s+)?tax\s+(?:document|form|return)|"
+    r"\b1099\b|\bw[\s-]?2\b|"
+    r"suspicious\s+(?:activity|transaction)|"
+    r"account\s+(?:frozen|locked|suspended)|"
+    r"monthly\s+statement)\b",
+    re.IGNORECASE,
+)
+
+_FINANCIAL_BODY_CC_RE = re.compile(
+    r"\b(?:4\d{3}|5[1-5]\d{2}|3[47]\d{2}|6(?:011|5\d{2}))[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{1,4}\b"
+)
+
+_FINANCIAL_BODY_SSN_RE = re.compile(r"\b\d{3}[\s-]\d{2}[\s-]\d{4}\b")
+
+_FINANCIAL_BODY_ROUTING_RE = re.compile(
+    r"\b(?:routing|aba|transit)\s*(?:number|#|no\.?)?\s*[:#-]?\s*\d{9}\b",
+    re.IGNORECASE,
+)
+
+_FINANCIAL_BODY_ACCOUNT_RE = re.compile(
+    r"\b(?:account)\s*(?:number|#|no\.?)?\s*[:#-]?\s*\d{8,17}\b",
+    re.IGNORECASE,
+)
+
+_FINANCIAL_BODY_LAST4_RE = re.compile(
+    r"\b(?:ending\s+in|last\s+4|x{4,})\s*[-:]?\s*\d{4}\b",
+    re.IGNORECASE,
+)
+
 # Default signature (can be overridden via config)
 DEFAULT_SIGNATURE_HTML = ""
 
@@ -105,6 +204,20 @@ DEFAULT_FILTERS = [
         "id": "cc_only",
         "name": "Skip emails where you're only CC'd",
         "description": "Only draft replies when you're in the To field, not just CC or BCC.",
+        "enabled": True,
+        "type": "builtin",
+    },
+    {
+        "id": "security_codes",
+        "name": "Skip 2FA/MFA verification emails",
+        "description": "Blocks one-time passcodes, verification codes, password resets, and backup codes from being auto-drafted.",
+        "enabled": True,
+        "type": "builtin",
+    },
+    {
+        "id": "financial_content",
+        "name": "Skip financial/banking emails",
+        "description": "Blocks bank statements, transaction alerts, tax documents, and payment notifications from being auto-drafted.",
         "enabled": True,
         "type": "builtin",
     },
@@ -398,6 +511,50 @@ def _is_cc_only(msg: email.message.Message, my_email: str) -> bool:
     # Parse all To addresses
     to_addrs = [addr.lower() for _, addr in email.utils.getaddresses([to_raw])]
     return my_lower not in to_addrs
+
+
+def _is_2fa_email(msg: email.message.Message, from_addr: str,
+                  subject: str, body: str) -> bool:
+    """Detect 2FA/MFA/verification emails using multi-signal scoring."""
+    sender_hit = bool(_2FA_SENDER_DOMAINS.search(from_addr))
+    subj_hit = bool(_2FA_SUBJECT_RE.search(subject))
+    body_code = bool(_2FA_BODY_CODE_RE.search(body[:2000]))
+    body_expiry = bool(_2FA_EXPIRY_RE.search(body[:2000]))
+    # Strong subject alone is sufficient (very specific keywords)
+    if subj_hit:
+        return True
+    # Sender + any body signal
+    if sender_hit and (body_code or body_expiry):
+        return True
+    # Body code pattern + expiry = high confidence even without sender/subject
+    if body_code and body_expiry:
+        return True
+    return False
+
+
+def _is_financial_email(msg: email.message.Message, from_addr: str,
+                        subject: str, body: str) -> bool:
+    """Detect financial/banking emails using sender domains, subject, and body PII patterns."""
+    sender_hit = bool(_FINANCIAL_SENDER_DOMAINS.search(from_addr))
+    subj_hit = bool(_FINANCIAL_SUBJECT_RE.search(subject))
+    # Count body PII signals
+    body_text = body[:3000]
+    pii_hits = sum(bool(p.search(body_text)) for p in (
+        _FINANCIAL_BODY_CC_RE, _FINANCIAL_BODY_SSN_RE,
+        _FINANCIAL_BODY_ROUTING_RE, _FINANCIAL_BODY_ACCOUNT_RE,
+    ))
+    last4_hit = bool(_FINANCIAL_BODY_LAST4_RE.search(body_text))
+    # Known financial sender = always skip (high confidence, these domains are customer-facing only)
+    if sender_hit:
+        return True
+    # Financial subject keywords = always skip
+    if subj_hit:
+        return True
+    # Body contains actual financial PII (CC#, SSN, routing#, account#)
+    if pii_hits >= 1:
+        return True
+    # Last-4 pattern alone isn't enough (could be order numbers etc.)
+    return False
 
 
 def _fetch_thread_context(imap, msg: email.message.Message, current_num: bytes) -> list[dict]:
@@ -699,6 +856,16 @@ def _check_filters(msg: email.message.Message, from_addr: str, subject: str,
     f = filters_by_id.get("cc_only", {})
     if f.get("enabled", True) and _is_cc_only(msg, my_email):
         return ("skipped_auto", "CC only (not in To)")
+
+    # --- Sensitive content filters ---
+
+    f = filters_by_id.get("security_codes", {})
+    if f.get("enabled", True) and _is_2fa_email(msg, from_addr, subject, body):
+        return ("skipped_sensitive", "2FA/verification email")
+
+    f = filters_by_id.get("financial_content", {})
+    if f.get("enabled", True) and _is_financial_email(msg, from_addr, subject, body):
+        return ("skipped_sensitive", "financial/banking email")
 
     # --- Exclusion pattern filters ---
 

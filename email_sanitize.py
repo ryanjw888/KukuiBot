@@ -38,6 +38,24 @@ RULES: list[Rule] = [
         r"""(?:password|passwd|app_password|secret_key|api_key|auth_token|access_token)\s*[=:]\s*["']?[A-Za-z0-9_/+.@!#$%^&*-]{8,}""",
         re.IGNORECASE,
     )),
+    # --- Financial PII safety net (catches AI echo-back in drafts) ---
+    Rule("credit card number", re.compile(
+        r"\b(?:4\d{3}|5[1-5]\d{2}|3[47]\d{2}|6(?:011|5\d{2}))[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{1,4}\b"
+    )),
+    Rule("SSN pattern", re.compile(r"\b\d{3}[\s-]\d{2}[\s-]\d{4}\b")),
+    Rule("bank routing number", re.compile(
+        r"\b(?:routing|aba|transit)\s*(?:number|#|no\.?)?\s*[:#-]?\s*\d{9}\b",
+        re.IGNORECASE,
+    )),
+    Rule("bank account number", re.compile(
+        r"\b(?:account)\s*(?:number|#|no\.?)?\s*[:#-]?\s*\d{8,17}\b",
+        re.IGNORECASE,
+    )),
+    Rule("verification code in draft", re.compile(
+        r"(?:verification|security|login|sign[\s-]?in|one[\s-]?time|confirmation|authentication)"
+        r"\s+code[\s:]+\d{4,8}\b",
+        re.IGNORECASE,
+    )),
 ]
 
 # HTML/XSS-specific rules for outbound HTML email content
