@@ -51,7 +51,7 @@ const EmailModule = (function () {
   let chatStreaming = false;
   let chatStreamText = '';
   let chatModelKey = ''; // populated dynamically from available models
-  let chatWorkerKey = 'assistant';
+  let chatWorkerKey = 'none';
   let chatAbortController = null;
   let availableModels = []; // [{key, label}] — from MODELS
   let availableWorkers = []; // [{key, name}] — from /api/workers
@@ -1508,9 +1508,12 @@ const EmailModule = (function () {
     const modelOpts = availableModels.map(m =>
       `<option value="${escHtml(m.key)}" ${m.key === chatModelKey ? 'selected' : ''}>${escHtml(m.label)}</option>`
     ).join('');
-    const workerOpts = availableWorkers.map(w =>
-      `<option value="${escHtml(w.key)}" ${w.key === chatWorkerKey ? 'selected' : ''}>${escHtml(w.name)}</option>`
-    ).join('');
+    const workerOpts = [
+      `<option value="none" ${chatWorkerKey === 'none' ? 'selected' : ''}>None (style only)</option>`,
+      ...availableWorkers.map(w =>
+        `<option value="${escHtml(w.key)}" ${w.key === chatWorkerKey ? 'selected' : ''}>${escHtml(w.name)}</option>`
+      )
+    ].join('');
 
     return `<div class="email-settings">
       <div class="email-settings-group">
@@ -1807,7 +1810,7 @@ const EmailModule = (function () {
     const currentModel = availableModels.find(m => m.key === chatModelKey);
     const modelLabel = currentModel ? currentModel.label : chatModelKey;
     const currentWorker = availableWorkers.find(w => w.key === chatWorkerKey);
-    const workerLabel = currentWorker ? currentWorker.name : (chatWorkerKey || 'Assistant');
+    const workerLabel = chatWorkerKey === 'none' ? 'Email Assistant' : (currentWorker ? currentWorker.name : (chatWorkerKey || 'Assistant'));
 
     let msgsHtml = '';
     for (const m of chatMessages) {

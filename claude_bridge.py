@@ -635,6 +635,28 @@ def build_system_prompt(worker_identity: str = "", include_chat_log: bool = True
     sections = []
     loaded_files = []
 
+    # MINIMAL MODE: "none" worker identity — lightweight email assistant
+    if worker_identity == "none":
+        sections.append(
+            "You are an email assistant. Help the user draft, reply to, and manage emails.\n"
+            "Match the user's writing style exactly. Be concise and helpful.\n"
+            "Do not use AI disclaimers. Write as if you are the user when drafting."
+        )
+        # Load only the style profile
+        style_profile_path = WORKSPACE / "email_style_profile.md"
+        style_content = _load_context_file(style_profile_path)
+        if style_content:
+            sections.append(f"# Writing Style Profile\n{style_content}")
+            loaded_files.append(str(style_profile_path))
+        # Include chat history for continuity
+        if include_chat_log:
+            chat_tail = _load_chat_log_tail(kukuibot_session_id=kukuibot_session_id, worker_identity=worker_identity)
+            if chat_tail:
+                sections.append(f"# Recent Chat History\n{chat_tail}")
+                loaded_files.append("chat_log (5KB tail)")
+        return "\n\n---\n\n".join(sections), loaded_files
+
+    # FULL MODE: everything else continues as before
     soul = _load_context_file(WORKSPACE / "SOUL.md")
     if soul:
         sections.append(f"# Identity\n{soul}")

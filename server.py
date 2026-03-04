@@ -585,6 +585,26 @@ def _get_system_prompt(model_key: str = "", worker_identity: str = "") -> str:
     Loads: SOUL, USER, TOOLS, Model Identity, Worker Identity.
     No ROADMAP, no MEMORY.md, no daily memory, no README/DESIGN docs.
     """
+    # MINIMAL MODE: "none" worker identity — lightweight email assistant
+    if worker_identity == "none":
+        parts = [
+            "You are an email assistant. Help the user draft, reply to, and manage emails.",
+            "Match the user's writing style exactly. Be concise and helpful.",
+            "Do not use AI disclaimers. Write as if you are the user when drafting.",
+            "",
+        ]
+        style_profile_path = KUKUIBOT_HOME / "email_style_profile.md"
+        try:
+            if style_profile_path.exists():
+                content = style_profile_path.read_text()
+                if len(content) > 10000:
+                    content = content[:10000] + "\n... (truncated)"
+                parts.append(f"## Writing Style Profile\n{content}\n")
+        except Exception:
+            pass
+        return "\n".join(parts)
+
+    # FULL MODE below
     src_path = KUKUIBOT_HOME / "src"
     src_dir = str(src_path.resolve()) if src_path.exists() else "(not linked)"
 
