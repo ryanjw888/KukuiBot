@@ -24,9 +24,7 @@ const EmailModule = (function () {
   let selectedDraft = null;
   let draftOriginal = null;
   let draftOriginalLoading = false;
-  let draftEditMode = false;
-  let draftEditQuill = null;
-  let draftSaving = false;
+  let editingDraftUid = null;   // non-null when compose overlay is editing an existing draft
   let draftRewriting = false;
   let initialized = false;
   let pollTimer = null;
@@ -319,25 +317,51 @@ const EmailModule = (function () {
     }
     composeSending = true;
     rerender();
-    const payload = { to: composeData.to, subject: composeData.subject, body: composeData.body };
-    if (composeData.body_html) payload.body_html = composeData.body_html;
-    const resp = await apiFetch('/api/gmail/send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    composeSending = false;
-    if (resp.error) {
-      alert('Send error: ' + resp.error);
-      rerender();
+
+    if (editingDraftUid) {
+      // Editing an existing draft — update body then send via draft API
+      const html = composeData.body_html || composeData.body.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+      const updateResp = await apiFetch(`/api/drafter/drafts/${encodeURIComponent(editingDraftUid)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body_html: html }),
+      });
+      const sendUid = (updateResp.new_uid) ? updateResp.new_uid : editingDraftUid;
+      const resp = await apiFetch(`/api/drafter/drafts/${encodeURIComponent(sendUid)}/send`, { method: 'POST' });
+      composeSending = false;
+      if (resp.error) {
+        alert('Send error: ' + resp.error);
+        rerender();
+      } else {
+        _destroyComposeQuill();
+        composeData = { to: '', subject: '', body: '', body_html: null };
+        showCompose = false;
+        editingDraftUid = null;
+        selectedDraft = null;
+        selectedDraftUid = null;
+        await refreshAll();
+      }
     } else {
-      _destroyComposeQuill();
-      composeData = { to: '', subject: '', body: '', body_html: null };
-      showCompose = false;
-      rerender();
-      // Brief success feedback
-      const el = document.querySelector('.inbox-compose-success');
-      if (el) { el.style.display = 'block'; setTimeout(() => el.style.display = 'none', 2000); }
+      // Normal compose — send directly
+      const payload = { to: composeData.to, subject: composeData.subject, body: composeData.body };
+      if (composeData.body_html) payload.body_html = composeData.body_html;
+      const resp = await apiFetch('/api/gmail/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      composeSending = false;
+      if (resp.error) {
+        alert('Send error: ' + resp.error);
+        rerender();
+      } else {
+        _destroyComposeQuill();
+        composeData = { to: '', subject: '', body: '', body_html: null };
+        showCompose = false;
+        rerender();
+        const el = document.querySelector('.inbox-compose-success');
+        if (el) { el.style.display = 'block'; setTimeout(() => el.style.display = 'none', 2000); }
+      }
     }
   }
 
@@ -350,20 +374,54 @@ const EmailModule = (function () {
     } else {
       composeData.body_html = null;
     }
-    const payload = { to: composeData.to, subject: composeData.subject, body: composeData.body };
-    if (composeData.body_html) payload.body_html = composeData.body_html;
-    const resp = await apiFetch('/api/gmail/draft', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (resp.error) {
-      alert('Draft error: ' + resp.error);
+
+    if (editingDraftUid) {
+      // Update the existing draft in-place
+      const html = composeData.body_html || composeData.body.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+      const resp = await apiFetch(`/api/drafter/drafts/${encodeURIComponent(editingDraftUid)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body_html: html }),
+      });
+      if (resp.error) {
+        alert('Save error: ' + resp.error);
+      } else {
+        // Update local state
+        if (selectedDraft) {
+          selectedDraft.body_html = html;
+          selectedDraft.body = composeData.body;
+          selectedDraft.snippet = composeData.body.replace(/\n/g, ' ').trim().substring(0, 120);
+          if (resp.new_uid) {
+            const oldUid = selectedDraftUid;
+            selectedDraftUid = resp.new_uid;
+            selectedDraft.uid = resp.new_uid;
+            const idx = drafts.findIndex(d => d.uid === oldUid);
+            if (idx >= 0) drafts[idx] = selectedDraft;
+          }
+        }
+        _destroyComposeQuill();
+        composeData = { to: '', subject: '', body: '', body_html: null };
+        showCompose = false;
+        editingDraftUid = null;
+        rerender();
+      }
     } else {
-      _destroyComposeQuill();
-      composeData = { to: '', subject: '', body: '', body_html: null };
-      showCompose = false;
-      rerender();
+      // Create a new draft
+      const payload = { to: composeData.to, subject: composeData.subject, body: composeData.body };
+      if (composeData.body_html) payload.body_html = composeData.body_html;
+      const resp = await apiFetch('/api/gmail/draft', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (resp.error) {
+        alert('Draft error: ' + resp.error);
+      } else {
+        _destroyComposeQuill();
+        composeData = { to: '', subject: '', body: '', body_html: null };
+        showCompose = false;
+        rerender();
+      }
     }
   }
 
@@ -617,8 +675,6 @@ const EmailModule = (function () {
   async function selectDraft(uid) {
     selectedDraftUid = uid;
     selectedDraft = drafts.find(d => d.uid === uid) || null;
-    draftEditMode = false;
-    _destroyDraftQuill();
     draftOriginal = null;
     draftOriginalLoading = true;
     rerender();
@@ -633,81 +689,39 @@ const EmailModule = (function () {
   }
 
   function editDraft() {
-    draftEditMode = true;
-    rerender();
-    requestAnimationFrame(() => _initDraftQuill());
-  }
+    if (!selectedDraft) return;
+    const d = selectedDraft;
+    _destroyComposeQuill();
 
-  function _initDraftQuill() {
-    if (draftEditQuill) return;
-    if (typeof Quill === 'undefined') {
-      // Quill CDN should already be loaded by compose; retry after a tick
-      requestAnimationFrame(() => _initDraftQuill());
-      return;
-    }
-    const container = document.getElementById('draft-editor');
-    if (!container) return;
-    draftEditQuill = new Quill('#draft-editor', {
-      theme: 'snow',
-      placeholder: 'Edit draft...',
-      modules: {
-        toolbar: [
-          ['bold', 'italic', 'underline', 'strike'],
-          [{ header: [1, 2, 3, false] }],
-          [{ list: 'ordered' }, { list: 'bullet' }],
-          ['link', 'clean'],
-        ],
-      },
-    });
-    if (selectedDraft) {
-      draftEditQuill.clipboard.dangerouslyPasteHTML(selectedDraft.body_html || selectedDraft.body || '');
-    }
-  }
+    // Build quoted original below the draft body (like replyTo does)
+    let bodyHtml = d.body_html || '';
+    let bodyPlain = d.body || '';
 
-  function _destroyDraftQuill() {
-    if (draftEditQuill) {
-      draftEditQuill = null;
+    if (draftOriginal) {
+      const origFrom = draftOriginal.from || '';
+      const origDate = draftOriginal.date || '';
+      if (draftOriginal.body_html) {
+        bodyHtml += '<br><br><div style="border-left:2px solid #ccc;padding-left:12px;margin-left:4px;color:#555;">'
+          + '<p><strong>From:</strong> ' + escHtml(origFrom) + '<br><strong>Date:</strong> ' + escHtml(origDate) + '</p>'
+          + draftOriginal.body_html
+          + '</div>';
+      } else if (draftOriginal.body) {
+        bodyPlain += '\n\n--- Original Message ---\nFrom: ' + origFrom + '\nDate: ' + origDate + '\n\n' + draftOriginal.body;
+      }
     }
-  }
 
-  async function saveDraftEdit() {
-    if (!selectedDraft || draftSaving) return;
-    draftSaving = true;
+    editingDraftUid = d.uid;
+    composeData = {
+      to: d.to || '',
+      subject: d.subject || '',
+      body: bodyPlain,
+      body_html: bodyHtml || null,
+    };
+    showCompose = true;
     rerender();
-    const html = draftEditQuill ? draftEditQuill.root.innerHTML : '';
-    const resp = await apiFetch(`/api/drafter/drafts/${encodeURIComponent(selectedDraftUid)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ body_html: html }),
-    });
-    if (resp.error) {
-      alert('Save error: ' + resp.error);
-      draftSaving = false;
-      rerender();
-      return;
+    if (composeRichMode) {
+      requestAnimationFrame(() => _initComposeQuill());
     }
-    // Update local state with new content and UID
-    selectedDraft.body_html = html;
-    selectedDraft.body = draftEditQuill ? draftEditQuill.getText().trim() : '';
-    selectedDraft.snippet = selectedDraft.body.replace(/\n/g, ' ').trim().substring(0, 120);
-    if (resp.new_uid) {
-      const oldUid = selectedDraftUid;
-      selectedDraftUid = resp.new_uid;
-      selectedDraft.uid = resp.new_uid;
-      // Update the drafts array entry
-      const idx = drafts.findIndex(d => d.uid === oldUid);
-      if (idx >= 0) drafts[idx] = selectedDraft;
-    }
-    draftEditMode = false;
-    draftSaving = false;
-    _destroyDraftQuill();
-    rerender();
-  }
-
-  function cancelDraftEdit() {
-    draftEditMode = false;
-    _destroyDraftQuill();
-    rerender();
   }
 
   async function aiRewriteDraft() {
@@ -1067,7 +1081,7 @@ const EmailModule = (function () {
   function destroy() {
     initialized = false;
     destroyProfileEditor();
-    _destroyDraftQuill();
+    _destroyComposeQuill();
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
     if (syncTimer) { clearInterval(syncTimer); syncTimer = null; }
     if (chatAbortController) { try { chatAbortController.abort(); } catch {} }
@@ -1293,46 +1307,51 @@ const EmailModule = (function () {
     }
   }
 
+  // --- Compose Overlay (shared by inbox + drafts tabs) ---
+
+  function buildComposeOverlay() {
+    if (!showCompose) return '';
+    const title = editingDraftUid ? 'Edit Draft'
+      : (composeData.subject && composeData.subject.startsWith('Re: ')) ? 'Reply' : 'New Message';
+    const bodyEditor = composeRichMode
+      ? `<div id="compose-editor" class="inbox-compose-quill"></div>`
+      : `<textarea class="inbox-compose-field inbox-compose-body" rows="8" placeholder="Message body..."
+          oninput="EmailModule.updateCompose('body', this.value)">${escHtml(composeData.body)}</textarea>`;
+    const modeLabel = composeRichMode ? 'Rich Text' : 'Plain Text';
+    const toggleLabel = composeRichMode ? 'Switch to Plain Text' : 'Switch to Rich Text';
+    const saveLabel = editingDraftUid ? 'Save' : 'Save Draft';
+    const html = `<div class="inbox-compose-overlay">
+      <div class="inbox-compose-titlebar">
+        <span class="inbox-compose-title">${title}</span>
+        <span class="inbox-compose-mode-label" style="font-size:11px;color:var(--muted);margin-left:8px">${modeLabel}</span>
+        <button class="inbox-compose-close" onclick="EmailModule.closeCompose()" title="Close">&times;</button>
+      </div>
+      <div class="inbox-compose-form">
+        <input class="inbox-compose-field" type="text" placeholder="To" value="${escHtml(composeData.to)}"
+          oninput="EmailModule.updateCompose('to', this.value)" />
+        <input class="inbox-compose-field" type="text" placeholder="Subject" value="${escHtml(composeData.subject)}"
+          oninput="EmailModule.updateCompose('subject', this.value)" />
+        ${bodyEditor}
+      </div>
+      <div class="inbox-compose-footer">
+        <button class="email-action-btn primary" onclick="EmailModule.sendCompose()" ${composeSending ? 'disabled' : ''}>
+          ${composeSending ? '<span class="email-spinner"></span> Sending...' : 'Send'}
+        </button>
+        <button class="email-action-btn" onclick="EmailModule.saveDraftCompose()">${saveLabel}</button>
+        <button class="email-action-btn" onclick="EmailModule.toggleComposeMode()" style="font-size:11px">${toggleLabel}</button>
+        <button class="email-action-btn danger" onclick="EmailModule.closeCompose()" style="margin-left:auto">Discard</button>
+      </div>
+    </div>`;
+    if (composeRichMode) {
+      requestAnimationFrame(() => _initComposeQuill());
+    }
+    return html;
+  }
+
   // --- Render: Inbox Tab ---
 
   function renderInboxTab() {
-    // Compose overlay (Gmail-style floating panel anchored bottom-right of preview)
-    let composeHtml = '';
-    if (showCompose) {
-      const title = composeData.subject && composeData.subject.startsWith('Re: ') ? 'Reply' : 'New Message';
-      const bodyEditor = composeRichMode
-        ? `<div id="compose-editor" class="inbox-compose-quill"></div>`
-        : `<textarea class="inbox-compose-field inbox-compose-body" rows="8" placeholder="Message body..."
-            oninput="EmailModule.updateCompose('body', this.value)">${escHtml(composeData.body)}</textarea>`;
-      const modeLabel = composeRichMode ? 'Rich Text' : 'Plain Text';
-      const toggleLabel = composeRichMode ? 'Switch to Plain Text' : 'Switch to Rich Text';
-      composeHtml = `<div class="inbox-compose-overlay">
-        <div class="inbox-compose-titlebar">
-          <span class="inbox-compose-title">${title}</span>
-          <span class="inbox-compose-mode-label" style="font-size:11px;color:var(--muted);margin-left:8px">${modeLabel}</span>
-          <button class="inbox-compose-close" onclick="EmailModule.closeCompose()" title="Close">&times;</button>
-        </div>
-        <div class="inbox-compose-form">
-          <input class="inbox-compose-field" type="text" placeholder="To" value="${escHtml(composeData.to)}"
-            oninput="EmailModule.updateCompose('to', this.value)" />
-          <input class="inbox-compose-field" type="text" placeholder="Subject" value="${escHtml(composeData.subject)}"
-            oninput="EmailModule.updateCompose('subject', this.value)" />
-          ${bodyEditor}
-        </div>
-        <div class="inbox-compose-footer">
-          <button class="email-action-btn primary" onclick="EmailModule.sendCompose()" ${composeSending ? 'disabled' : ''}>
-            ${composeSending ? '<span class="email-spinner"></span> Sending...' : 'Send'}
-          </button>
-          <button class="email-action-btn" onclick="EmailModule.saveDraftCompose()">Save Draft</button>
-          <button class="email-action-btn" onclick="EmailModule.toggleComposeMode()" style="font-size:11px">${toggleLabel}</button>
-          <button class="email-action-btn danger" onclick="EmailModule.closeCompose()" style="margin-left:auto">Discard</button>
-        </div>
-      </div>`;
-      // Initialize Quill after the DOM renders
-      if (composeRichMode) {
-        requestAnimationFrame(() => _initComposeQuill());
-      }
-    }
+    const composeHtml = buildComposeOverlay();
 
     // Message list (with search bar at top)
     const listHtml = buildListHtml();
@@ -1425,6 +1444,7 @@ const EmailModule = (function () {
 
   function openCompose() {
     _destroyComposeQuill();
+    editingDraftUid = null;
     showCompose = true;
     composeData = { to: '', subject: '', body: '', body_html: null };
     rerender();
@@ -1436,6 +1456,7 @@ const EmailModule = (function () {
   function closeCompose() {
     _destroyComposeQuill();
     showCompose = false;
+    editingDraftUid = null;
     rerender();
   }
 
@@ -1446,6 +1467,7 @@ const EmailModule = (function () {
   function replyTo() {
     if (!selectedMessage) return;
     _destroyComposeQuill();
+    editingDraftUid = null;
     const sm = selectedMessage;
     const reSubject = (sm.subject || '').startsWith('Re: ') ? sm.subject : 'Re: ' + (sm.subject || '');
     const quotedPlain = '\n\n--- Original Message ---\nFrom: ' + (sm.from || '') + '\nDate: ' + (sm.date || '') + '\n\n' + (sm.body || '');
@@ -1492,6 +1514,7 @@ const EmailModule = (function () {
     const aiText = (resp.reply_text || '').trimEnd();
     const quotedPlain = '\n\n--- Original Message ---\nFrom: ' + (sm.from || '') + '\nDate: ' + (sm.date || '') + '\n\n' + (sm.body || '');
     _destroyComposeQuill();
+    editingDraftUid = null;
 
     if (sm.body_html) {
       // Convert AI plain text to simple HTML paragraphs
@@ -1647,47 +1670,32 @@ const EmailModule = (function () {
       <div style="font-size:12px;color:var(--muted);margin-bottom:2px">To: ${escHtml(d.to || '')}</div>
       <div style="font-size:12px;color:var(--muted)">Date: ${escHtml(d.date || '')}</div>`;
 
-    if (draftEditMode) {
-      // Edit mode action bar
-      html += `<div class="inbox-preview-actions">
-        <button class="email-action-btn primary" onclick="EmailModule.saveDraftEdit()" ${draftSaving ? 'disabled' : ''}>
-          ${draftSaving ? '<span class="email-spinner"></span> Saving...' : 'Save'}
-        </button>
-        <button class="email-action-btn" onclick="EmailModule.cancelDraftEdit()">Cancel Edit</button>
-      </div>`;
-    } else {
-      // Preview mode action bar
-      html += `<div class="inbox-preview-actions">
-        <button class="email-action-btn primary" onclick="EmailModule.sendDraft('${escHtml(d.uid)}')" ${busy ? 'disabled' : ''}>
-          ${isSending ? '<span class="email-spinner"></span> Sending...' : 'Send'}
-        </button>
-        <button class="email-action-btn" onclick="EmailModule.editDraft()">Edit</button>
-        <button class="email-action-btn" onclick="EmailModule.aiRewriteDraft()" ${draftRewriting ? 'disabled' : ''}>
-          ${draftRewriting ? '<span class="email-spinner"></span> Rewriting...' : 'AI Rewrite'}
-        </button>
-        <button class="email-action-btn danger" onclick="EmailModule.discardDraft('${escHtml(d.uid)}')" ${busy ? 'disabled' : ''}>
-          ${isDiscarding ? '<span class="email-spinner"></span> Discarding...' : 'Discard'}
-        </button>
-      </div>`;
-    }
+    // Action bar
+    html += `<div class="inbox-preview-actions">
+      <button class="email-action-btn primary" onclick="EmailModule.sendDraft('${escHtml(d.uid)}')" ${busy ? 'disabled' : ''}>
+        ${isSending ? '<span class="email-spinner"></span> Sending...' : 'Send'}
+      </button>
+      <button class="email-action-btn" onclick="EmailModule.editDraft()">Edit</button>
+      <button class="email-action-btn" onclick="EmailModule.aiRewriteDraft()" ${draftRewriting ? 'disabled' : ''}>
+        ${draftRewriting ? '<span class="email-spinner"></span> Rewriting...' : 'AI Rewrite'}
+      </button>
+      <button class="email-action-btn danger" onclick="EmailModule.discardDraft('${escHtml(d.uid)}')" ${busy ? 'disabled' : ''}>
+        ${isDiscarding ? '<span class="email-spinner"></span> Discarding...' : 'Discard'}
+      </button>
+    </div>`;
     html += '</div>';
 
-    // Draft body area
-    if (draftEditMode) {
-      html += '<div class="draft-editor-wrap"><div id="draft-editor"></div></div>';
+    // Draft body in sandboxed iframe
+    html += '<div class="inbox-preview-body">';
+    if (d.body_html) {
+      const cspMeta = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src * data: blob:; style-src * \'unsafe-inline\'; font-src *;">';
+      const wrappedHtml = '<!DOCTYPE html><html><head>' + cspMeta + '<style>body{margin:0;padding:8px;font-family:tahoma,sans-serif;font-size:14px;color:#333;line-height:1.6;}</style></head><body>' + d.body_html + '</body></html>';
+      const safeHtml = wrappedHtml.replace(/"/g, '&quot;');
+      html += `<iframe class="inbox-preview-iframe" srcdoc="${safeHtml}" onload="this.style.height=this.contentDocument.body.scrollHeight+'px'"></iframe>`;
     } else {
-      // Render draft body in sandboxed iframe (same CSP as inbox)
-      html += '<div class="inbox-preview-body">';
-      if (d.body_html) {
-        const cspMeta = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src * data: blob:; style-src * \'unsafe-inline\'; font-src *;">';
-        const wrappedHtml = '<!DOCTYPE html><html><head>' + cspMeta + '<style>body{margin:0;padding:8px;font-family:tahoma,sans-serif;font-size:14px;color:#333;line-height:1.6;}</style></head><body>' + d.body_html + '</body></html>';
-        const safeHtml = wrappedHtml.replace(/"/g, '&quot;');
-        html += `<iframe class="inbox-preview-iframe" srcdoc="${safeHtml}" onload="this.style.height=this.contentDocument.body.scrollHeight+'px'"></iframe>`;
-      } else {
-        html += `<pre class="inbox-preview-text">${escHtml(d.body || '(empty)')}</pre>`;
-      }
-      html += '</div>';
+      html += `<pre class="inbox-preview-text">${escHtml(d.body || '(empty)')}</pre>`;
     }
+    html += '</div>';
 
     // Original message separator + content
     html += '<div class="draft-original-sep">&mdash;&mdash; Original Message &mdash;&mdash;</div>';
@@ -1720,7 +1728,8 @@ const EmailModule = (function () {
     const isRunning = runningOp === 'run' || runningOp === 'dry-run';
     const canRun = status && status.gmail_connected && status.has_api_key && status.has_auto_draft_perm;
 
-    let html = renderStatusBanner();
+    let html = '<div style="position:relative;display:flex;flex-direction:column;height:100%;min-height:0">';
+    html += renderStatusBanner();
 
     // Run controls toolbar
     html += `<div class="email-drafts-toolbar">
@@ -1734,6 +1743,7 @@ const EmailModule = (function () {
 
     if (loading) {
       html += '<div class="email-empty"><span class="email-spinner"></span><div>Loading drafts...</div></div>';
+      html += '</div>';
       return html;
     }
 
@@ -1747,6 +1757,7 @@ const EmailModule = (function () {
             : 'Enable the drafter in Settings to generate AI draft replies, or create a draft in Gmail.'}
         </div>
       </div>`;
+      html += '</div>';
       return html;
     }
 
@@ -1755,6 +1766,8 @@ const EmailModule = (function () {
       <div class="draft-list">${buildDraftListHtml()}</div>
       <div class="draft-preview">${buildDraftPreviewHtml()}</div>
     </div>`;
+    html += buildComposeOverlay();
+    html += '</div>';
 
     return html;
   }
@@ -2188,10 +2201,11 @@ const EmailModule = (function () {
   }
 
   function sidebarCompose() {
-    if (activeTab !== 'inbox') {
+    if (activeTab !== 'inbox' && activeTab !== 'drafts') {
       activeTab = 'inbox';
     }
     _destroyComposeQuill();
+    editingDraftUid = null;
     showCompose = true;
     composeData = { to: '', subject: '', body: '', body_html: null };
     rerender();
@@ -2290,8 +2304,6 @@ const EmailModule = (function () {
     saveSpamSetting,
     selectDraft,
     editDraft,
-    cancelDraftEdit,
-    saveDraftEdit,
     aiRewriteDraft,
     refreshAll,
     chatSend,

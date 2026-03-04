@@ -2052,14 +2052,6 @@ body {
   letter-spacing: 0.5px;
 }
 
-/* Edit mode — Quill in preview */
-.draft-editor-wrap {
-  padding: 0 16px 16px; flex: 1;
-  display: flex; flex-direction: column;
-}
-.draft-editor-wrap .ql-container { flex: 1; min-height: 200px; }
-.draft-editor-wrap .ql-editor { font-family: tahoma, sans-serif; font-size: 14px; line-height: 1.6; }
-
 /* Empty / status states */
 .email-empty {
   display: flex; flex-direction: column; align-items: center;
