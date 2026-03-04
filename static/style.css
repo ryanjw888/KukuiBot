@@ -2079,6 +2079,10 @@ body {
 .email-status-dot.muted { background: var(--muted); }
 .email-status-text { flex: 1; color: var(--text); }
 .email-status-sub { color: var(--muted); font-size: 12px; }
+.email-status-actions {
+  display: flex; align-items: center; gap: 8px;
+  margin-left: auto; flex-shrink: 0;
+}
 
 /* Settings tab */
 .email-settings {

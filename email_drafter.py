@@ -284,11 +284,9 @@ def _get_filters() -> list[dict]:
     merged = []
     for default in DEFAULT_FILTERS:
         if default["id"] in saved_by_id:
-            # Preserve saved enabled/patterns state but update name/description from defaults
+            # Start from defaults (to pick up new name/description), then overlay all saved fields
             s = saved_by_id[default["id"]]
-            entry = {**default, "enabled": s.get("enabled", default["enabled"])}
-            if "patterns" in s:
-                entry["patterns"] = s["patterns"]
+            entry = {**default, **s}
             merged.append(entry)
         else:
             merged.append({**default})
