@@ -157,7 +157,11 @@ async def openrouter_chat(
             }
         data = resp.json()
         choices = data.get("choices") or []
-        msg = (choices[0] or {}).get("message", {}) if choices else {}
+        msg = {}
+        if choices:
+            c0 = choices[0]
+            if isinstance(c0, dict):
+                msg = c0.get("message") or {}
 
         # OpenRouter model routes may return content as either:
         # - string
@@ -179,11 +183,18 @@ async def openrouter_chat(
 
         reasoning_details = msg.get("reasoning_details") or msg.get("reasoning") or None
 
+        finish_reason = ""
+        try:
+            finish_reason = str((choices[0] or {}).get("finish_reason") or "")
+        except Exception:
+            pass
+
         return {
             "ok": True,
             "text": text,
             "tool_calls": msg.get("tool_calls") or [],
             "reasoning_details": reasoning_details,
+            "finish_reason": finish_reason,
             "raw": data,
         }
     except Exception as e:
@@ -199,6 +210,7 @@ async def openrouter_stream(
     temperature: float = 0.7,
     timeout_s: int = 300,
     reasoning_effort: str = "medium",
+    metadata_out: dict | None = None,
 ) -> AsyncIterator[str]:
     """Stream chat completion from OpenRouter, yielding text chunks.
 
@@ -210,6 +222,7 @@ async def openrouter_stream(
         temperature: sampling temperature
         timeout_s: request timeout
         reasoning_effort: reasoning effort hint (none/low/medium/high)
+        metadata_out: optional dict — if provided, ``finish_reason`` is written here
     """
     if not api_key:
         yield "[Error: No OpenRouter API key configured. Add it in Settings.]\n"
@@ -258,7 +271,14 @@ async def openrouter_stream(
                 choices = chunk.get("choices", [])
                 if not choices:
                     continue
-                delta = choices[0].get("delta", {})
+                c0 = choices[0]
+                if not isinstance(c0, dict):
+                    continue
+                # Capture finish_reason from the final chunk
+                fr = c0.get("finish_reason")
+                if fr and metadata_out is not None:
+                    metadata_out["finish_reason"] = str(fr)
+                delta = c0.get("delta", {})
                 content = delta.get("content")
                 if content:
                     yield content

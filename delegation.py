@@ -425,6 +425,22 @@ def _is_timeout_or_error_response(text: str) -> bool:
     return False
 
 
+def _extract_text_content(item: dict) -> str:
+    """Extract text from an assistant history item (str or list content)."""
+    c = item.get("content", "")
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        buf = []
+        for b in c:
+            if isinstance(b, dict) and b.get("type") == "text":
+                txt = str(b.get("text", "") or "")
+                if txt:
+                    buf.append(txt)
+        return "\n".join(buf) if buf else ""
+    return ""
+
+
 def _extract_task_response(task: dict) -> tuple[str, bool]:
     """Find delegated response by marker in target history.
 
@@ -450,23 +466,22 @@ def _extract_task_response(task: dict) -> tuple[str, bool]:
                 break
 
         if anchor >= 0:
+            best_marked = None  # Assistant msg containing TASK_DONE
+            best_any = None     # Last non-empty assistant msg
             for j in range(anchor + 1, len(items)):
                 it = items[j]
                 if not isinstance(it, dict) or it.get("role") != "assistant":
                     continue
-                c = it.get("content", "")
-                if isinstance(c, str) and c.strip():
-                    return c, _response_has_task_marker(c, tid, ttoken)
-                if isinstance(c, list):
-                    buf = []
-                    for b in c:
-                        if isinstance(b, dict) and b.get("type") == "text":
-                            txt = str(b.get("text", "") or "")
-                            if txt:
-                                buf.append(txt)
-                    if buf:
-                        joined = "\n".join(buf)
-                        return joined, _response_has_task_marker(joined, tid, ttoken)
+                c = _extract_text_content(it)
+                if not c or not c.strip():
+                    continue
+                best_any = c
+                if _response_has_task_marker(c, tid, ttoken):
+                    best_marked = c
+            # Prefer marked (has TASK_DONE), fall back to last assistant
+            chosen = best_marked or best_any
+            if chosen:
+                return chosen, _response_has_task_marker(chosen, tid, ttoken)
 
         # Final fallback: latest assistant (uncorrelated)
         for it in reversed(items):

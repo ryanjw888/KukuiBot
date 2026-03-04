@@ -301,6 +301,21 @@ async def process_chat_openrouter(
             if not tool_calls:
                 tool_calls = _extract_openrouter_pseudo_tool_calls(text)
 
+            # Check finish_reason: model wanted tool calls but we couldn't parse them
+            finish_reason = str(resp.get("finish_reason") or "")
+            if not tool_calls and finish_reason in ("tool_calls", "function_call"):
+                logger.warning(
+                    f"[openrouter] Model returned finish_reason={finish_reason} but "
+                    f"no parseable tool_calls (round {round_idx}) — retrying without tools"
+                )
+                tools_enabled = False
+                openrouter_tools_unsupported_until[model] = time.time() + _OPENROUTER_TOOLS_UNSUPPORTED_TTL_S
+                await _emit_event(session_id, queue, {
+                    "type": "status",
+                    "message": "Model requested tools but format not supported — retrying without tools.",
+                }, run_id=run_id)
+                continue
+
             # Capture provider usage
             raw = resp.get("raw") if isinstance(resp.get("raw"), dict) else {}
             u = raw.get("usage") if isinstance(raw, dict) else {}

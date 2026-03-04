@@ -223,7 +223,10 @@ async def process_chat_claude(
                 try:
                     existing_items, _, _ = load_history(session_id)
                     existing_items.append({"role": "user", "content": user_message})
-                    existing_items.append({"role": "assistant", "content": result_text})
+                    # Save full accumulated text for delegation result capture.
+                    # result_text is only the final text block; full_text has everything.
+                    history_text = full_text if full_text and len(full_text) > len(result_text or "") else result_text
+                    existing_items.append({"role": "assistant", "content": history_text})
                     if len(existing_items) > 50:
                         existing_items = existing_items[-50:]
                     save_history(session_id, existing_items, last_api_usage={"provider": "claude-code", "model": "opus"})
