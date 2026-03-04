@@ -215,7 +215,7 @@ let speechRecognition = null;
 let silenceTimer = null;
 let lastTranscriptTime = 0;
 let _wakeTriggeredVoice = false;
-const SILENCE_TIMEOUT_MS = 15000;
+const SILENCE_TIMEOUT_MS = 5000;
 const MIC_IDLE_TIMEOUT_MS = 15000;
 const hasSpeechAPI = (typeof webkitSpeechRecognition !== 'undefined') || (typeof SpeechRecognition !== 'undefined');
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -224,7 +224,7 @@ const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platfor
 let listenerActive = false;
 let listenerMode = 'local';
 let _listenerRearmTimer = null;
-const LISTENER_REARM_DELAY_MS = 1500;
+const LISTENER_REARM_DELAY_MS = 500;
 
 // --- Input button state (mic vs send) ---
 let inputHasText = false;
@@ -3737,7 +3737,7 @@ function startVoice(opts) {
     // Wake-triggered: play chime immediately as voice activates
     _wakeTriggeredVoice = true;
     beep();
-    startWakeIdleDetection();
+    startSilenceDetection();
   } else {
     _wakeTriggeredVoice = false;
     startSilenceDetection();

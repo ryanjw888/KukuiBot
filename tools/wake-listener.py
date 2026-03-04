@@ -11,6 +11,7 @@ The mode is fetched from /api/config and cached (refreshed every 30s).
 Requires: openwakeword, numpy, pyaudio, onnxruntime
 """
 import argparse, io, json, logging, os, signal, ssl, subprocess, sys, threading, time, wave
+from collections import deque
 from pathlib import Path
 from urllib import request as urlrequest
 import numpy as np
@@ -20,11 +21,12 @@ SAMPLE_RATE = 16000
 CHUNK_SAMPLES = 1280          # 80ms — openWakeWord expects this
 
 # Defaults — overridden at startup by /api/config values
-COOLDOWN_SECS = 5.0           # ignore wake scores for this long after detection
+COOLDOWN_SECS = 2.5           # ignore wake scores for this long after detection
 SILENCE_THRESHOLD = 150       # RMS amplitude threshold for silence (int16 scale)
 SILENCE_DURATION = 1.2        # seconds of sustained silence to stop recording
 MAX_RECORD_SECS = 15          # max recording length after wake word
 MIN_RECORD_SECS = 1.0         # minimum recording time before silence detection kicks in
+PRE_BUFFER_SECS = 2.0         # seconds of audio to keep before wake detection
 
 JARVIS_BACKEND_URL = os.getenv("JARVIS_BACKEND_URL", "http://127.0.0.1:5080")
 
@@ -249,6 +251,21 @@ def _safe_float(val, default):
         return float(default)
 
 
+def start_config_refresh_thread(kukuibot_url, config_state, interval=30.0):
+    """Background thread that refreshes listener config every `interval` seconds."""
+    def _refresh():
+        while True:
+            time.sleep(interval)
+            try:
+                cfg = fetch_listener_config(kukuibot_url)
+                config_state.update(cfg)
+            except Exception:
+                pass
+    t = threading.Thread(target=_refresh, daemon=True)
+    t.start()
+    return t
+
+
 def main():
     parser = argparse.ArgumentParser(description="KukuiBot wake word listener")
     parser.add_argument("--threshold", type=float, default=0.5, help="Wake word detection threshold")
@@ -294,15 +311,21 @@ def main():
     signal.signal(signal.SIGTERM, _stop)
 
     last_wake_time = 0.0
-    cached_mode = "local"
-    mode_fetched_at = 0.0
-    MODE_CACHE_SECS = 30.0
-
-    # Fetch initial mode
-    cached_mode = initial_cfg.get("mode", "local")
-    mode_fetched_at = time.time()
-    logger.info(f"Listening for 'Hey Jarvis' — room={args.room}, mode={cached_mode}, device={device or 'system default'}, url={kukuibot_url}")
+    config_state = {
+        "mode": initial_cfg.get("mode", "local"),
+        "threshold": threshold,
+        "cooldown": cooldown,
+        "silence_threshold": silence_thresh,
+        "silence_duration": silence_dur,
+        "max_record": max_record,
+        "min_record": min_record,
+    }
+    start_config_refresh_thread(kukuibot_url, config_state)
+    logger.info(f"Listening for 'Hey Jarvis' — room={args.room}, mode={config_state['mode']}, device={device or 'system default'}, url={kukuibot_url}")
     logger.info(f"Tuning: threshold={threshold}, cooldown={cooldown}s, silence={silence_thresh}RMS/{silence_dur}s, record={min_record}-{max_record}s")
+
+    pre_buffer_chunks = int(PRE_BUFFER_SECS * SAMPLE_RATE / CHUNK_SAMPLES)
+    audio_ring = deque(maxlen=pre_buffer_chunks)
 
     while not stop:
         try:
@@ -312,6 +335,7 @@ def main():
             time.sleep(0.5)
             continue
 
+        audio_ring.append(pcm)
         pred = model.predict(pcm)
         score = float(pred.get(label, 0.0))
 
@@ -325,31 +349,20 @@ def main():
         last_wake_time = time.time()
         logger.info(f"WAKE DETECTED (score={score:.3f})")
 
-        # Refresh mode + tuning cache if stale
-        if now - mode_fetched_at > MODE_CACHE_SECS:
-            _cfg = fetch_listener_config(kukuibot_url)
-            cached_mode = _cfg.get("mode", "local")
-            if "threshold" in _cfg:
-                threshold = _cfg["threshold"]
-            if "cooldown" in _cfg:
-                cooldown = _cfg["cooldown"]
-            if "silence_threshold" in _cfg:
-                silence_thresh = _cfg["silence_threshold"]
-            if "silence_duration" in _cfg:
-                silence_dur = _cfg["silence_duration"]
-            if "max_record" in _cfg:
-                max_record = _cfg["max_record"]
-            if "min_record" in _cfg:
-                min_record = _cfg["min_record"]
-            mode_fetched_at = time.time()
-            logger.info(f"Config refreshed: mode={cached_mode}, threshold={threshold}")
+        cached_mode = config_state.get("mode", "local")
+        threshold = config_state.get("threshold", threshold)
+        cooldown = config_state.get("cooldown", cooldown)
+        silence_thresh = config_state.get("silence_threshold", silence_thresh)
+        silence_dur = config_state.get("silence_duration", silence_dur)
+        max_record = config_state.get("max_record", max_record)
+        min_record = config_state.get("min_record", min_record)
 
         if cached_mode == "remote":
             # --- Remote mode: record → transcribe → Jarvis chat → Sonos TTS ---
             fire_chime(kukuibot_url)
 
             # Record speech until silence or max duration
-            frames = []
+            frames = list(audio_ring)  # prepend pre-buffered audio
             silence_chunks = 0
             silence_limit = int(silence_dur * SAMPLE_RATE / CHUNK_SAMPLES)
             max_chunks = int(max_record * SAMPLE_RATE / CHUNK_SAMPLES)
@@ -410,8 +423,8 @@ def main():
             last_wake_time = time.time()
         else:
             # --- Local mode: POST wake event → SSE → browser STT ---
-            play_chime()
-            post_wake_event(kukuibot_url, score, args.username, args.room)
+            threading.Thread(target=play_chime, daemon=True).start()
+            threading.Thread(target=post_wake_event, args=(kukuibot_url, score, args.username, args.room), daemon=True).start()
 
     logger.info("Shutting down...")
     stream.stop_stream()
