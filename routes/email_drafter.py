@@ -115,7 +115,7 @@ def _run_drafter_sync(dry_run: bool):
 
 @router.get("/api/drafter/drafts")
 async def api_drafter_drafts():
-    """List auto-drafted emails from Gmail Drafts folder."""
+    """List all drafts from Gmail Drafts folder (AI-generated and manual)."""
     from email_drafter import list_drafts
     try:
         drafts = await asyncio.to_thread(list_drafts)
@@ -165,7 +165,7 @@ async def api_drafter_update(uid: str, req: Request):
 
 @router.post("/api/drafter/drafts/{uid}/send")
 async def api_drafter_send(uid: str):
-    """Send a specific auto-drafted email."""
+    """Send a draft email (AI-generated or manual)."""
     from email_drafter import send_draft
     try:
         result = await asyncio.to_thread(send_draft, uid)
@@ -183,7 +183,7 @@ async def api_drafter_send(uid: str):
 
 @router.post("/api/drafter/drafts/{uid}/discard")
 async def api_drafter_discard(uid: str):
-    """Discard (delete) a specific auto-drafted email."""
+    """Discard (delete) a draft email (AI-generated or manual)."""
     from email_drafter import discard_draft
     try:
         result = await asyncio.to_thread(discard_draft, uid)

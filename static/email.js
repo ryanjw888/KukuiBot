@@ -233,12 +233,16 @@ const EmailModule = (function () {
   async function fetchMessageDetail(folder, uid) {
     messageLoading = true;
     selectedUid = uid;
+    selectedMessage = null;
     patchPreview();
     const resp = await apiFetch('/api/gmail/message', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ folder, uid: String(uid) }),
     });
+    // Guard against stale responses: if user clicked a different message
+    // while this request was in-flight, discard this response.
+    if (String(selectedUid) !== String(uid)) return;
     if (resp.ok && resp.message) {
       selectedMessage = resp.message;
       // Mark as read if not already
@@ -1614,10 +1618,11 @@ const EmailModule = (function () {
   function buildDraftListHtml() {
     return drafts.map(d => {
       const isSelected = d.uid === selectedDraftUid;
+      const aiLabel = d.is_ai_draft ? '<span class="inbox-msg-label ai-draft">AI Draft</span>' : '';
       return `<div class="draft-msg-row${isSelected ? ' selected' : ''}"
                    onclick="EmailModule.selectDraft('${escHtml(d.uid)}')">
         <div class="draft-msg-content">
-          <div class="inbox-msg-sender">${escHtml(d.from_name || d.to)}</div>
+          <div class="inbox-msg-sender">${escHtml(d.from_name || d.to)} ${aiLabel}</div>
           <div class="inbox-msg-subject">${escHtml(d.subject)}</div>
           <div class="inbox-msg-snippet">${escHtml(d.snippet || '')}</div>
         </div>
@@ -1735,11 +1740,11 @@ const EmailModule = (function () {
     if (drafts.length === 0) {
       html += `<div class="email-empty">
         <div class="email-empty-icon">&#9993;</div>
-        <div class="email-empty-title">No auto-drafted emails</div>
+        <div class="email-empty-title">No drafts yet</div>
         <div class="email-empty-desc">
           ${status && status.enabled
-            ? 'The drafter will create draft replies when new emails arrive. Click "Run Now" to check immediately.'
-            : 'Enable the drafter in the Settings tab, then click "Run Now" to generate draft replies.'}
+            ? 'Run Now to generate AI draft replies, or create a draft in Gmail and it will appear here.'
+            : 'Enable the drafter in Settings to generate AI draft replies, or create a draft in Gmail.'}
         </div>
       </div>`;
       return html;
@@ -2166,7 +2171,6 @@ const EmailModule = (function () {
     { key: 'INBOX',              label: 'Inbox',      icon: '&#128229;' },
     { key: '[Gmail]/Starred',    label: 'Starred',    icon: '&#11088;'  },
     { key: '[Gmail]/Sent Mail',  label: 'Sent',       icon: '&#128228;' },
-    { key: '[Gmail]/Drafts',     label: 'Drafts',     icon: '&#128196;' },
     { key: '[Gmail]/Spam',       label: 'Spam',       icon: '&#9888;'   },
     { key: '[Gmail]/Trash',      label: 'Trash',      icon: '&#128465;' },
     { key: '[Gmail]/All Mail',   label: 'All Mail',   icon: '&#128231;' },
@@ -2210,7 +2214,7 @@ const EmailModule = (function () {
       const isActive = activeTab === 'inbox' && inboxFolder === f.key;
       const count = f.key === 'INBOX'
         ? inboxMessages.filter(m => !m.is_read).length
-        : f.key === '[Gmail]/Drafts' ? drafts.length : 0;
+        : 0;
       html += `<button class="email-sidebar-folder${isActive ? ' active' : ''}" onclick="EmailModule.sidebarSelectFolder('${escHtml(f.key)}')">
         <span class="email-sidebar-folder-icon">${f.icon}</span>
         <span class="email-sidebar-folder-label">${f.label}</span>
@@ -2223,7 +2227,7 @@ const EmailModule = (function () {
     html += '<div class="email-sidebar-divider"></div>';
     html += '<div class="email-sidebar-folders">';
     const drafterTabs = [
-      { tab: 'drafts',   label: 'Auto Drafts', icon: '&#128221;', count: drafts.length },
+      { tab: 'drafts',   label: 'Drafts', icon: '&#128221;', count: drafts.length },
       { tab: 'spam',     label: 'Spam Filter',  icon: '&#128737;', count: 0 },
       { tab: 'profile',  label: 'Style Profile',icon: '&#127912;', count: 0 },
       { tab: 'settings', label: 'Settings',     icon: '&#9881;',   count: 0 },
@@ -2240,8 +2244,9 @@ const EmailModule = (function () {
 
     // Sync status + button
     html += '<div class="email-sidebar-sync">';
-    html += `<button class="email-sidebar-sync-btn" onclick="EmailModule.refreshInbox()" title="Force refresh from Gmail">Sync Now</button>`;
-    if (syncStatus && syncStatus.last_sync_ago_str) {
+    const syncBtnText = inboxLoading ? '<span class="email-sync-spinner"></span> Syncing...' : 'Sync Now';
+    html += `<button class="email-sidebar-sync-btn${inboxLoading ? ' syncing' : ''}" onclick="EmailModule.refreshInbox()" title="Force refresh from Gmail" ${inboxLoading ? 'disabled' : ''}>${syncBtnText}</button>`;
+    if (syncStatus && syncStatus.last_sync_ago_str && !inboxLoading) {
       html += `<span class="email-sidebar-sync-status">Synced ${escHtml(syncStatus.last_sync_ago_str)}</span>`;
     }
     html += '</div>';

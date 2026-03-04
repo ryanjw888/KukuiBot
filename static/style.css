@@ -2503,6 +2503,25 @@ body {
 .email-sidebar-sync-btn:hover {
   background: var(--surface-hover); color: var(--text); border-color: var(--accent);
 }
+.email-sidebar-sync-btn:disabled {
+  opacity: 0.7; cursor: not-allowed;
+}
+.email-sidebar-sync-btn.syncing {
+  color: var(--accent);
+}
+.email-sync-spinner {
+  display: inline-block;
+  width: 10px; height: 10px;
+  border: 2px solid rgba(var(--accent-rgb, 33,150,243), 0.3);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: email-sync-spin 0.8s linear infinite;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+@keyframes email-sync-spin {
+  to { transform: rotate(360deg); }
+}
 .email-sidebar-sync-status {
   font-size: 10px; color: var(--muted);
 }
@@ -2577,6 +2596,7 @@ body {
 .inbox-msg-label.spam { background: rgba(255, 87, 34, 0.15); color: #ff5722; }
 .inbox-msg-label.phishing { background: rgba(var(--red-rgb, 244,67,54), 0.2); color: var(--red); }
 .inbox-msg-label.error { background: rgba(var(--red-rgb, 244,67,54), 0.15); color: var(--red); }
+.inbox-msg-label.ai-draft { background: rgba(var(--blue-rgb, 33,150,243), 0.15); color: var(--blue); }
 .inbox-preview-header {
   padding: 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;
 }

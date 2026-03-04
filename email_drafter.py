@@ -1513,31 +1513,31 @@ def list_drafts() -> list[dict]:
         if status != "OK":
             return []
 
-        status, data = imap.search(None, "ALL")
+        status, data = imap.uid('search', None, "ALL")
         if status != "OK" or not data[0]:
             return []
 
-        msg_nums = data[0].split()
-        msg_nums.reverse()  # newest first
+        uids = data[0].split()
+        uids.reverse()  # newest first
 
         # Phase A: fetch headers only, identify AI drafts
-        ai_draft_nums = set()
-        for num in msg_nums[:50]:  # cap at 50
+        ai_draft_uids = set()
+        for uid in uids[:50]:  # cap at 50
             try:
-                status2, hdr_data = imap.fetch(num, "(BODY.PEEK[HEADER])")
+                status2, hdr_data = imap.uid('fetch', uid, "(BODY.PEEK[HEADER])")
                 if status2 != "OK" or not hdr_data or not hdr_data[0]:
                     continue
                 hdr_msg = email.message_from_bytes(hdr_data[0][1])
                 if hdr_msg.get(X_DRAFTER_HEADER) == X_DRAFTER_VALUE:
-                    ai_draft_nums.add(num)
+                    ai_draft_uids.add(uid)
             except Exception as e:
-                logger.warning(f"Error reading draft header {num}: {e}")
+                logger.warning(f"Error reading draft header UID {uid}: {e}")
                 continue
 
         # Phase B: fetch full body for ALL drafts
-        for num in msg_nums[:50]:
+        for uid in uids[:50]:
             try:
-                status2, msg_data = imap.fetch(num, "(BODY.PEEK[])")
+                status2, msg_data = imap.uid('fetch', uid, "(BODY.PEEK[])")
                 if status2 != "OK" or not msg_data or not msg_data[0]:
                     continue
                 raw = msg_data[0][1]
@@ -1567,7 +1567,7 @@ def list_drafts() -> list[dict]:
                         from_name = addr_part.split("@")[0] if addr_part else to_addr
 
                 drafts.append({
-                    "uid": num.decode(),
+                    "uid": uid.decode(),
                     "to": to_addr,
                     "subject": subject,
                     "body": body_plain,
@@ -1576,10 +1576,10 @@ def list_drafts() -> list[dict]:
                     "from_name": from_name,
                     "in_reply_to": in_reply_to,
                     "date": msg.get("Date", ""),
-                    "is_ai_draft": num in ai_draft_nums,
+                    "is_ai_draft": uid in ai_draft_uids,
                 })
             except Exception as e:
-                logger.warning(f"Error reading draft {num}: {e}")
+                logger.warning(f"Error reading draft UID {uid}: {e}")
                 continue
 
     finally:
@@ -1606,7 +1606,7 @@ def get_original_for_draft(uid: str) -> dict:
         if status != "OK":
             return {"ok": False, "error": "Could not open Drafts folder"}
 
-        status, msg_data = imap.fetch(uid.encode(), "(BODY.PEEK[])")
+        status, msg_data = imap.uid('fetch', uid.encode(), "(BODY.PEEK[])")
         if status != "OK" or not msg_data or not msg_data[0]:
             return {"ok": False, "error": f"Draft {uid} not found"}
 
@@ -1626,12 +1626,12 @@ def get_original_for_draft(uid: str) -> dict:
                 status, _ = imap.select(folder, readonly=True)
                 if status != "OK":
                     continue
-                status, data = imap.search(None, f'HEADER Message-ID "<{clean_id}>"')
+                status, data = imap.uid('search', None, f'HEADER Message-ID "<{clean_id}>"')
                 if status != "OK" or not data[0]:
                     continue
 
-                num = data[0].split()[0]
-                status, orig_data = imap.fetch(num, "(BODY.PEEK[])")
+                orig_uid = data[0].split()[0]
+                status, orig_data = imap.uid('fetch', orig_uid, "(BODY.PEEK[])")
                 if status != "OK" or not orig_data or not orig_data[0]:
                     continue
 
@@ -1668,9 +1668,10 @@ def update_draft(uid: str, body_html: str) -> dict:
     """Update a draft's body HTML in-place (IMAP has no edit; delete + append).
 
     Returns {"ok": True, "new_uid": "...", "old_uid": uid}.
+    Works on both AI-generated and manual drafts.
     """
     from gmail_bridge import check_permission
-    check_permission("auto_draft")
+    check_permission("create_drafts")
 
     imap = _imap_connect()
     try:
@@ -1678,21 +1679,17 @@ def update_draft(uid: str, body_html: str) -> dict:
         if status != "OK":
             raise RuntimeError("Could not open Drafts folder")
 
-        status, msg_data = imap.fetch(uid.encode(), "(BODY.PEEK[])")
+        status, msg_data = imap.uid('fetch', uid.encode(), "(BODY.PEEK[])")
         if status != "OK" or not msg_data or not msg_data[0]:
             raise RuntimeError(f"Draft {uid} not found")
 
         raw = msg_data[0][1]
         old_msg = email.message_from_bytes(raw)
 
-        # Security guard — only allow editing our own auto-drafts
-        if old_msg.get(X_DRAFTER_HEADER) != X_DRAFTER_VALUE:
-            raise PermissionError("This draft was not created by the auto-drafter")
-
         # Build new message preserving all original headers
         new_msg = MIMEText(body_html, "html")
         for hdr in ("From", "To", "Subject", "In-Reply-To", "References",
-                     X_DRAFTER_HEADER, "Date"):
+                     X_DRAFTER_HEADER, "Date", "Cc", "Bcc"):
             val = old_msg.get(hdr)
             if val:
                 new_msg[hdr] = val
@@ -1715,7 +1712,7 @@ def update_draft(uid: str, body_html: str) -> dict:
                 new_uid = match.group(1)
 
         # DELETE old draft
-        imap.store(uid.encode(), "+FLAGS", "\\Deleted")
+        imap.uid('store', uid.encode(), "+FLAGS", "\\Deleted")
         imap.expunge()
 
         logger.info(f"Draft updated: old_uid={uid} new_uid={new_uid}")
@@ -1729,11 +1726,14 @@ def update_draft(uid: str, body_html: str) -> dict:
 
 
 def send_draft(uid: str) -> dict:
-    """Send an auto-drafted email by UID. Reads from Drafts, sends via SMTP, trashes draft."""
+    """Send a draft email by UID. Reads from Drafts, sends via SMTP, trashes draft.
+
+    Works on both AI-generated and manual drafts.
+    """
     from gmail_bridge import check_permission, _get_config as gmail_config
     import smtplib
 
-    check_permission("auto_draft")
+    check_permission("read_inbox")
 
     # Need at least one send permission
     from gmail_bridge import get_permissions
@@ -1753,16 +1753,12 @@ def send_draft(uid: str) -> dict:
         if status != "OK":
             raise RuntimeError("Could not open Drafts folder")
 
-        status, msg_data = imap.fetch(uid.encode(), "(RFC822)")
+        status, msg_data = imap.uid('fetch', uid.encode(), "(RFC822)")
         if status != "OK" or not msg_data or not msg_data[0]:
             raise RuntimeError(f"Draft {uid} not found")
 
         raw = msg_data[0][1]
         msg = email.message_from_bytes(raw)
-
-        # Verify it's our draft
-        if msg.get(X_DRAFTER_HEADER) != X_DRAFTER_VALUE:
-            raise PermissionError("This draft was not created by the auto-drafter")
 
         to_addr = msg.get("To", "")
         subject = _parse_header(msg.get("Subject", ""))
@@ -1793,7 +1789,7 @@ def send_draft(uid: str) -> dict:
             server.sendmail(email_addr, [to_lower], raw)
 
         # Trash the draft
-        imap.store(uid.encode(), "+FLAGS", "\\Deleted")
+        imap.uid('store', uid.encode(), "+FLAGS", "\\Deleted")
         imap.expunge()
 
         logger.info(f"Draft sent: to={to_lower} subject={subject[:50]}")
@@ -1807,9 +1803,9 @@ def send_draft(uid: str) -> dict:
 
 
 def discard_draft(uid: str) -> dict:
-    """Delete a draft by UID."""
+    """Delete a draft by UID. Works on both AI-generated and manual drafts."""
     from gmail_bridge import check_permission
-    check_permission("auto_draft")
+    check_permission("read_inbox")
 
     imap = _imap_connect()
     try:
@@ -1817,17 +1813,12 @@ def discard_draft(uid: str) -> dict:
         if status != "OK":
             raise RuntimeError("Could not open Drafts folder")
 
-        # Verify it's our draft before deleting
-        status, msg_data = imap.fetch(uid.encode(), "(BODY.PEEK[HEADER])")
+        # Verify draft exists before deleting
+        status, msg_data = imap.uid('fetch', uid.encode(), "(BODY.PEEK[HEADER])")
         if status != "OK" or not msg_data or not msg_data[0]:
             raise RuntimeError(f"Draft {uid} not found")
 
-        raw_header = msg_data[0][1]
-        msg = email.message_from_bytes(raw_header)
-        if msg.get(X_DRAFTER_HEADER) != X_DRAFTER_VALUE:
-            raise PermissionError("This draft was not created by the auto-drafter")
-
-        imap.store(uid.encode(), "+FLAGS", "\\Deleted")
+        imap.uid('store', uid.encode(), "+FLAGS", "\\Deleted")
         imap.expunge()
 
         logger.info(f"Draft discarded: uid={uid}")
