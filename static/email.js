@@ -959,7 +959,9 @@ const EmailModule = (function () {
     if (initialized) return;
     initialized = true;
     activeTab = 'inbox';
-    expandedDrafts.clear();
+    selectedDraftUid = null;
+    selectedDraft = null;
+    draftOriginal = null;
     chatMessages = [];
 
     // Restore saved model/worker prefs
@@ -1005,6 +1007,7 @@ const EmailModule = (function () {
   function destroy() {
     initialized = false;
     destroyProfileEditor();
+    _destroyDraftQuill();
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
     if (syncTimer) { clearInterval(syncTimer); syncTimer = null; }
     if (chatAbortController) { try { chatAbortController.abort(); } catch {} }
