@@ -51,6 +51,13 @@ const EmailModule = (function () {
   let redirectData = { to: '', subject: '' };
   let redirectSending = false;
 
+  // Multi-select state
+  let selectedUids = new Set();       // UIDs of checked messages (inbox)
+  let lastCheckedUid = null;          // for shift-click range select
+  let selectedDraftUids = new Set();  // UIDs of checked drafts
+  let lastCheckedDraftUid = null;     // for shift-click range select in drafts
+  let showShortcutsHelp = false;      // keyboard shortcuts help overlay
+
   // Chat state
   let chatMessages = []; // [{role, text, ts}]
   let chatStreaming = false;
@@ -83,6 +90,24 @@ const EmailModule = (function () {
 
   function fmtTime(ts) {
     return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function buildReplyAllTo(sm) {
+    const all = [sm.from || '', sm.to || '', sm.cc || '']
+      .join(',')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+    const seen = new Set();
+    const unique = [];
+    for (const addr of all) {
+      const em = (addr.match(/<([^>]+)>/) || [, addr])[1].toLowerCase().trim();
+      if (!seen.has(em)) {
+        seen.add(em);
+        unique.push(addr);
+      }
+    }
+    return unique.join(', ');
   }
 
   async function apiFetch(url, opts, timeoutMs) {
@@ -230,6 +255,7 @@ const EmailModule = (function () {
     });
     if (resp.ok && resp.messages) {
       inboxMessages = resp.messages;
+      selectedUids.clear();
     } else if (resp.error) {
       console.error('fetchInbox error:', resp.error);
     }
@@ -1041,6 +1067,197 @@ const EmailModule = (function () {
     rerender();
   }
 
+  // --- Keyboard Shortcuts ---
+
+  function _buildShortcutsHelp() {
+    return `<div class="shortcuts-overlay" onclick="if(event.target===this){EmailModule.closeShortcutsHelp()}">
+      <div class="shortcuts-modal">
+        <button class="shortcuts-close" onclick="EmailModule.closeShortcutsHelp()">&times;</button>
+        <h3>Keyboard Shortcuts</h3>
+        <table>
+          <tr><td>j</td><td>Next message</td></tr>
+          <tr><td>k</td><td>Previous message</td></tr>
+          <tr><td>o / Enter</td><td>Open focused message</td></tr>
+          <tr><td>r / a</td><td>Reply to All</td></tr>
+          <tr><td>f</td><td>Forward</td></tr>
+          <tr><td>#</td><td>Trash selected</td></tr>
+          <tr><td>x</td><td>Toggle checkbox</td></tr>
+          <tr><td>Shift+i</td><td>Mark as read</td></tr>
+          <tr><td>Shift+u</td><td>Mark as unread</td></tr>
+          <tr><td>s</td><td>Toggle star</td></tr>
+          <tr><td>c</td><td>Compose new email</td></tr>
+          <tr><td>/</td><td>Focus search bar</td></tr>
+          <tr><td>Esc</td><td>Close overlay / Deselect all</td></tr>
+          <tr><td>${navigator.platform.includes('Mac') ? 'Cmd' : 'Ctrl'}+Enter</td><td>Send compose</td></tr>
+          <tr><td>?</td><td>Show this help</td></tr>
+        </table>
+      </div>
+    </div>`;
+  }
+
+  function closeShortcutsHelp() {
+    showShortcutsHelp = false;
+    const el = document.querySelector('.shortcuts-overlay');
+    if (el) el.remove();
+  }
+
+  function _handleKeyboardShortcut(e) {
+    // Only active on inbox/drafts tabs
+    if (activeTab !== 'inbox' && activeTab !== 'drafts') return;
+
+    const tag = e.target.tagName;
+    const isEditable = tag === 'INPUT' || tag === 'TEXTAREA' ||
+      e.target.contentEditable === 'true' || e.target.closest('.ql-editor');
+
+    // Escape and Ctrl/Cmd+Enter work even in compose
+    if (e.key === 'Escape') {
+      if (showShortcutsHelp) { closeShortcutsHelp(); return; }
+      if (showCompose) { closeCompose(); return; }
+      if (showRedirect) { closeRedirect(); return; }
+      if (selectedUids.size > 0) { bulkDeselectAll(); return; }
+      if (selectedDraftUids.size > 0) { bulkDeselectAllDrafts(); return; }
+      return;
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      if (showCompose) { e.preventDefault(); sendCompose(); }
+      return;
+    }
+
+    // All other shortcuts disabled when typing
+    if (isEditable) return;
+
+    const key = e.key;
+
+    // Prevent default for shortcut keys
+    if (['j','k','x','s','c','r','a','f','e','/','?'].includes(key) || key === '#') {
+      e.preventDefault();
+    }
+
+    if (key === '?') {
+      showShortcutsHelp = !showShortcutsHelp;
+      if (showShortcutsHelp) {
+        const div = document.createElement('div');
+        div.innerHTML = _buildShortcutsHelp();
+        document.body.appendChild(div.firstElementChild);
+      } else {
+        closeShortcutsHelp();
+      }
+      return;
+    }
+
+    if (key === '/') {
+      const searchInput = document.querySelector('.inbox-search');
+      if (searchInput) searchInput.focus();
+      return;
+    }
+
+    if (key === 'c') {
+      openCompose();
+      return;
+    }
+
+    if (activeTab === 'inbox') {
+      if (key === 'j' || key === 'k') {
+        const uids = inboxMessages.map(m => String(m.uid));
+        if (!uids.length) return;
+        let idx = selectedUid ? uids.indexOf(String(selectedUid)) : -1;
+        if (key === 'j') idx = idx < uids.length - 1 ? idx + 1 : idx;
+        else idx = idx > 0 ? idx - 1 : (idx === -1 ? uids.length - 1 : idx);
+        if (idx === -1) idx = 0;
+        const m = inboxMessages[idx];
+        selectMessage(m.folder || inboxFolder, String(m.uid));
+        return;
+      }
+
+      if ((key === 'o' || key === 'Enter') && selectedUid) {
+        const m = inboxMessages.find(m => String(m.uid) === String(selectedUid));
+        if (m) selectMessage(m.folder || inboxFolder, String(m.uid));
+        return;
+      }
+
+      if ((key === 'r' || key === 'a') && selectedMessage) {
+        replyTo();
+        return;
+      }
+
+      if (key === 'f' && selectedMessage) {
+        forward();
+        return;
+      }
+
+      if (key === 'x' && selectedUid) {
+        toggleCheck(String(selectedUid));
+        return;
+      }
+
+      if (key === 's' && selectedUid) {
+        toggleStar(inboxFolder, String(selectedUid));
+        return;
+      }
+
+      if (key === '#') {
+        if (selectedUids.size > 0) {
+          bulkTrash();
+        } else if (selectedUid) {
+          trashMessage(inboxFolder, String(selectedUid));
+        }
+        return;
+      }
+
+      if (key === 'I' && e.shiftKey) {
+        if (selectedUids.size > 0) {
+          bulkMarkRead();
+        } else if (selectedUid) {
+          const msg = inboxMessages.find(m => String(m.uid) === String(selectedUid));
+          if (msg && !msg.is_read) toggleReadStatus(inboxFolder, String(selectedUid));
+        }
+        return;
+      }
+
+      if (key === 'U' && e.shiftKey) {
+        if (selectedUids.size > 0) {
+          bulkMarkUnread();
+        } else if (selectedUid) {
+          const msg = inboxMessages.find(m => String(m.uid) === String(selectedUid));
+          if (msg && msg.is_read) toggleReadStatus(inboxFolder, String(selectedUid));
+        }
+        return;
+      }
+
+      if (key === 'e') {
+        // TODO: archive
+        return;
+      }
+    }
+
+    if (activeTab === 'drafts') {
+      if (key === 'j' || key === 'k') {
+        if (!drafts.length) return;
+        const draftUids = drafts.map(d => String(d.uid));
+        let idx = selectedDraftUid ? draftUids.indexOf(String(selectedDraftUid)) : -1;
+        if (key === 'j') idx = idx < draftUids.length - 1 ? idx + 1 : idx;
+        else idx = idx > 0 ? idx - 1 : (idx === -1 ? draftUids.length - 1 : idx);
+        if (idx === -1) idx = 0;
+        selectDraft(draftUids[idx]);
+        return;
+      }
+
+      if (key === 'x' && selectedDraftUid) {
+        toggleDraftCheck(String(selectedDraftUid));
+        return;
+      }
+
+      if (key === '#') {
+        if (selectedDraftUids.size > 0) {
+          bulkDiscardDrafts();
+        } else if (selectedDraftUid) {
+          discardDraft(selectedDraftUid);
+        }
+        return;
+      }
+    }
+  }
+
   // --- Lifecycle ---
 
   async function init() {
@@ -1066,6 +1283,7 @@ const EmailModule = (function () {
     buildModelList();
     await loadWorkers();
     _registerChatSession();
+    document.addEventListener('keydown', _handleKeyboardShortcut);
 
     await Promise.all([fetchStatus(), fetchConfig(), fetchDrafts(), fetchHistory()]);
     rerender();
@@ -1098,6 +1316,7 @@ const EmailModule = (function () {
     initialized = false;
     destroyProfileEditor();
     _destroyComposeQuill();
+    document.removeEventListener('keydown', _handleKeyboardShortcut);
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
     if (syncTimer) { clearInterval(syncTimer); syncTimer = null; }
     if (chatAbortController) { try { chatAbortController.abort(); } catch {} }
@@ -1177,7 +1396,10 @@ const EmailModule = (function () {
   function buildListHtml() {
     const clearBtn = inboxSearch ? `<button class="inbox-search-clear" onclick="EmailModule.clearSearch()" title="Clear search">&times;</button>` : '';
     const dotsHtml = searchLoading ? '<span class="inbox-search-dots"><span>.</span><span>.</span><span>.</span></span>' : '';
+    const allChecked = inboxMessages.length > 0 && inboxMessages.every(m => selectedUids.has(String(m.uid)));
+    const someChecked = inboxMessages.some(m => selectedUids.has(String(m.uid)));
     let html = `<div class="inbox-search-bar">
+      <input type="checkbox" class="inbox-select-all" ${allChecked ? 'checked' : ''} onclick="EmailModule.toggleSelectAll()" title="Select all" />
       <div class="inbox-search-wrap">
         <input class="inbox-search" type="text" placeholder="Search Gmail..." value="${escHtml(inboxSearch)}"
           onkeydown="if(event.key==='Enter'){EmailModule.setInboxSearch(this.value)}" />
@@ -1191,11 +1413,14 @@ const EmailModule = (function () {
     } else {
       html += inboxMessages.map(m => {
         const isSelected = String(m.uid) === String(selectedUid);
+        const isChecked = selectedUids.has(String(m.uid));
         const unreadCls = m.is_read ? '' : ' unread';
         const selectedCls = isSelected ? ' selected' : '';
+        const checkedCls = isChecked ? ' checked' : '';
         const starCls = m.is_starred ? ' starred' : '';
         const starChar = m.is_starred ? '\u2605' : '\u2606';
-        return `<div class="inbox-msg-row${unreadCls}${selectedCls}" onclick="EmailModule.selectMessage('${escHtml(m.folder || inboxFolder)}', '${escHtml(String(m.uid))}')">
+        return `<div class="inbox-msg-row${unreadCls}${selectedCls}${checkedCls}" onclick="EmailModule.selectMessage('${escHtml(m.folder || inboxFolder)}', '${escHtml(String(m.uid))}')">
+          <input type="checkbox" class="inbox-msg-check" ${isChecked ? 'checked' : ''} onclick="event.stopPropagation(); EmailModule.toggleCheck('${escHtml(String(m.uid))}', event)" />
           <span class="inbox-msg-star${starCls}" onclick="EmailModule.toggleStar('${escHtml(m.folder || inboxFolder)}', '${escHtml(String(m.uid))}', event)" title="${m.is_starred ? 'Unstar' : 'Star'}">${starChar}</span>
           <div class="inbox-msg-content">
             <div class="inbox-msg-sender">${escHtml(parseSender(m.from))}</div>
@@ -1217,14 +1442,32 @@ const EmailModule = (function () {
     const el = document.querySelector('.inbox-list');
     if (!el) return rerender();
     el.innerHTML = buildListHtml();
+    // Set indeterminate state on select-all checkbox (can't be set via HTML attribute)
+    const selAllEl = el.querySelector('.inbox-select-all');
+    if (selAllEl) {
+      const someChecked = inboxMessages.some(m => selectedUids.has(String(m.uid)));
+      const allChecked = inboxMessages.length > 0 && inboxMessages.every(m => selectedUids.has(String(m.uid)));
+      selAllEl.indeterminate = someChecked && !allChecked;
+    }
   }
 
   function patchPreview() {
     if (activeTab !== 'inbox') return rerender();
     const el = document.querySelector('.inbox-preview');
     if (!el) return rerender();
-    // Re-use renderInboxTab's preview logic by rebuilding just the preview portion
+    // Bulk action bar replaces preview when items are selected
     let html = '';
+    if (selectedUids.size > 0) {
+      html = `<div class="inbox-bulk-bar">
+        <span class="bulk-count">${selectedUids.size} selected</span>
+        <button onclick="EmailModule.bulkTrash()">Trash</button>
+        <button onclick="EmailModule.bulkMarkRead()">Mark Read</button>
+        <button onclick="EmailModule.bulkMarkUnread()">Mark Unread</button>
+        <button onclick="EmailModule.bulkDeselectAll()">Deselect All</button>
+      </div>`;
+      el.innerHTML = html;
+      return;
+    }
     if (messageLoading) {
       html = '<div class="inbox-empty"><span class="email-spinner"></span><div>Loading message...</div></div>';
     } else if (selectedMessage) {
@@ -1250,12 +1493,14 @@ const EmailModule = (function () {
           </div>
           <div style="font-size:12px;color:var(--muted);margin-bottom:2px">From: ${escHtml(sm.from || '')}</div>
           <div style="font-size:12px;color:var(--muted);margin-bottom:2px">To: ${escHtml(sm.to || '')}</div>
+          ${sm.cc ? `<div style="font-size:12px;color:var(--muted);margin-bottom:2px">CC: ${escHtml(sm.cc)}</div>` : ''}
           <div style="font-size:12px;color:var(--muted)">Date: ${escHtml(sm.date || '')}</div>
           <div class="inbox-preview-actions">
             <button class="email-action-btn primary" onclick="EmailModule.aiReply()" ${aiReplyLoading ? 'disabled' : ''}>
               ${aiReplyLoading ? '<span class="email-spinner"></span> Generating...' : 'AI Reply'}
             </button>
-            <button class="email-action-btn" onclick="EmailModule.replyTo()">Reply</button>
+            <button class="email-action-btn" onclick="EmailModule.replyTo()">Reply to All</button>
+            <button class="email-action-btn" onclick="EmailModule.forward()">Forward</button>
             <button class="email-action-btn" onclick="EmailModule.openRedirect()">Redirect</button>
             <button class="email-action-btn danger" onclick="EmailModule.trashMessage('${escHtml(sm.folder || inboxFolder)}', '${escHtml(String(sm.uid || selectedUid))}')">Trash</button>
             <button class="email-action-btn" onclick="EmailModule.toggleReadStatus('${escHtml(sm.folder || inboxFolder)}', '${escHtml(String(sm.uid || selectedUid))}')">Mark Unread</button>
@@ -1381,9 +1626,17 @@ const EmailModule = (function () {
     // Message list (with search bar at top)
     const listHtml = buildListHtml();
 
-    // Preview pane
+    // Preview pane — bulk bar when items selected
     let previewHtml = '';
-    if (messageLoading) {
+    if (selectedUids.size > 0) {
+      previewHtml = `<div class="inbox-bulk-bar">
+        <span class="bulk-count">${selectedUids.size} selected</span>
+        <button onclick="EmailModule.bulkTrash()">Trash</button>
+        <button onclick="EmailModule.bulkMarkRead()">Mark Read</button>
+        <button onclick="EmailModule.bulkMarkUnread()">Mark Unread</button>
+        <button onclick="EmailModule.bulkDeselectAll()">Deselect All</button>
+      </div>`;
+    } else if (messageLoading) {
       previewHtml = '<div class="inbox-empty"><span class="email-spinner"></span><div>Loading message...</div></div>';
     } else if (selectedMessage) {
       const sm = selectedMessage;
@@ -1411,12 +1664,14 @@ const EmailModule = (function () {
           </div>
           <div style="font-size:12px;color:var(--muted);margin-bottom:2px">From: ${escHtml(sm.from || '')}</div>
           <div style="font-size:12px;color:var(--muted);margin-bottom:2px">To: ${escHtml(sm.to || '')}</div>
+          ${sm.cc ? `<div style="font-size:12px;color:var(--muted);margin-bottom:2px">CC: ${escHtml(sm.cc)}</div>` : ''}
           <div style="font-size:12px;color:var(--muted)">Date: ${escHtml(sm.date || '')}</div>
           <div class="inbox-preview-actions">
             <button class="email-action-btn primary" onclick="EmailModule.aiReply()" ${aiReplyLoading ? 'disabled' : ''}>
               ${aiReplyLoading ? '<span class="email-spinner"></span> Generating...' : 'AI Reply'}
             </button>
-            <button class="email-action-btn" onclick="EmailModule.replyTo()">Reply</button>
+            <button class="email-action-btn" onclick="EmailModule.replyTo()">Reply to All</button>
+            <button class="email-action-btn" onclick="EmailModule.forward()">Forward</button>
             <button class="email-action-btn" onclick="EmailModule.openRedirect()">Redirect</button>
             <button class="email-action-btn danger" onclick="EmailModule.trashMessage('${escHtml(sm.folder || inboxFolder)}', '${escHtml(String(sm.uid || selectedUid))}')">Trash</button>
             <button class="email-action-btn" onclick="EmailModule.toggleReadStatus('${escHtml(sm.folder || inboxFolder)}', '${escHtml(String(sm.uid || selectedUid))}')">Mark Unread</button>
@@ -1502,9 +1757,31 @@ const EmailModule = (function () {
         + '<p><strong>From:</strong> ' + escHtml(sm.from || '') + '<br><strong>Date:</strong> ' + escHtml(sm.date || '') + '</p>'
         + sm.body_html
         + '</div>';
-      composeData = { to: sm.from || '', subject: reSubject, body: quotedPlain, body_html: quotedHtml };
+      composeData = { to: buildReplyAllTo(sm), subject: reSubject, body: quotedPlain, body_html: quotedHtml };
     } else {
-      composeData = { to: sm.from || '', subject: reSubject, body: quotedPlain, body_html: null };
+      composeData = { to: buildReplyAllTo(sm), subject: reSubject, body: quotedPlain, body_html: null };
+    }
+    showCompose = true;
+    rerender();
+    if (composeRichMode) {
+      requestAnimationFrame(() => _initComposeQuill());
+    }
+  }
+
+  function forward() {
+    if (!selectedMessage) return;
+    _destroyComposeQuill();
+    editingDraftUid = null;
+    const sm = selectedMessage;
+    const fwdSubject = (sm.subject || '').startsWith('Fwd: ') ? sm.subject : 'Fwd: ' + (sm.subject || '');
+    const quotedPlain = '\n\n--- Forwarded Message ---\nFrom: ' + (sm.from || '') + '\nDate: ' + (sm.date || '') + '\nSubject: ' + (sm.subject || '') + '\n\n' + (sm.body || '');
+    if (sm.body_html) {
+      const quotedHtml = '<br><br><div style="border-left:2px solid #ccc;padding-left:12px;margin-left:4px;color:#555;">'
+        + '<p><strong>From:</strong> ' + escHtml(sm.from || '') + '<br><strong>Date:</strong> ' + escHtml(sm.date || '') + '<br><strong>Subject:</strong> ' + escHtml(sm.subject || '') + '</p>'
+        + sm.body_html + '</div>';
+      composeData = { to: '', subject: fwdSubject, body: quotedPlain, body_html: quotedHtml };
+    } else {
+      composeData = { to: '', subject: fwdSubject, body: quotedPlain, body_html: null };
     }
     showCompose = true;
     rerender();
@@ -1548,9 +1825,9 @@ const EmailModule = (function () {
         + '<p><strong>From:</strong> ' + escHtml(sm.from || '') + '<br><strong>Date:</strong> ' + escHtml(sm.date || '') + '</p>'
         + sm.body_html
         + '</div>';
-      composeData = { to: sm.from || '', subject: reSubject, body: aiText + quotedPlain, body_html: aiHtml + quotedHtml };
+      composeData = { to: buildReplyAllTo(sm), subject: reSubject, body: aiText + quotedPlain, body_html: aiHtml + quotedHtml };
     } else {
-      composeData = { to: sm.from || '', subject: reSubject, body: aiText + quotedPlain, body_html: null };
+      composeData = { to: buildReplyAllTo(sm), subject: reSubject, body: aiText + quotedPlain, body_html: null };
     }
     showCompose = true;
     rerender();
@@ -1620,10 +1897,157 @@ const EmailModule = (function () {
     fetchMessageDetail(folder, uid);
   }
 
+  // --- Multi-select functions ---
+
+  function toggleCheck(uid, event) {
+    uid = String(uid);
+    if (event && event.shiftKey && lastCheckedUid) {
+      const uids = inboxMessages.map(m => String(m.uid));
+      const start = uids.indexOf(lastCheckedUid);
+      const end = uids.indexOf(uid);
+      if (start !== -1 && end !== -1) {
+        const [lo, hi] = start < end ? [start, end] : [end, start];
+        for (let i = lo; i <= hi; i++) selectedUids.add(uids[i]);
+      }
+    } else {
+      if (selectedUids.has(uid)) selectedUids.delete(uid);
+      else selectedUids.add(uid);
+    }
+    lastCheckedUid = uid;
+    patchInboxList();
+  }
+
+  function toggleSelectAll() {
+    const allChecked = inboxMessages.length > 0 && inboxMessages.every(m => selectedUids.has(String(m.uid)));
+    if (allChecked) {
+      selectedUids.clear();
+    } else {
+      inboxMessages.forEach(m => selectedUids.add(String(m.uid)));
+    }
+    patchInboxList();
+  }
+
+  function toggleDraftCheck(uid, event) {
+    uid = String(uid);
+    if (event && event.shiftKey && lastCheckedDraftUid) {
+      const uids = drafts.map(d => String(d.uid));
+      const start = uids.indexOf(lastCheckedDraftUid);
+      const end = uids.indexOf(uid);
+      if (start !== -1 && end !== -1) {
+        const [lo, hi] = start < end ? [start, end] : [end, start];
+        for (let i = lo; i <= hi; i++) selectedDraftUids.add(uids[i]);
+      }
+    } else {
+      if (selectedDraftUids.has(uid)) selectedDraftUids.delete(uid);
+      else selectedDraftUids.add(uid);
+    }
+    lastCheckedDraftUid = uid;
+    rerender();
+  }
+
+  function toggleDraftSelectAll() {
+    const allChecked = drafts.length > 0 && drafts.every(d => selectedDraftUids.has(String(d.uid)));
+    if (allChecked) {
+      selectedDraftUids.clear();
+    } else {
+      drafts.forEach(d => selectedDraftUids.add(String(d.uid)));
+    }
+    rerender();
+  }
+
+  // --- Bulk action functions ---
+
+  async function bulkTrash() {
+    const uids = [...selectedUids];
+    if (!uids.length) return;
+    if (!confirm('Trash ' + uids.length + ' message(s)?')) return;
+    for (const uid of uids) {
+      const resp = await apiFetch('/api/gmail/trash', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder: inboxFolder, uid: String(uid) }),
+      });
+      if (resp.ok) {
+        inboxMessages = inboxMessages.filter(m => String(m.uid) !== String(uid));
+        if (String(selectedUid) === String(uid)) {
+          selectedMessage = null;
+          selectedUid = null;
+        }
+      }
+    }
+    selectedUids.clear();
+    patchInboxList();
+    patchPreview();
+  }
+
+  async function bulkMarkRead() {
+    for (const uid of [...selectedUids]) {
+      const msg = inboxMessages.find(m => String(m.uid) === String(uid));
+      if (msg && !msg.is_read) {
+        msg.is_read = true;
+        apiFetch('/api/gmail/flags', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folder: inboxFolder, uid: String(uid), flags: { seen: true } }),
+        });
+      }
+    }
+    selectedUids.clear();
+    patchInboxList();
+    patchPreview();
+  }
+
+  async function bulkMarkUnread() {
+    for (const uid of [...selectedUids]) {
+      const msg = inboxMessages.find(m => String(m.uid) === String(uid));
+      if (msg && msg.is_read) {
+        msg.is_read = false;
+        apiFetch('/api/gmail/flags', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folder: inboxFolder, uid: String(uid), flags: { seen: false } }),
+        });
+      }
+    }
+    selectedUids.clear();
+    patchInboxList();
+    patchPreview();
+  }
+
+  function bulkDeselectAll() {
+    selectedUids.clear();
+    patchInboxList();
+    patchPreview();
+  }
+
+  async function bulkDiscardDrafts() {
+    const uids = [...selectedDraftUids];
+    if (!uids.length) return;
+    if (!confirm('Discard ' + uids.length + ' draft(s)?')) return;
+    for (const uid of uids) {
+      runningOp = 'discard:' + uid;
+      await apiFetch('/api/drafter/drafts/' + encodeURIComponent(uid) + '/discard', { method: 'POST' });
+      if (selectedDraftUid === uid) {
+        selectedDraftUid = null;
+        selectedDraft = null;
+        draftOriginal = null;
+      }
+    }
+    runningOp = '';
+    selectedDraftUids.clear();
+    await refreshAll();
+  }
+
+  function bulkDeselectAllDrafts() {
+    selectedDraftUids.clear();
+    rerender();
+  }
+
   function setInboxFolder(folder) {
     inboxFolder = folder;
     selectedMessage = null;
     selectedUid = null;
+    selectedUids.clear();
     fetchInbox();
   }
 
@@ -1664,11 +2088,19 @@ const EmailModule = (function () {
   // --- Render: Drafts Tab ---
 
   function buildDraftListHtml() {
-    return drafts.map(d => {
+    const allChecked = drafts.length > 0 && drafts.every(d => selectedDraftUids.has(String(d.uid)));
+    const someChecked = drafts.some(d => selectedDraftUids.has(String(d.uid)));
+    let selectAllHtml = drafts.length > 0 ? `<div style="padding:6px 10px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:6px">
+      <input type="checkbox" class="inbox-select-all draft-select-all" ${allChecked ? 'checked' : ''} onclick="EmailModule.toggleDraftSelectAll()" title="Select all drafts" />
+      <span style="font-size:11px;color:var(--muted)">Select all</span>
+    </div>` : '';
+    return selectAllHtml + drafts.map(d => {
       const isSelected = d.uid === selectedDraftUid;
+      const isChecked = selectedDraftUids.has(String(d.uid));
       const aiLabel = d.is_ai_draft ? '<span class="inbox-msg-label ai-draft">AI Draft</span>' : '';
-      return `<div class="draft-msg-row${isSelected ? ' selected' : ''}"
+      return `<div class="draft-msg-row${isSelected ? ' selected' : ''}${isChecked ? ' checked' : ''}"
                    onclick="EmailModule.selectDraft('${escHtml(d.uid)}')">
+        <input type="checkbox" class="inbox-msg-check" ${isChecked ? 'checked' : ''} onclick="event.stopPropagation(); EmailModule.toggleDraftCheck('${escHtml(String(d.uid))}', event)" />
         <div class="draft-msg-content">
           <div class="inbox-msg-sender">${escHtml(d.from_name || d.to)} ${aiLabel}</div>
           <div class="inbox-msg-subject">${escHtml(d.subject)}</div>
@@ -1680,6 +2112,13 @@ const EmailModule = (function () {
   }
 
   function buildDraftPreviewHtml() {
+    if (selectedDraftUids.size > 0) {
+      return `<div class="inbox-bulk-bar">
+        <span class="bulk-count">${selectedDraftUids.size} selected</span>
+        <button onclick="EmailModule.bulkDiscardDrafts()">Discard</button>
+        <button onclick="EmailModule.bulkDeselectAllDrafts()">Deselect All</button>
+      </div>`;
+    }
     if (!selectedDraft) {
       return '<div class="inbox-empty"><div style="font-size:32px;opacity:0.3">&#128221;</div><div>Select a draft to preview</div></div>';
     }
@@ -2326,6 +2765,7 @@ const EmailModule = (function () {
     updateCompose,
     replyTo,
     aiReply,
+    forward,
     toggleComposeMode,
     openRedirect,
     closeRedirect,
@@ -2341,5 +2781,17 @@ const EmailModule = (function () {
     fetchSyncStatus,
     getDraftCount,
     pollDraftCount,
+    // Multi-select
+    toggleCheck,
+    toggleSelectAll,
+    toggleDraftCheck,
+    toggleDraftSelectAll,
+    bulkTrash,
+    bulkMarkRead,
+    bulkMarkUnread,
+    bulkDeselectAll,
+    bulkDiscardDrafts,
+    bulkDeselectAllDrafts,
+    closeShortcutsHelp,
   };
 })();

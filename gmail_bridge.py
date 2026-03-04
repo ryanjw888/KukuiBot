@@ -305,6 +305,7 @@ def _parse_email_headers(msg: email.message.Message) -> dict:
     return {
         "from": msg.get("From", ""),
         "to": msg.get("To", ""),
+        "cc": msg.get("Cc", ""),
         "subject": subject or "(no subject)",
         "date": msg.get("Date", ""),
         "message_id": msg.get("Message-ID", ""),

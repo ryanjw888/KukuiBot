@@ -1306,10 +1306,16 @@ async def check_and_draft(dry_run: bool = False) -> dict:
         msg_nums = data[0].split()
         logger.info(f"Found {len(msg_nums)} unread emails")
 
+        # Scan newest-first. We scan up to 5x max_per_run to find enough
+        # unprocessed emails (the rest may already be in processed_ids).
         msg_nums.reverse()
-        msg_nums = msg_nums[:max_per_run]
+        scan_limit = max_per_run * 5
+        msg_nums = msg_nums[:scan_limit]
+        acted_count = 0  # tracks emails actually drafted/skipped/errored (not already-processed)
 
         for num in msg_nums:
+            if acted_count >= max_per_run:
+                break
             try:
                 status, msg_data = imap.fetch(num, "(BODY.PEEK[])")
                 if status != "OK" or not msg_data or not msg_data[0]:
@@ -1325,6 +1331,7 @@ async def check_and_draft(dry_run: bool = False) -> dict:
                 if message_id in processed_ids:
                     continue
 
+                acted_count += 1
                 original_from = msg.get("From", "")
                 from_addr_parsed = email.utils.parseaddr(original_from)[1].lower()
                 subject = _parse_header(msg.get("Subject", "(no subject)"))
