@@ -1055,8 +1055,10 @@ const EmailModule = (function () {
         ],
       },
     });
-    // Set initial content if switching from plain text
-    if (composeData.body) {
+    // Set initial content: prefer HTML for rich formatting, fall back to plain text
+    if (composeData.body_html) {
+      composeQuill.clipboard.dangerouslyPasteHTML(composeData.body_html);
+    } else if (composeData.body) {
       composeQuill.setText(composeData.body);
     }
   }
@@ -1235,8 +1237,17 @@ const EmailModule = (function () {
     _destroyComposeQuill();
     const sm = selectedMessage;
     const reSubject = (sm.subject || '').startsWith('Re: ') ? sm.subject : 'Re: ' + (sm.subject || '');
-    const quotedBody = '\n\n--- Original Message ---\nFrom: ' + (sm.from || '') + '\nDate: ' + (sm.date || '') + '\n\n' + (sm.body || '');
-    composeData = { to: sm.from || '', subject: reSubject, body: quotedBody, body_html: null };
+    const quotedPlain = '\n\n--- Original Message ---\nFrom: ' + (sm.from || '') + '\nDate: ' + (sm.date || '') + '\n\n' + (sm.body || '');
+
+    if (sm.body_html) {
+      const quotedHtml = '<br><br><div style="border-left:2px solid #ccc;padding-left:12px;margin-left:4px;color:#555;">'
+        + '<p><strong>From:</strong> ' + escHtml(sm.from || '') + '<br><strong>Date:</strong> ' + escHtml(sm.date || '') + '</p>'
+        + sm.body_html
+        + '</div>';
+      composeData = { to: sm.from || '', subject: reSubject, body: quotedPlain, body_html: quotedHtml };
+    } else {
+      composeData = { to: sm.from || '', subject: reSubject, body: quotedPlain, body_html: null };
+    }
     showCompose = true;
     rerender();
     if (composeRichMode) {
@@ -1268,9 +1279,20 @@ const EmailModule = (function () {
     // Open compose overlay pre-filled as a proper reply: AI text above quoted original
     const reSubject = resp.subject || ('Re: ' + (sm.subject || ''));
     const aiText = (resp.reply_text || '').trimEnd();
-    const quotedOriginal = '\n\n--- Original Message ---\nFrom: ' + (sm.from || '') + '\nDate: ' + (sm.date || '') + '\n\n' + (sm.body || '');
+    const quotedPlain = '\n\n--- Original Message ---\nFrom: ' + (sm.from || '') + '\nDate: ' + (sm.date || '') + '\n\n' + (sm.body || '');
     _destroyComposeQuill();
-    composeData = { to: sm.from || '', subject: reSubject, body: aiText + quotedOriginal, body_html: null };
+
+    if (sm.body_html) {
+      // Convert AI plain text to simple HTML paragraphs
+      const aiHtml = aiText.split('\n').map(line => line.trim() ? '<p>' + escHtml(line) + '</p>' : '<p><br></p>').join('');
+      const quotedHtml = '<br><div style="border-left:2px solid #ccc;padding-left:12px;margin-left:4px;color:#555;">'
+        + '<p><strong>From:</strong> ' + escHtml(sm.from || '') + '<br><strong>Date:</strong> ' + escHtml(sm.date || '') + '</p>'
+        + sm.body_html
+        + '</div>';
+      composeData = { to: sm.from || '', subject: reSubject, body: aiText + quotedPlain, body_html: aiHtml + quotedHtml };
+    } else {
+      composeData = { to: sm.from || '', subject: reSubject, body: aiText + quotedPlain, body_html: null };
+    }
     showCompose = true;
     rerender();
     if (composeRichMode) {
