@@ -758,6 +758,19 @@
       </div>
     </div>
 
+    <!-- Whitelist Send Domains -->
+    <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden;margin:12px 0;">
+      <div style="padding:10px 12px;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid var(--border);background:rgba(0,0,0,0.15);">White-List Send Domains</div>
+      <div style="padding:12px;">
+        <div class="setting-desc" style="margin-bottom:8px;">Domains added here are always allowed as send recipients, regardless of permission level.</div>
+        <div style="display:flex;gap:8px;margin-bottom:8px;">
+          <input type="text" id="gmail-whitelist-input" placeholder="example.com" style="flex:1;padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--card-bg);color:var(--text);font-size:13px;" onkeydown="if(event.key==='Enter'){addWhitelistDomain();}" />
+          <button class="btn primary" onclick="addWhitelistDomain()" style="padding:6px 14px;font-size:13px;">Add</button>
+        </div>
+        <div id="gmail-whitelist-tags" style="display:flex;flex-wrap:wrap;gap:6px;min-height:24px;"></div>
+      </div>
+    </div>
+
   </div>
     </div>
 
@@ -3222,6 +3235,14 @@ async function loadGmailStatus() {
       if (credsSection) credsSection.style.display = '';
       if (connectedActions) connectedActions.style.display = 'none';
     }
+
+    // Load whitelist domains
+    if (d.send_whitelist_domains) {
+      _gmailWhitelistDomains = d.send_whitelist_domains;
+    } else {
+      _gmailWhitelistDomains = [];
+    }
+    renderWhitelistTags();
   } catch (e) {
     if (msg) { msg.style.color = 'var(--red)'; msg.textContent = 'Failed to load Gmail status'; }
   }
@@ -3245,6 +3266,83 @@ async function toggleGmailPerm(perm) {
     if (d.error) throw new Error(d.error);
   } catch (e) {
     el.className = 'toggle' + (isOn ? ' on' : '');
+    toast('Failed: ' + (e.message || e));
+  }
+}
+
+// ---- Gmail Whitelist Domains ----
+let _gmailWhitelistDomains = [];
+
+function renderWhitelistTags() {
+  const container = document.getElementById('gmail-whitelist-tags');
+  if (!container) return;
+  container.innerHTML = '';
+  _gmailWhitelistDomains.forEach(domain => {
+    const tag = document.createElement('span');
+    tag.style.cssText = 'display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:20px;background:rgba(99,102,241,0.15);color:var(--accent);font-size:12px;font-weight:500;border:1px solid rgba(99,102,241,0.25);';
+    tag.textContent = domain;
+    const x = document.createElement('span');
+    x.textContent = '\u00d7';
+    x.style.cssText = 'cursor:pointer;font-size:15px;line-height:1;margin-left:2px;opacity:0.7;';
+    x.title = 'Remove ' + domain;
+    x.onclick = () => removeWhitelistDomain(domain);
+    tag.appendChild(x);
+    container.appendChild(tag);
+  });
+  if (_gmailWhitelistDomains.length === 0) {
+    container.innerHTML = '<span style="font-size:12px;color:var(--muted);font-style:italic;">No domains whitelisted</span>';
+  }
+}
+
+async function addWhitelistDomain() {
+  const input = document.getElementById('gmail-whitelist-input');
+  if (!input) return;
+  let domain = input.value.trim().toLowerCase();
+  if (!domain) return;
+  // Strip leading @ if user types @example.com
+  if (domain.startsWith('@')) domain = domain.slice(1);
+  // Basic validation
+  if (!domain.includes('.') || domain.includes(' ')) {
+    toast('Enter a valid domain (e.g. example.com)');
+    return;
+  }
+  if (_gmailWhitelistDomains.includes(domain)) {
+    toast(domain + ' is already whitelisted');
+    input.value = '';
+    return;
+  }
+  const updated = [..._gmailWhitelistDomains, domain];
+  try {
+    const r = await fetch(API + '/api/gmail/send-whitelist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domains: updated }),
+    });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    _gmailWhitelistDomains = d.domains || updated;
+    input.value = '';
+    renderWhitelistTags();
+    toast(domain + ' added to whitelist');
+  } catch (e) {
+    toast('Failed: ' + (e.message || e));
+  }
+}
+
+async function removeWhitelistDomain(domain) {
+  const updated = _gmailWhitelistDomains.filter(d => d !== domain);
+  try {
+    const r = await fetch(API + '/api/gmail/send-whitelist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domains: updated }),
+    });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    _gmailWhitelistDomains = d.domains || updated;
+    renderWhitelistTags();
+    toast(domain + ' removed from whitelist');
+  } catch (e) {
     toast('Failed: ' + (e.message || e));
   }
 }

@@ -168,6 +168,21 @@ def clear_gmail_credentials():
     logger.info("Gmail disconnected")
 
 
+def get_send_whitelist_domains() -> list[str]:
+    """Return the list of whitelisted send domains."""
+    raw = _get_config("gmail.send_whitelist_domains", "")
+    if not raw.strip():
+        return []
+    return [d.strip().lower() for d in raw.split(",") if d.strip()]
+
+
+def set_send_whitelist_domains(domains: list[str]):
+    """Save the whitelist of allowed send domains."""
+    cleaned = sorted(set(d.strip().lower() for d in domains if d.strip()))
+    _set_config("gmail.send_whitelist_domains", ",".join(cleaned))
+    _sync_tools_md()
+
+
 def get_gmail_status() -> dict:
     """Return Gmail connection status."""
     email_addr = _get_config("gmail.email", "")
@@ -179,6 +194,7 @@ def get_gmail_status() -> dict:
         "email": email_addr,
         "connected_at": int(connected_at) if connected_at else 0,
         "permissions": perms,
+        "send_whitelist_domains": get_send_whitelist_domains(),
     }
 
 
@@ -903,7 +919,15 @@ def _enforce_send_permissions(to: str, perms: dict, owner_emails: set[str]):
 
     if perms.get("send_anyone"):
         return  # No restrictions
-    elif perms.get("send_within_org"):
+
+    # Check domain whitelist — if recipient's domain is whitelisted, allow
+    whitelist = get_send_whitelist_domains()
+    if whitelist and '@' in to_lower:
+        to_domain = to_lower.split('@')[-1]
+        if to_domain in whitelist:
+            return  # Domain is whitelisted
+
+    if perms.get("send_within_org"):
         gmail_email = _get_config("gmail.email", "")
         owner_domain = gmail_email.split('@')[-1] if '@' in gmail_email else None
         to_domain = to_lower.split('@')[-1] if '@' in to_lower else None

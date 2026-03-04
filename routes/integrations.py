@@ -43,6 +43,18 @@ async def api_gmail_permissions(req: Request):
         return JSONResponse({"error": str(e)}, status_code=400)
 
 
+@router.post("/api/gmail/send-whitelist")
+async def api_gmail_send_whitelist(req: Request):
+    """Set the whitelisted send domains."""
+    from gmail_bridge import set_send_whitelist_domains, get_send_whitelist_domains
+    body = await req.json()
+    domains = body.get("domains")
+    if not isinstance(domains, list):
+        return JSONResponse({"error": "domains must be a list of strings"}, status_code=400)
+    set_send_whitelist_domains(domains)
+    return {"ok": True, "domains": get_send_whitelist_domains()}
+
+
 @router.post("/api/gmail/connect")
 async def api_gmail_connect(req: Request):
     """Save Gmail credentials (email + app password) and test connection."""
