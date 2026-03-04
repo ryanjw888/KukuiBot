@@ -51,6 +51,9 @@ MAX_PROCESSED_IDS = 1000
 X_DRAFTER_HEADER = "X-KukuiBot-Draft"
 X_DRAFTER_VALUE = "auto"
 
+# Token the AI returns when it declines to draft a reply
+NO_REPLY_TOKEN = "[NO_REPLY_NEEDED]"
+
 HST = ZoneInfo("US/Hawaii")
 
 # Patterns that indicate automated/noreply senders
@@ -1153,6 +1156,7 @@ RULES:
 - Address the content naturally. Keep length consistent with their patterns.
 - No AI disclaimers. Write as if you ARE the user.
 - If thread context is provided, use it to understand the full conversation and craft a contextually appropriate reply to the LATEST message.
+- If this email does NOT warrant a reply (e.g. automated newsletters, subscription notifications, marketing blasts, system alerts, delivery confirmations, calendar invites, read receipts, or any message that doesn't expect a human response), respond with ONLY the token {NO_REPLY_TOKEN} on a single line — nothing else.
 {thread_section}
 Reply to this email (LATEST message — reply to THIS one):
 
@@ -1413,6 +1417,20 @@ async def check_and_draft(dry_run: bool = False) -> dict:
                     thread_context=thread_ctx,
                     email_id=message_id,
                 )
+
+                # Check if the AI declined to draft a reply
+                if draft_body and NO_REPLY_TOKEN in draft_body:
+                    results["skipped"] += 1
+                    reason = "AI: no reply needed"
+                    results["details"].append({
+                        "from": from_addr_parsed, "subject": subject[:80],
+                        "action": "skipped", "reason": reason,
+                    })
+                    _record_history(message_id, from_addr_parsed, subject,
+                                    "skipped_ai_rejected", reason)
+                    processed_ids.add(message_id)
+                    logger.info(f"  AI declined to draft reply: {subject[:60]}")
+                    continue
 
                 if not draft_body or len(draft_body.strip()) < 5:
                     results["errors"] += 1
