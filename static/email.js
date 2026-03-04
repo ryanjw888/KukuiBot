@@ -8,7 +8,7 @@ const EmailModule = (function () {
   'use strict';
 
   // --- State ---
-  let activeTab = 'inbox'; // 'inbox' | 'drafts' | 'history' | 'settings' | 'profile' | 'spam'
+  let activeTab = 'inbox'; // 'inbox' | 'drafts' | 'settings' | 'profile' | 'spam'
   let drafts = [];
   let status = null; // null = not loaded yet
   let config = {};
@@ -143,6 +143,62 @@ const EmailModule = (function () {
     if (diffDays === 1) return 'Yesterday';
     if (diffDays < 7) return d.toLocaleDateString([], {weekday: 'short'});
     return d.toLocaleDateString([], {month: 'short', day: 'numeric'});
+  }
+
+  // --- Drafter history label for inbox messages ---
+  let _historyMap = null;
+  let _historyMapVersion = -1;
+
+  function _buildHistoryMap() {
+    if (_historyMapVersion === history.length && _historyMap) return _historyMap;
+    _historyMap = new Map();
+    for (const h of history) {
+      if (h.message_id && !_historyMap.has(h.message_id)) {
+        _historyMap.set(h.message_id, h);
+      }
+    }
+    _historyMapVersion = history.length;
+    return _historyMap;
+  }
+
+  function _historyLabelForMessage(messageId) {
+    if (!messageId) return null;
+    const map = _buildHistoryMap();
+    const h = map.get(messageId);
+    if (!h) return null;
+
+    const action = h.action || '';
+    const reason = (h.skip_reason || '').toLowerCase();
+
+    if (action === 'drafted') return { label: 'Drafted', cls: 'drafted' };
+    if (action === 'error') return { label: 'Error', cls: 'error' };
+
+    if (action === 'spam_detected') {
+      if (reason.includes('phishing')) return { label: 'Phishing', cls: 'phishing' };
+      if (reason.includes('fraud')) return { label: 'Fraud', cls: 'phishing' };
+      return { label: 'Spam', cls: 'spam' };
+    }
+
+    if (action === 'skipped_sensitive') {
+      if (reason.includes('financial') || reason.includes('banking')) return { label: 'Financial', cls: 'sensitive' };
+      if (reason.includes('2fa') || reason.includes('verification')) return { label: 'Security', cls: 'sensitive' };
+      return { label: 'Sensitive', cls: 'sensitive' };
+    }
+
+    if (action === 'skipped_auto') {
+      if (reason.includes('automated')) return { label: 'Automated', cls: 'skipped' };
+      if (reason.includes('bulk') || reason.includes('mailing')) return { label: 'Bulk', cls: 'skipped' };
+      if (reason.includes('from self')) return { label: 'Self', cls: 'skipped' };
+      if (reason.includes('cc only')) return { label: 'CC Only', cls: 'skipped' };
+      return { label: 'Skipped', cls: 'skipped' };
+    }
+
+    if (action === 'skipped_excluded') return { label: 'Excluded', cls: 'skipped' };
+    if (action === 'skipped_empty') return { label: 'Empty', cls: 'skipped' };
+
+    // Fallback for any other skipped action
+    if (action.startsWith('skipped')) return { label: 'Skipped', cls: 'skipped' };
+    return null;
   }
 
   // --- Inbox data fetching ---
@@ -752,7 +808,7 @@ const EmailModule = (function () {
       if (inboxMessages.length === 0) fetchInbox();
       if (inboxFolders.length === 0) fetchFolders();
     }
-    if ((tab === 'history' || tab === 'spam') && history.length === 0) {
+    if (tab === 'spam' && history.length === 0) {
       await fetchHistory();
       rerender();
     }
@@ -979,7 +1035,7 @@ const EmailModule = (function () {
     await loadWorkers();
     _registerChatSession();
 
-    await Promise.all([fetchStatus(), fetchConfig(), fetchDrafts()]);
+    await Promise.all([fetchStatus(), fetchConfig(), fetchDrafts(), fetchHistory()]);
     rerender();
 
     // Fetch inbox on init
@@ -997,7 +1053,7 @@ const EmailModule = (function () {
     // Poll for new drafts every 30s while in email mode
     pollTimer = setInterval(async () => {
       if (typeof appMode !== 'undefined' && appMode === 'email') {
-        await Promise.all([fetchStatus(), fetchDrafts()]);
+        await Promise.all([fetchStatus(), fetchDrafts(), fetchHistory()]);
         if (activeTab === 'drafts') rerender();
         if (activeTab === 'inbox') fetchInbox();
       }
@@ -1103,7 +1159,10 @@ const EmailModule = (function () {
             <div class="inbox-msg-subject">${escHtml(m.subject || '(no subject)')}</div>
             <div class="inbox-msg-snippet">${escHtml(m.snippet || '')}</div>
           </div>
-          <div class="inbox-msg-date">${fmtInboxDate(m.date)}</div>
+          <div class="inbox-msg-meta">
+            <div class="inbox-msg-date">${fmtInboxDate(m.date)}</div>
+            ${(() => { const hl = _historyLabelForMessage(m.message_id); return hl ? '<span class="inbox-msg-label ' + hl.cls + '">' + escHtml(hl.label) + '</span>' : ''; })()}
+          </div>
         </div>`;
       }).join('');
     }
@@ -2094,7 +2153,6 @@ const EmailModule = (function () {
       <div class="email-split-top${activeTab === 'inbox' ? '' : ' email-content'}">
         ${activeTab === 'inbox' ? renderInboxTab() : ''}
         ${activeTab === 'drafts' ? renderDraftsTab() : ''}
-        ${activeTab === 'history' ? renderHistoryTab() : ''}
         ${activeTab === 'spam' ? renderSpamTab() : ''}
         ${activeTab === 'settings' ? renderSettingsTab() : ''}
         ${activeTab === 'profile' ? renderProfileTab() : ''}
@@ -2166,7 +2224,6 @@ const EmailModule = (function () {
     html += '<div class="email-sidebar-folders">';
     const drafterTabs = [
       { tab: 'drafts',   label: 'Auto Drafts', icon: '&#128221;', count: drafts.length },
-      { tab: 'history',  label: 'History',      icon: '&#128203;', count: 0 },
       { tab: 'spam',     label: 'Spam Filter',  icon: '&#128737;', count: 0 },
       { tab: 'profile',  label: 'Style Profile',icon: '&#127912;', count: 0 },
       { tab: 'settings', label: 'Settings',     icon: '&#9881;',   count: 0 },

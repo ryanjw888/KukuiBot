@@ -1496,11 +1496,11 @@ async def check_and_draft(dry_run: bool = False) -> dict:
 # ---------------------------------------------------------------------------
 
 def list_drafts() -> list[dict]:
-    """List Gmail drafts created by the auto-drafter (identified by X-KukuiBot-Draft header).
+    """List ALL Gmail drafts (both AI-generated and manual).
 
     Uses two-phase IMAP fetch:
-      Phase A — headers only to filter by X-KukuiBot-Draft
-      Phase B — full body for matching drafts only
+      Phase A — headers only to identify AI drafts (X-KukuiBot-Draft header)
+      Phase B — full body for all drafts
     """
     from gmail_bridge import check_permission, _extract_body_both
     check_permission("read_inbox")
@@ -1520,8 +1520,8 @@ def list_drafts() -> list[dict]:
         msg_nums = data[0].split()
         msg_nums.reverse()  # newest first
 
-        # Phase A: fetch headers only, filter by X-KukuiBot-Draft
-        matching_nums = []
+        # Phase A: fetch headers only, identify AI drafts
+        ai_draft_nums = set()
         for num in msg_nums[:50]:  # cap at 50
             try:
                 status2, hdr_data = imap.fetch(num, "(BODY.PEEK[HEADER])")
@@ -1529,13 +1529,13 @@ def list_drafts() -> list[dict]:
                     continue
                 hdr_msg = email.message_from_bytes(hdr_data[0][1])
                 if hdr_msg.get(X_DRAFTER_HEADER) == X_DRAFTER_VALUE:
-                    matching_nums.append(num)
+                    ai_draft_nums.add(num)
             except Exception as e:
                 logger.warning(f"Error reading draft header {num}: {e}")
                 continue
 
-        # Phase B: fetch full body for matching drafts
-        for num in matching_nums:
+        # Phase B: fetch full body for ALL drafts
+        for num in msg_nums[:50]:
             try:
                 status2, msg_data = imap.fetch(num, "(BODY.PEEK[])")
                 if status2 != "OK" or not msg_data or not msg_data[0]:
@@ -1576,6 +1576,7 @@ def list_drafts() -> list[dict]:
                     "from_name": from_name,
                     "in_reply_to": in_reply_to,
                     "date": msg.get("Date", ""),
+                    "is_ai_draft": num in ai_draft_nums,
                 })
             except Exception as e:
                 logger.warning(f"Error reading draft {num}: {e}")

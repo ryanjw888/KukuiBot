@@ -2527,6 +2527,7 @@ body {
 }
 .inbox-msg-content {
   flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px;
+  padding-right: 80px;
 }
 .inbox-msg-star {
   flex-shrink: 0; font-size: 16px; line-height: 1; cursor: pointer;
@@ -2558,8 +2559,24 @@ body {
 }
 .inbox-msg-date {
   font-size: 11px; color: var(--muted);
-  position: absolute; top: 10px; right: 12px;
 }
+.inbox-msg-meta {
+  position: absolute; top: 10px; right: 12px;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
+}
+.inbox-msg-label {
+  display: inline-block;
+  padding: 1px 6px; border-radius: 3px;
+  font-size: 9px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.3px;
+  line-height: 1.4; white-space: nowrap;
+}
+.inbox-msg-label.drafted { background: rgba(var(--green-rgb, 76,175,80), 0.15); color: var(--green); }
+.inbox-msg-label.skipped { background: rgba(var(--yellow-rgb, 255,193,7), 0.15); color: var(--yellow); }
+.inbox-msg-label.sensitive { background: rgba(255, 152, 0, 0.15); color: #ff9800; }
+.inbox-msg-label.spam { background: rgba(255, 87, 34, 0.15); color: #ff5722; }
+.inbox-msg-label.phishing { background: rgba(var(--red-rgb, 244,67,54), 0.2); color: var(--red); }
+.inbox-msg-label.error { background: rgba(var(--red-rgb, 244,67,54), 0.15); color: var(--red); }
 .inbox-preview-header {
   padding: 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;
 }
