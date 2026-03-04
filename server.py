@@ -4395,26 +4395,27 @@ async def serve_root():
         return RedirectResponse("/setup.html", status_code=302)
     index = os.path.join(STATIC_DIR, "index.html")
     if os.path.isfile(index):
-        return FileResponse(index)
+        return FileResponse(index, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
     return HTMLResponse(f"<h1>{APP_NAME}</h1><p>Frontend not built yet. Use /health or /api/* endpoints.</p>")
 
 
 @app.get("/{path:path}")
 async def serve_static(path: str):
     # Main app static files
+    no_cache = {"Cache-Control": "no-cache, no-store, must-revalidate"}
     file_path = os.path.join(STATIC_DIR, path)
     if os.path.isfile(file_path):
-        return FileResponse(file_path)
+        return FileResponse(file_path, headers=no_cache)
     # Directory index support
     if os.path.isdir(file_path):
         idx = os.path.join(file_path, "index.html")
         if os.path.isfile(idx):
-            return FileResponse(idx)
+            return FileResponse(idx, headers=no_cache)
 
     # SPA fallback
     index = os.path.join(STATIC_DIR, "index.html")
     if os.path.isfile(index):
-        return FileResponse(index)
+        return FileResponse(index, headers=no_cache)
     return JSONResponse({"error": "Not found"}, status_code=404)
 
 
