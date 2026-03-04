@@ -471,7 +471,7 @@
     .report-history-table .btn-action { padding: 6px 4px; min-height: 32px; }
   }
 
-
+  @keyframes spin { to { transform: rotate(360deg); } }
 
 </style>
 </head>
@@ -1263,6 +1263,15 @@
               <input type="number" id="listener-remote-port" value="5080">
             </div>
             <div>
+              <label style="font-size:12px;color:var(--muted);">Microphone</label>
+              <div style="display:flex;gap:6px;align-items:center;">
+                <select id="listener-device-select" style="flex:1;">
+                  <option value="">System Default</option>
+                </select>
+                <button type="button" onclick="refreshMicList()" title="Refresh microphone list" style="background:none;border:none;cursor:pointer;padding:4px;font-size:16px;color:var(--muted);transition:color .2s;" onmouseover="this.style.color='var(--fg)'" onmouseout="this.style.color='var(--muted)'" id="mic-refresh-btn">&#x21bb;</button>
+              </div>
+            </div>
+            <div>
               <label style="font-size:12px;color:var(--muted);">Username</label>
               <input type="text" id="listener-username" placeholder="Your name" style="width:100%;">
             </div>
@@ -1811,7 +1820,7 @@ async function saveConfig() {
 }
 
 // ---- Listener Config ----
-function loadListenerConfig() {
+async function loadListenerConfig() {
   const enabled = config.listener_enabled || false;
   const mode = config.listener_mode || 'local';
   document.getElementById('listener-enabled-toggle').className = 'toggle' + (enabled ? ' on' : '');
@@ -1824,6 +1833,27 @@ function loadListenerConfig() {
   document.getElementById('listener-remote-panel').style.display = mode === 'remote' ? 'block' : 'none';
   document.getElementById('listener-status').textContent = enabled ? 'Listener active' : 'Listener off';
   document.getElementById('listener-status').style.color = enabled ? 'var(--green)' : 'var(--muted)';
+  // Populate microphone dropdown
+  await refreshMicList();
+}
+
+async function refreshMicList() {
+  const btn = document.getElementById('mic-refresh-btn');
+  if (btn) { btn.style.animation = 'spin .6s linear'; setTimeout(() => btn.style.animation = '', 650); }
+  try {
+    const r = await fetch(API + '/api/listener/devices');
+    const d = await r.json();
+    const sel = document.getElementById('listener-device-select');
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">System Default</option>';
+    for (const dev of (d.devices || [])) {
+      const opt = document.createElement('option');
+      opt.value = String(dev.index);
+      opt.textContent = dev.name;
+      sel.appendChild(opt);
+    }
+    sel.value = prev || config.listener_device || '';
+  } catch {}
 }
 
 function toggleListenerEnabled() {
@@ -1848,6 +1878,7 @@ async function saveListenerConfig() {
     listener_mode: document.getElementById('listener-mode-select').value,
     listener_remote_ip: document.getElementById('listener-remote-ip').value,
     listener_remote_port: document.getElementById('listener-remote-port').value,
+    listener_device: document.getElementById('listener-device-select').value,
     listener_username: document.getElementById('listener-username').value,
     listener_room: document.getElementById('listener-room').value,
   };

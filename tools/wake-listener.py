@@ -210,17 +210,20 @@ def fire_chime(room: str):
 # Config polling
 # ---------------------------------------------------------------------------
 
-def fetch_listener_mode(kukuibot_url: str) -> str:
-    """Fetch listener_mode from KukuiBot /api/config. Returns 'local' or 'remote'."""
+def fetch_listener_config(kukuibot_url: str) -> dict:
+    """Fetch listener config from KukuiBot /api/config."""
     try:
         url = f"{kukuibot_url}/api/config"
         req = urlrequest.Request(url, method="GET")
         with urlrequest.urlopen(req, timeout=5, context=_ssl_ctx) as resp:
             data = json.loads(resp.read().decode())
-            return data.get("listener_mode", "local")
+            return {
+                "mode": data.get("listener_mode", "local"),
+                "device": data.get("listener_device", ""),
+            }
     except Exception as e:
         logger.warning(f"Config fetch failed: {e}")
-        return "local"
+        return {"mode": "local", "device": ""}
 
 
 def main():
@@ -237,11 +240,18 @@ def main():
 
     kukuibot_url = (args.kukuibot_url or os.getenv("KUKUIBOT_URL", "https://localhost:7000")).rstrip("/")
 
+    # Fetch device from config (CLI --device overrides)
+    initial_cfg = fetch_listener_config(kukuibot_url)
+    device = args.device
+    if not device and initial_cfg.get("device"):
+        device = initial_cfg["device"]
+        logger.info(f"Using mic from config: device={device}")
+
     model, label = build_model(args.model)
     logger.info(f"Wake word model loaded: {label} (threshold={args.threshold})")
 
-    pa, stream = open_mic(args.device)
-    logger.info(f"Microphone open (rate={SAMPLE_RATE}, chunk={CHUNK_SAMPLES})")
+    pa, stream = open_mic(device)
+    logger.info(f"Microphone open (rate={SAMPLE_RATE}, chunk={CHUNK_SAMPLES}, device={device or 'system default'})")
 
     stop = False
     def _stop(sig, frame):
@@ -256,9 +266,9 @@ def main():
     MODE_CACHE_SECS = 30.0
 
     # Fetch initial mode
-    cached_mode = fetch_listener_mode(kukuibot_url)
+    cached_mode = initial_cfg.get("mode", "local")
     mode_fetched_at = time.time()
-    logger.info(f"Listening for 'Hey Jarvis' — room={args.room}, mode={cached_mode}, url={kukuibot_url}")
+    logger.info(f"Listening for 'Hey Jarvis' — room={args.room}, mode={cached_mode}, device={device or 'system default'}, url={kukuibot_url}")
 
     while not stop:
         try:
@@ -283,7 +293,8 @@ def main():
 
         # Refresh mode cache if stale
         if now - mode_fetched_at > MODE_CACHE_SECS:
-            cached_mode = fetch_listener_mode(kukuibot_url)
+            _cfg = fetch_listener_config(kukuibot_url)
+            cached_mode = _cfg.get("mode", "local")
             mode_fetched_at = time.time()
             logger.info(f"Mode refreshed: {cached_mode}")
 

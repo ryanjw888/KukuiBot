@@ -410,6 +410,8 @@ _ERROR_RESPONSE_PATTERNS = [
     "No response for ",            # "No response for 128s" / "No response for 300s"
     "Process killed",
     "⚠️ No response",
+    "[ERROR] No OpenRouter API key configured",
+    "[ERROR] OpenRouter returned empty response",
 ]
 
 
@@ -631,6 +633,19 @@ def delegate_task(
         clear_history(isolated_session_id)
     except Exception:
         pass
+
+    # For OpenRouter sessions, copy the model config from the base tab session
+    # so _openrouter_model() resolves the correct model (not the fallback default)
+    if _canonical_model_base(target.get("model_key", model or "")) == "openrouter":
+        try:
+            from auth import get_config, set_config
+            base_sid = target["session_id"]
+            or_model = (get_config(f"openrouter.session_model.{base_sid}", "") or "").strip()
+            if or_model:
+                set_config(f"openrouter.session_model.{isolated_session_id}", or_model)
+                logger.info(f"Copied OpenRouter model config '{or_model}' from {base_sid} to {isolated_session_id}")
+        except Exception as e:
+            logger.warning(f"Failed to copy OpenRouter model config for {isolated_session_id}: {e}")
 
     # Pre-check: if targeting a Claude session, verify pool has capacity
     if _canonical_model_base(target.get("model_key", model or "")).startswith("claude"):

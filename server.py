@@ -360,6 +360,7 @@ _app_state.runtime_config = {
     "listener_remote_port": get_config("listener_remote_port", "7000"),
     "listener_username": get_config("listener_username", ""),
     "listener_room": get_config("listener_room", ""),
+    "listener_device": get_config("listener_device", ""),
 }
 # Module-level aliases — existing code (and lazy imports from routes) can still use these.
 # All point to the same dict/list objects on _app_state, so mutations are shared.
@@ -2876,6 +2877,35 @@ async def api_listener_wake(req: Request):
     return {"ok": True}
 
 
+@app.get("/api/listener/devices")
+async def api_listener_devices():
+    """List available audio input devices via PyAudio (runs in wake-listener venv)."""
+    import asyncio
+    loop = asyncio.get_event_loop()
+    def _list():
+        import subprocess
+        script = (
+            "import pyaudio, json; pa = pyaudio.PyAudio(); "
+            "devs = [{'index': i, 'name': pa.get_device_info_by_index(i)['name'], "
+            "'channels': int(pa.get_device_info_by_index(i).get('maxInputChannels', 0))} "
+            "for i in range(pa.get_device_count()) "
+            "if int(pa.get_device_info_by_index(i).get('maxInputChannels', 0)) > 0]; "
+            "pa.terminate(); print(json.dumps(devs))"
+        )
+        try:
+            r = subprocess.run(
+                ["/Users/jarvis/jarvis-voice/.venv/bin/python", "-c", script],
+                capture_output=True, text=True, timeout=10,
+            )
+            if r.returncode == 0:
+                return json.loads(r.stdout.strip())
+            return []
+        except Exception:
+            return []
+    devices = await loop.run_in_executor(None, _list)
+    return {"ok": True, "devices": devices}
+
+
 # --- OpenRouter Config ---
 
 @app.get("/api/openrouter/config")
@@ -3389,7 +3419,8 @@ async def api_config_set(req: Request):
 
     # --- Listener config keys ---
     for lk in ("listener_enabled", "listener_mode", "listener_remote_ip",
-               "listener_remote_port", "listener_username", "listener_room"):
+               "listener_remote_port", "listener_username", "listener_room",
+               "listener_device"):
         if lk in body:
             val = body[lk]
             if lk == "listener_enabled":
