@@ -507,6 +507,9 @@
       <button class="sidebar-nav-btn" onclick="showSection('gmail')">
         <span class="nav-icon">&#9993;</span><span class="nav-label">Gmail</span>
       </button>
+      <button class="sidebar-nav-btn" onclick="showSection('drafter')">
+        <span class="nav-icon">&#9998;</span><span class="nav-label">Email Drafter</span>
+      </button>
       <button class="sidebar-nav-btn" onclick="showSection('unifi')">
         <span class="nav-icon">&#9737;</span><span class="nav-label">UniFi</span>
       </button>
@@ -772,6 +775,36 @@
     </div>
 
   </div>
+    </div>
+
+    <!-- ===== EMAIL DRAFTER SECTION ===== -->
+    <div class="settings-section" id="section-drafter">
+      <div class="section-title">Email Drafter</div>
+      <div class="card">
+        <h2>AI Model</h2>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:12px;">Model used for auto-drafting and AI Reply. Changing this applies to both features.</p>
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-label">Model Selection</div>
+            <div class="setting-desc">Which AI model generates draft replies</div>
+          </div>
+          <select id="drafter-model" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:13px;min-width:200px;" onchange="saveDrafterModel()">
+            <option value="">Auto-detect</option>
+          </select>
+        </div>
+        <div id="drafter-model-hint" style="font-size:11px;color:var(--muted);margin-top:4px;padding-left:2px;"></div>
+      </div>
+
+      <div class="card" style="margin-top:12px;">
+        <h2>Context Management</h2>
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-label">Fresh context per email</div>
+            <div class="setting-desc">Start a new AI session for each email. Prevents context pollution between drafts.</div>
+          </div>
+          <div class="toggle" id="drafter-fresh-session" onclick="toggleDrafterFreshSession()"></div>
+        </div>
+      </div>
     </div>
 
     <!-- ===== UNIFI SECTION ===== -->
@@ -5293,6 +5326,132 @@ async function loadConnectionsOverview() {
   } catch { const d = document.getElementById('conn-openrouter-dot'); if (d) d.style.color = 'var(--red)'; }
 }
 
+// ---- Email Drafter Config ----
+let _drafterConfig = {};
+
+async function loadDrafterConfig() {
+  try {
+    const r = await fetch(API + '/api/drafter/config');
+    if (!r.ok) return;
+    _drafterConfig = await r.json();
+    // Fresh session toggle
+    const toggle = document.getElementById('drafter-fresh-session');
+    if (toggle) toggle.className = 'toggle' + (_drafterConfig.fresh_session_per_email ? ' on' : '');
+    // Model dropdown
+    await _populateDrafterModels(_drafterConfig.model_key || '');
+  } catch (e) {
+    console.warn('Failed to load drafter config:', e);
+  }
+}
+
+async function _populateDrafterModels(currentKey) {
+  const sel = document.getElementById('drafter-model');
+  const hint = document.getElementById('drafter-model-hint');
+  if (!sel) return;
+  // Keep the auto-detect option
+  sel.innerHTML = '<option value="">Auto-detect (Claude \u2192 Anthropic \u2192 Codex)</option>';
+  // Gather available models from provider APIs
+  const models = [];
+  // Claude Code models
+  try {
+    const r = await fetch(API + '/api/claude/status');
+    if (r.ok) {
+      const d = await r.json();
+      if (d.connected) {
+        models.push({ key: 'claude_opus', label: 'Claude Opus 4.6' });
+        models.push({ key: 'claude_sonnet', label: 'Claude Sonnet 4.5' });
+      }
+    }
+  } catch {}
+  // Anthropic API models
+  try {
+    const r = await fetch(API + '/api/anthropic/models');
+    if (r.ok) {
+      const d = await r.json();
+      if (Array.isArray(d.models)) {
+        for (const m of d.models) {
+          models.push({ key: 'anthropic_' + m.id.replace(/[^a-z0-9]/gi, '_'), label: 'Anthropic: ' + m.label });
+        }
+      }
+    }
+  } catch {}
+  // OpenRouter models
+  try {
+    const r = await fetch(API + '/api/openrouter/config', { headers: { 'Accept': 'application/json' } });
+    if (r.ok) {
+      const d = await r.json();
+      if (d.has_api_key && Array.isArray(d.models)) {
+        for (const m of d.models) {
+          const key = 'openrouter_' + m.id.replace(/\//g, '_');
+          models.push({ key, label: 'OpenRouter: ' + m.label });
+        }
+      }
+    }
+  } catch {}
+  // Codex (always available)
+  models.push({ key: 'codex', label: 'GPT Codex' });
+  // Populate
+  for (const m of models) {
+    const opt = document.createElement('option');
+    opt.value = m.key;
+    opt.textContent = m.label;
+    if (m.key === currentKey) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  // Hint
+  if (hint) {
+    if (currentKey) {
+      const found = models.find(m => m.key === currentKey);
+      hint.textContent = found ? 'Using: ' + found.label : 'Using: ' + currentKey;
+    } else {
+      hint.textContent = 'Auto-detecting best available provider';
+    }
+  }
+}
+
+async function saveDrafterModel() {
+  const sel = document.getElementById('drafter-model');
+  const key = sel ? sel.value : '';
+  try {
+    const r = await fetch(API + '/api/drafter/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model_key: key }),
+    });
+    if (r.ok) {
+      _drafterConfig.model_key = key;
+      const hint = document.getElementById('drafter-model-hint');
+      if (hint) hint.textContent = key ? 'Using: ' + (sel.options[sel.selectedIndex]?.textContent || key) : 'Auto-detecting best available provider';
+      toast('Drafter model saved');
+    } else {
+      toast('Failed to save model', 3000);
+    }
+  } catch (e) {
+    toast('Error: ' + e.message, 3000);
+  }
+}
+
+async function toggleDrafterFreshSession() {
+  const toggle = document.getElementById('drafter-fresh-session');
+  const newVal = !_drafterConfig.fresh_session_per_email;
+  try {
+    const r = await fetch(API + '/api/drafter/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fresh_session_per_email: newVal }),
+    });
+    if (r.ok) {
+      _drafterConfig.fresh_session_per_email = newVal;
+      if (toggle) toggle.className = 'toggle' + (newVal ? ' on' : '');
+      toast(newVal ? 'Fresh context enabled' : 'Fresh context disabled');
+    } else {
+      toast('Failed to save setting', 3000);
+    }
+  } catch (e) {
+    toast('Error: ' + e.message, 3000);
+  }
+}
+
 // ---- Init ----
 restoreSectionFromHash();
 loadConfig().then(() => loadListenerConfig()).catch(() => {});
@@ -5333,6 +5492,7 @@ loadAnthropicConfig();
 loadConnectionsOverview();
 loadAccountStatus();
 loadGmailStatus();
+loadDrafterConfig();
 loadUnifiStatus();
 loadCloudflareStatus();
 loadCertsList();

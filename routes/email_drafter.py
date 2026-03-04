@@ -200,13 +200,14 @@ async def api_drafter_discard(uid: str):
 @router.post("/api/drafter/ai-reply")
 async def api_drafter_ai_reply(req: Request):
     """Generate an AI reply for a single message on demand."""
-    def _generate(from_addr, subject, body, message_id):
+    def _generate(from_addr, subject, body, message_id, model_key):
         import asyncio
         from email_drafter import generate_ai_reply
         loop = asyncio.new_event_loop()
         try:
             return loop.run_until_complete(
-                generate_ai_reply(from_addr, subject, body, message_id)
+                generate_ai_reply(from_addr, subject, body, message_id,
+                                  model_key=model_key)
             )
         finally:
             loop.close()
@@ -217,9 +218,12 @@ async def api_drafter_ai_reply(req: Request):
         subject = body.get("subject", "")
         msg_body = body.get("body", "")
         message_id = body.get("message_id", "")
+        # Use drafter's configured model for AI Reply consistency
+        from email_drafter import _get_config
+        model_key = _get_config("drafter.model_key", "")
         if not from_addr or not subject:
             return JSONResponse({"error": "from and subject are required"}, status_code=400)
-        result = await asyncio.to_thread(_generate, from_addr, subject, msg_body, message_id)
+        result = await asyncio.to_thread(_generate, from_addr, subject, msg_body, message_id, model_key)
         return result
     except PermissionError as e:
         return JSONResponse({"error": str(e)}, status_code=403)
