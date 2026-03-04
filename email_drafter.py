@@ -1628,6 +1628,70 @@ def get_original_for_draft(uid: str) -> dict:
             pass
 
 
+def update_draft(uid: str, body_html: str) -> dict:
+    """Update a draft's body HTML in-place (IMAP has no edit; delete + append).
+
+    Returns {"ok": True, "new_uid": "...", "old_uid": uid}.
+    """
+    from gmail_bridge import check_permission
+    check_permission("auto_draft")
+
+    imap = _imap_connect()
+    try:
+        status, _ = imap.select('"[Gmail]/Drafts"')  # read-write
+        if status != "OK":
+            raise RuntimeError("Could not open Drafts folder")
+
+        status, msg_data = imap.fetch(uid.encode(), "(BODY.PEEK[])")
+        if status != "OK" or not msg_data or not msg_data[0]:
+            raise RuntimeError(f"Draft {uid} not found")
+
+        raw = msg_data[0][1]
+        old_msg = email.message_from_bytes(raw)
+
+        # Security guard — only allow editing our own auto-drafts
+        if old_msg.get(X_DRAFTER_HEADER) != X_DRAFTER_VALUE:
+            raise PermissionError("This draft was not created by the auto-drafter")
+
+        # Build new message preserving all original headers
+        new_msg = MIMEText(body_html, "html")
+        for hdr in ("From", "To", "Subject", "In-Reply-To", "References",
+                     X_DRAFTER_HEADER, "Date"):
+            val = old_msg.get(hdr)
+            if val:
+                new_msg[hdr] = val
+
+        # APPEND new draft
+        status, resp_data = imap.append(
+            '"[Gmail]/Drafts"', "\\Draft",
+            imaplib.Time2Internaldate(time.time()),
+            new_msg.as_bytes(),
+        )
+        if status != "OK":
+            raise RuntimeError(f"APPEND failed: {resp_data}")
+
+        # Extract new UID from APPENDUID response
+        new_uid = ""
+        if resp_data and resp_data[0]:
+            match = re.search(r"APPENDUID\s+\d+\s+(\d+)",
+                              resp_data[0].decode("utf-8", errors="replace"))
+            if match:
+                new_uid = match.group(1)
+
+        # DELETE old draft
+        imap.store(uid.encode(), "+FLAGS", "\\Deleted")
+        imap.expunge()
+
+        logger.info(f"Draft updated: old_uid={uid} new_uid={new_uid}")
+        return {"ok": True, "new_uid": new_uid or "unknown", "old_uid": uid}
+
+    finally:
+        try:
+            imap.logout()
+        except Exception:
+            pass
+
+
 def send_draft(uid: str) -> dict:
     """Send an auto-drafted email by UID. Reads from Drafts, sends via SMTP, trashes draft."""
     from gmail_bridge import check_permission, _get_config as gmail_config

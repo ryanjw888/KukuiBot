@@ -143,6 +143,26 @@ async def api_drafter_original(uid: str):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@router.put("/api/drafter/drafts/{uid}")
+async def api_drafter_update(uid: str, req: Request):
+    """Update a draft's body HTML."""
+    body = await req.json()
+    body_html = body.get("body_html", "")
+    if not body_html:
+        return JSONResponse({"error": "body_html required"}, status_code=400)
+    from email_drafter import update_draft
+    try:
+        result = await asyncio.to_thread(update_draft, uid, body_html)
+        return result
+    except PermissionError as e:
+        return JSONResponse({"error": str(e)}, status_code=403)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        logger.warning(f"update draft error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @router.post("/api/drafter/drafts/{uid}/send")
 async def api_drafter_send(uid: str):
     """Send a specific auto-drafted email."""
