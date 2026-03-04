@@ -90,9 +90,10 @@ _2FA_SUBJECT_RE = re.compile(
 
 _2FA_BODY_CODE_RE = re.compile(
     r"(?:(?:verification|security|login|sign[\s-]?in|one[\s-]?time|confirmation|authentication)\s+code"
-    r"[\s:]*\d{4,8}\b|"
-    r"\byour\s+code\s+is[\s:]*\d{4,8}\b|"
+    r"(?:\s+is)?[\s:]*\d{4,8}\b|"
+    r"\byour\s+(?:\w+\s+)?code\s+is[\s:]*\d{4,8}\b|"
     r"\benter\s+(?:this\s+)?code[\s:]*\d{4,8}\b|"
+    r"\bcode\s*[:=]\s*\d{4,8}\b|"
     r"\b\d{4,8}\s+is\s+your\s+(?:verification|security|login)\s+code\b)",
     re.IGNORECASE,
 )
