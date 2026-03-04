@@ -92,6 +92,29 @@ const EmailModule = (function () {
     return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
 
+  /**
+   * Animate a message row sliding out, then resolve after transition ends.
+   */
+  function _slideOutRow(uid) {
+    return new Promise(resolve => {
+      const row = document.querySelector(`.inbox-msg-row[onclick*="'${uid}'"]`);
+      if (!row) { resolve(); return; }
+      row.addEventListener('transitionend', function handler(e) {
+        if (e.propertyName === 'max-height' || e.propertyName === 'transform') {
+          row.removeEventListener('transitionend', handler);
+          resolve();
+        }
+      });
+      setTimeout(resolve, 400);
+      requestAnimationFrame(() => row.classList.add('slide-out'));
+    });
+  }
+
+  /** Animate multiple rows sliding out in parallel */
+  function _slideOutRows(uids) {
+    return Promise.all(uids.map(uid => _slideOutRow(String(uid))));
+  }
+
   function buildReplyAllTo(sm) {
     const all = [sm.from || '', sm.to || '', sm.cc || '']
       .join(',')
@@ -306,12 +329,14 @@ const EmailModule = (function () {
 
   async function trashMessage(folder, uid) {
     if (!confirm('Move this message to trash?')) return;
+    const slidePromise = _slideOutRow(String(uid));
     const resp = await apiFetch('/api/gmail/trash', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ folder, uid: String(uid) }),
     });
     if (resp.ok) {
+      await slidePromise;
       inboxMessages = inboxMessages.filter(m => String(m.uid) !== String(uid));
       if (String(selectedUid) === String(uid)) {
         selectedMessage = null;
@@ -320,6 +345,8 @@ const EmailModule = (function () {
       patchInboxList();
       patchPreview();
     } else if (resp.error) {
+      const row = document.querySelector(`.inbox-msg-row[onclick*="'${uid}'"]`);
+      if (row) row.classList.remove('slide-out');
       alert('Trash error: ' + resp.error);
     }
   }
@@ -1080,7 +1107,7 @@ const EmailModule = (function () {
           <tr><td>o / Enter</td><td>Open focused message</td></tr>
           <tr><td>r / a</td><td>Reply to All</td></tr>
           <tr><td>f</td><td>Forward</td></tr>
-          <tr><td>#</td><td>Trash selected</td></tr>
+          <tr><td># / Delete</td><td>Trash selected</td></tr>
           <tr><td>x</td><td>Toggle checkbox</td></tr>
           <tr><td>Shift+i</td><td>Mark as read</td></tr>
           <tr><td>Shift+u</td><td>Mark as unread</td></tr>
@@ -1129,7 +1156,7 @@ const EmailModule = (function () {
     const key = e.key;
 
     // Prevent default for shortcut keys
-    if (['j','k','x','s','c','r','a','f','e','/','?'].includes(key) || key === '#') {
+    if (['j','k','x','s','c','r','a','f','e','/','?','Delete'].includes(key) || key === '#') {
       e.preventDefault();
     }
 
@@ -1195,7 +1222,7 @@ const EmailModule = (function () {
         return;
       }
 
-      if (key === '#') {
+      if (key === '#' || key === 'Delete') {
         if (selectedUids.size > 0) {
           bulkTrash();
         } else if (selectedUid) {
@@ -1961,6 +1988,7 @@ const EmailModule = (function () {
     const uids = [...selectedUids];
     if (!uids.length) return;
     if (!confirm('Trash ' + uids.length + ' message(s)?')) return;
+    const slidePromise = _slideOutRows(uids);
     for (const uid of uids) {
       const resp = await apiFetch('/api/gmail/trash', {
         method: 'POST',
@@ -1975,6 +2003,7 @@ const EmailModule = (function () {
         }
       }
     }
+    await slidePromise;
     selectedUids.clear();
     patchInboxList();
     patchPreview();
@@ -2634,6 +2663,7 @@ const EmailModule = (function () {
     inboxFolder = folderKey;
     selectedMessage = null;
     selectedUid = null;
+    selectedUids.clear();
     rerender();
     fetchInbox();
   }

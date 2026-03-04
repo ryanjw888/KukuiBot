@@ -2538,7 +2538,17 @@ body {
 .inbox-msg-row {
   padding: 10px 12px; border-bottom: 1px solid var(--border);
   cursor: pointer; display: flex; flex-direction: row; align-items: flex-start; gap: 8px;
-  position: relative; transition: background 0.12s;
+  position: relative;
+  transition: background 0.12s, transform 0.28s ease-in, opacity 0.28s ease-in, max-height 0.25s ease-out 0.15s;
+  overflow: hidden; max-height: 200px;
+}
+.inbox-msg-row.slide-out {
+  transform: translateX(100%);
+  opacity: 0;
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-bottom-width: 0;
 }
 .inbox-msg-content {
   flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px;
