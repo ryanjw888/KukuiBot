@@ -18,6 +18,8 @@ from openwakeword.model import Model
 
 SAMPLE_RATE = 16000
 CHUNK_SAMPLES = 1280          # 80ms — openWakeWord expects this
+
+# Defaults — overridden at startup by /api/config values
 COOLDOWN_SECS = 5.0           # ignore wake scores for this long after detection
 SILENCE_THRESHOLD = 150       # RMS amplitude threshold for silence (int16 scale)
 SILENCE_DURATION = 1.2        # seconds of sustained silence to stop recording
@@ -220,10 +222,24 @@ def fetch_listener_config(kukuibot_url: str) -> dict:
             return {
                 "mode": data.get("listener_mode", "local"),
                 "device": data.get("listener_device", ""),
+                "threshold": _safe_float(data.get("listener_threshold"), 0.5),
+                "cooldown": _safe_float(data.get("listener_cooldown"), COOLDOWN_SECS),
+                "silence_threshold": _safe_float(data.get("listener_silence_threshold"), SILENCE_THRESHOLD),
+                "silence_duration": _safe_float(data.get("listener_silence_duration"), SILENCE_DURATION),
+                "max_record": _safe_float(data.get("listener_max_record"), MAX_RECORD_SECS),
+                "min_record": _safe_float(data.get("listener_min_record"), MIN_RECORD_SECS),
             }
     except Exception as e:
         logger.warning(f"Config fetch failed: {e}")
         return {"mode": "local", "device": ""}
+
+
+def _safe_float(val, default):
+    """Parse a float from config, returning default on failure."""
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return float(default)
 
 
 def main():
@@ -247,8 +263,18 @@ def main():
         device = initial_cfg["device"]
         logger.info(f"Using mic from config: device={device}")
 
+    # Apply tuning from server config (CLI --threshold overrides if explicitly set)
+    threshold = args.threshold
+    if threshold == 0.5 and "threshold" in initial_cfg:
+        threshold = initial_cfg["threshold"]
+    cooldown = initial_cfg.get("cooldown", COOLDOWN_SECS)
+    silence_thresh = initial_cfg.get("silence_threshold", SILENCE_THRESHOLD)
+    silence_dur = initial_cfg.get("silence_duration", SILENCE_DURATION)
+    max_record = initial_cfg.get("max_record", MAX_RECORD_SECS)
+    min_record = initial_cfg.get("min_record", MIN_RECORD_SECS)
+
     model, label = build_model(args.model)
-    logger.info(f"Wake word model loaded: {label} (threshold={args.threshold})")
+    logger.info(f"Wake word model loaded: {label} (threshold={threshold})")
 
     pa, stream = open_mic(device)
     logger.info(f"Microphone open (rate={SAMPLE_RATE}, chunk={CHUNK_SAMPLES}, device={device or 'system default'})")
@@ -269,6 +295,7 @@ def main():
     cached_mode = initial_cfg.get("mode", "local")
     mode_fetched_at = time.time()
     logger.info(f"Listening for 'Hey Jarvis' — room={args.room}, mode={cached_mode}, device={device or 'system default'}, url={kukuibot_url}")
+    logger.info(f"Tuning: threshold={threshold}, cooldown={cooldown}s, silence={silence_thresh}RMS/{silence_dur}s, record={min_record}-{max_record}s")
 
     while not stop:
         try:
@@ -282,21 +309,33 @@ def main():
         score = float(pred.get(label, 0.0))
 
         now = time.time()
-        if now - last_wake_time < COOLDOWN_SECS:
+        if now - last_wake_time < cooldown:
             continue
-        if score < args.threshold:
+        if score < threshold:
             continue
 
         # --- Wake word detected! ---
         last_wake_time = time.time()
         logger.info(f"WAKE DETECTED (score={score:.3f})")
 
-        # Refresh mode cache if stale
+        # Refresh mode + tuning cache if stale
         if now - mode_fetched_at > MODE_CACHE_SECS:
             _cfg = fetch_listener_config(kukuibot_url)
             cached_mode = _cfg.get("mode", "local")
+            if "threshold" in _cfg:
+                threshold = _cfg["threshold"]
+            if "cooldown" in _cfg:
+                cooldown = _cfg["cooldown"]
+            if "silence_threshold" in _cfg:
+                silence_thresh = _cfg["silence_threshold"]
+            if "silence_duration" in _cfg:
+                silence_dur = _cfg["silence_duration"]
+            if "max_record" in _cfg:
+                max_record = _cfg["max_record"]
+            if "min_record" in _cfg:
+                min_record = _cfg["min_record"]
             mode_fetched_at = time.time()
-            logger.info(f"Mode refreshed: {cached_mode}")
+            logger.info(f"Config refreshed: mode={cached_mode}, threshold={threshold}")
 
         if cached_mode == "remote":
             # --- Remote mode: record → transcribe → Jarvis chat → Sonos TTS ---
@@ -305,9 +344,9 @@ def main():
             # Record speech until silence or max duration
             frames = []
             silence_chunks = 0
-            silence_limit = int(SILENCE_DURATION * SAMPLE_RATE / CHUNK_SAMPLES)
-            max_chunks = int(MAX_RECORD_SECS * SAMPLE_RATE / CHUNK_SAMPLES)
-            min_chunks = int(MIN_RECORD_SECS * SAMPLE_RATE / CHUNK_SAMPLES)
+            silence_limit = int(silence_dur * SAMPLE_RATE / CHUNK_SAMPLES)
+            max_chunks = int(max_record * SAMPLE_RATE / CHUNK_SAMPLES)
+            min_chunks = int(min_record * SAMPLE_RATE / CHUNK_SAMPLES)
             recorded = 0
 
             logger.info("Recording speech...")
@@ -320,7 +359,7 @@ def main():
                 recorded += 1
 
                 amp = rms(pcm)
-                if amp < SILENCE_THRESHOLD:
+                if amp < silence_thresh:
                     silence_chunks += 1
                 else:
                     silence_chunks = 0

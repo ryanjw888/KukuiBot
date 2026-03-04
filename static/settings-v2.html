@@ -1287,6 +1287,44 @@
         <div style="margin-top:12px;">
           <button class="btn" onclick="saveListenerConfig()">Save Listener Config</button>
         </div>
+
+        <details style="margin-top:16px;font-size:12px;color:var(--muted);">
+          <summary style="cursor:pointer;font-size:12px;color:var(--accent);">Wake Word Tuning</summary>
+          <div style="margin-top:10px;padding:10px;background:var(--surface2);border-radius:8px;">
+            <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">
+              Changes are saved to the server and picked up by the listener on its next config refresh (~30s), or immediately on restart.
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 80px;gap:6px 10px;align-items:center;font-size:11px;">
+              <label style="color:var(--muted);">Detection threshold <span style="opacity:.5">(0.0–1.0)</span></label>
+              <input type="number" id="wt-threshold" step="0.05" min="0.1" max="1.0" style="width:100%;padding:3px 6px;font-size:11px;font-family:'SF Mono',Menlo,monospace;border-radius:4px;border:1px solid var(--border);background:rgba(0,0,0,.25);color:var(--text);">
+
+              <label style="color:var(--muted);">Cooldown after wake <span style="opacity:.5">(seconds)</span></label>
+              <input type="number" id="wt-cooldown" step="0.5" min="0.5" max="30" style="width:100%;padding:3px 6px;font-size:11px;font-family:'SF Mono',Menlo,monospace;border-radius:4px;border:1px solid var(--border);background:rgba(0,0,0,.25);color:var(--text);">
+
+              <label style="color:var(--muted);">Silence threshold <span style="opacity:.5">(RMS, int16)</span></label>
+              <input type="number" id="wt-silence-threshold" step="10" min="10" max="2000" style="width:100%;padding:3px 6px;font-size:11px;font-family:'SF Mono',Menlo,monospace;border-radius:4px;border:1px solid var(--border);background:rgba(0,0,0,.25);color:var(--text);">
+
+              <label style="color:var(--muted);">Silence duration <span style="opacity:.5">(seconds to stop)</span></label>
+              <input type="number" id="wt-silence-duration" step="0.1" min="0.3" max="10" style="width:100%;padding:3px 6px;font-size:11px;font-family:'SF Mono',Menlo,monospace;border-radius:4px;border:1px solid var(--border);background:rgba(0,0,0,.25);color:var(--text);">
+
+              <label style="color:var(--muted);">Max recording <span style="opacity:.5">(seconds)</span></label>
+              <input type="number" id="wt-max-record" step="1" min="3" max="120" style="width:100%;padding:3px 6px;font-size:11px;font-family:'SF Mono',Menlo,monospace;border-radius:4px;border:1px solid var(--border);background:rgba(0,0,0,.25);color:var(--text);">
+
+              <label style="color:var(--muted);">Min recording <span style="opacity:.5">(seconds)</span></label>
+              <input type="number" id="wt-min-record" step="0.1" min="0.2" max="10" style="width:100%;padding:3px 6px;font-size:11px;font-family:'SF Mono',Menlo,monospace;border-radius:4px;border:1px solid var(--border);background:rgba(0,0,0,.25);color:var(--text);">
+            </div>
+            <div style="margin-top:10px;display:flex;gap:8px;align-items:center;">
+              <button class="btn" onclick="saveWakeTuning()">Save Tuning</button>
+              <button class="btn" onclick="restartListener()" title="Save config and restart the wake-listener process">Save &amp; Restart Listener</button>
+              <span id="wt-status" style="font-size:11px;color:var(--muted);"></span>
+            </div>
+            <div style="font-size:11px;color:var(--muted);margin-top:10px;border-top:1px solid var(--border);padding-top:8px;">
+              <strong style="color:var(--text);">Model:</strong>
+              <code style="font-size:11px;">hey_jarvis_v0.1.onnx</code> (openWakeWord, ONNX, 16kHz / 80ms chunks)
+              &middot; Config refresh every ~30s
+            </div>
+          </div>
+        </details>
       </div>
     </div>
 
@@ -1833,6 +1871,13 @@ async function loadListenerConfig() {
   document.getElementById('listener-remote-panel').style.display = mode === 'remote' ? 'block' : 'none';
   document.getElementById('listener-status').textContent = enabled ? 'Listener active' : 'Listener off';
   document.getElementById('listener-status').style.color = enabled ? 'var(--green)' : 'var(--muted)';
+  // Wake word tuning fields
+  document.getElementById('wt-threshold').value = config.listener_threshold || '0.5';
+  document.getElementById('wt-cooldown').value = config.listener_cooldown || '5.0';
+  document.getElementById('wt-silence-threshold').value = config.listener_silence_threshold || '150';
+  document.getElementById('wt-silence-duration').value = config.listener_silence_duration || '1.2';
+  document.getElementById('wt-max-record').value = config.listener_max_record || '15';
+  document.getElementById('wt-min-record').value = config.listener_min_record || '1.0';
   // Populate microphone dropdown
   await refreshMicList();
 }
@@ -1888,6 +1933,76 @@ async function saveListenerConfig() {
     Object.assign(config, d);
     toast('Listener config saved');
   } catch { toast('Failed to save'); }
+}
+
+// ---- Wake Word Tuning ----
+function _getWakeTuningPayload() {
+  return {
+    listener_threshold: document.getElementById('wt-threshold').value,
+    listener_cooldown: document.getElementById('wt-cooldown').value,
+    listener_silence_threshold: document.getElementById('wt-silence-threshold').value,
+    listener_silence_duration: document.getElementById('wt-silence-duration').value,
+    listener_max_record: document.getElementById('wt-max-record').value,
+    listener_min_record: document.getElementById('wt-min-record').value,
+  };
+}
+
+async function saveWakeTuning() {
+  const st = document.getElementById('wt-status');
+  st.textContent = 'Saving...'; st.style.color = 'var(--muted)';
+  try {
+    const r = await fetch(API + '/api/config', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(_getWakeTuningPayload()),
+    });
+    const d = await r.json();
+    Object.assign(config, d);
+    st.textContent = 'Saved'; st.style.color = 'var(--green)';
+    toast('Wake tuning saved');
+  } catch {
+    st.textContent = 'Failed'; st.style.color = 'var(--red)';
+    toast('Failed to save tuning');
+  }
+  setTimeout(() => { st.textContent = ''; }, 3000);
+}
+
+async function restartListener() {
+  const st = document.getElementById('wt-status');
+  st.textContent = 'Saving...'; st.style.color = 'var(--muted)';
+  try {
+    // Save tuning + listener config together
+    const payload = {
+      ..._getWakeTuningPayload(),
+      listener_enabled: config.listener_enabled || false,
+      listener_mode: document.getElementById('listener-mode-select').value,
+      listener_remote_ip: document.getElementById('listener-remote-ip').value,
+      listener_remote_port: document.getElementById('listener-remote-port').value,
+      listener_device: document.getElementById('listener-device-select').value,
+      listener_username: document.getElementById('listener-username').value,
+      listener_room: document.getElementById('listener-room').value,
+    };
+    const r = await fetch(API + '/api/config', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json();
+    Object.assign(config, d);
+
+    st.textContent = 'Restarting listener...'; st.style.color = 'var(--muted)';
+    const r2 = await fetch(API + '/api/listener/restart', { method: 'POST' });
+    const d2 = await r2.json();
+    if (d2.ok) {
+      st.textContent = 'Listener restarted (PID ' + d2.pid + ')'; st.style.color = 'var(--green)';
+      toast('Listener restarted');
+    } else {
+      st.textContent = d2.error || 'Restart failed'; st.style.color = 'var(--red)';
+      toast('Restart failed: ' + (d2.error || 'unknown'));
+    }
+  } catch (e) {
+    st.textContent = 'Error'; st.style.color = 'var(--red)';
+    toast('Restart failed');
+  }
+  setTimeout(() => { st.textContent = ''; }, 5000);
 }
 
 // ---- Claude Code Token ----

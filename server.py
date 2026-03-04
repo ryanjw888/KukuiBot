@@ -361,6 +361,13 @@ _app_state.runtime_config = {
     "listener_username": get_config("listener_username", ""),
     "listener_room": get_config("listener_room", ""),
     "listener_device": get_config("listener_device", ""),
+    # Wake word tuning (persisted, sent to wake-listener via /api/config)
+    "listener_threshold": get_config("listener_threshold", "0.5"),
+    "listener_cooldown": get_config("listener_cooldown", "5.0"),
+    "listener_silence_threshold": get_config("listener_silence_threshold", "150"),
+    "listener_silence_duration": get_config("listener_silence_duration", "1.2"),
+    "listener_max_record": get_config("listener_max_record", "15"),
+    "listener_min_record": get_config("listener_min_record", "1.0"),
 }
 # Module-level aliases — existing code (and lazy imports from routes) can still use these.
 # All point to the same dict/list objects on _app_state, so mutations are shared.
@@ -2927,6 +2934,63 @@ async def api_listener_devices():
     return {"ok": True, "devices": devices}
 
 
+@app.post("/api/listener/restart")
+async def api_listener_restart(req: Request):
+    """Kill and relaunch the wake-listener process with current config."""
+    if not _is_admin(req):
+        return JSONResponse({"ok": False, "error": "Admin only"}, status_code=403)
+    import asyncio
+    loop = asyncio.get_event_loop()
+
+    def _restart():
+        import subprocess, signal as _signal
+        # Kill existing wake-listener processes
+        try:
+            r = subprocess.run(["pgrep", "-f", "wake-listener.py"],
+                               capture_output=True, text=True, timeout=5)
+            pids = [p.strip() for p in r.stdout.strip().split("\n") if p.strip()]
+            for pid in pids:
+                try:
+                    os.kill(int(pid), _signal.SIGTERM)
+                except (ProcessLookupError, ValueError):
+                    pass
+        except Exception:
+            pass
+        time.sleep(0.5)
+
+        # Build launch command from current config
+        cfg = _runtime_config
+        threshold = cfg.get("listener_threshold", "0.5")
+        device = cfg.get("listener_device", "")
+        room = cfg.get("listener_room", "") or "Office"
+        username = cfg.get("listener_username", "")
+
+        cmd = [
+            sys.executable,
+            str(Path(__file__).parent / "tools" / "wake-listener.py"),
+            "--threshold", str(threshold),
+            "--room", room,
+        ]
+        if username:
+            cmd += ["--username", username]
+        if device:
+            cmd += ["--device", device]
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            return {"ok": True, "pid": proc.pid}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    result = await loop.run_in_executor(None, _restart)
+    return result
+
+
 # --- OpenRouter Config ---
 
 @app.get("/api/openrouter/config")
@@ -3441,7 +3505,9 @@ async def api_config_set(req: Request):
     # --- Listener config keys ---
     for lk in ("listener_enabled", "listener_mode", "listener_remote_ip",
                "listener_remote_port", "listener_username", "listener_room",
-               "listener_device"):
+               "listener_device", "listener_threshold", "listener_cooldown",
+               "listener_silence_threshold", "listener_silence_duration",
+               "listener_max_record", "listener_min_record"):
         if lk in body:
             val = body[lk]
             if lk == "listener_enabled":
