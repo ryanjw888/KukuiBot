@@ -638,7 +638,8 @@ def _fetch_thread_context(imap, msg: email.message.Message, current_num: bytes) 
     return thread_messages
 
 
-async def _classify_spam(from_addr: str, subject: str, body: str) -> dict:
+async def _classify_spam(from_addr: str, subject: str, body: str,
+                         message_id: str = "") -> dict:
     """Classify an email as spam/phishing or legitimate using AI.
 
     Returns {"is_spam": bool, "confidence": float, "reason": str}.
@@ -673,7 +674,8 @@ async def _classify_spam(from_addr: str, subject: str, body: str) -> dict:
         f"Body:\n{truncated_body}"
     )
 
-    response = await _ai_call(prompt, system_text=system_text, timeout=30)
+    response = await _ai_call(prompt, system_text=system_text, timeout=30,
+                              email_id=message_id)
 
     # Extract JSON from response (model may wrap in markdown code block)
     json_str = response.strip()
@@ -891,41 +893,69 @@ def _check_filters(msg: email.message.Message, from_addr: str, subject: str,
 # OpenRouter, etc.) — same routing as the chat pane and new-worker tabs.
 # ---------------------------------------------------------------------------
 
-def _resolve_drafter_session_id() -> str:
+def _resolve_drafter_session_id(email_id: str = "", force_model_key: str = "") -> tuple[str, str]:
     """Pick a session ID that routes to the best available model.
 
+    Args:
+        email_id: Message-ID of the email being processed. Used for fresh-session hashing.
+        force_model_key: Override model key (from config or caller).
+
+    Returns:
+        (session_id, model_key) tuple.
+
     Uses the same provider-detection logic the main app uses:
+      - User-configured model  → tab-{model_key}-drafter
       - Claude Code bridge up  → tab-claude_sonnet-drafter
-      - Anthropic API key      → tab-anthropic_...-drafter
-      - OpenRouter models      → tab-openrouter_...-drafter
+      - Anthropic API key      → tab-anthropic-drafter
       - Fallback               → tab-codex-drafter (OpenAI)
     """
-    # Check Claude Code bridge
-    try:
-        from claude_bridge import get_claude_pool
-        pool = get_claude_pool()
-        if pool is not None:
-            return "tab-claude_sonnet-drafter"
-    except Exception:
-        pass
-    # Check Anthropic API
-    if _get_api_key():
-        return "tab-anthropic-drafter"
-    # Fallback
-    return "tab-codex-drafter"
+    # 1. Resolve model key: caller override > config > auto-detect
+    model_key = (force_model_key or "").strip()
+    if not model_key:
+        model_key = _get_config("drafter.model_key", "").strip()
+    if not model_key:
+        # Auto-detect: Claude Code bridge > Anthropic API > Codex
+        try:
+            from claude_bridge import get_claude_pool
+            pool = get_claude_pool()
+            if pool is not None:
+                model_key = "claude_sonnet"
+        except Exception:
+            pass
+        if not model_key and _get_api_key():
+            model_key = "anthropic"
+        if not model_key:
+            model_key = "codex"
+
+    # 2. Build session ID
+    fresh = _get_config("drafter.fresh_session_per_email", "0") == "1"
+    if fresh and email_id:
+        import hashlib
+        h = hashlib.sha256(email_id.encode()).hexdigest()[:8]
+        session_id = f"tab-{model_key}-drf{h}"
+    else:
+        session_id = f"tab-{model_key}-drafter"
+
+    return session_id, model_key
 
 
-async def _ai_call(prompt: str, system_text: str = "", timeout: int = 120) -> str:
+async def _ai_call(prompt: str, system_text: str = "", timeout: int = 120,
+                   email_id: str = "", model_key: str = "") -> str:
     """AI call routed through the app's /api/chat endpoint.
 
     Sends a message to /api/chat, consumes the SSE stream, and returns
     the concatenated response text. Uses whichever AI provider is connected.
+
+    Args:
+        email_id: Message-ID for fresh-session hashing.
+        model_key: Override model key for this call.
     """
     import httpx
 
     from config import PORT
 
-    session_id = _resolve_drafter_session_id()
+    session_id, resolved_model = _resolve_drafter_session_id(email_id, model_key)
+    logger.debug(f"AI call → session={session_id} model={resolved_model}")
     # Prepend system context to the prompt if provided
     full_prompt = prompt
     if system_text:
@@ -1094,7 +1124,8 @@ def _get_style_profile() -> str | None:
 
 async def _generate_draft_reply(style_profile: str, from_addr: str,
                                 subject: str, body: str,
-                                thread_context: list[dict] | None = None) -> str:
+                                thread_context: list[dict] | None = None,
+                                email_id: str = "", model_key: str = "") -> str:
     """Generate a draft reply using AI in the user's writing style."""
     # Build thread context section if available
     thread_section = ""
@@ -1132,11 +1163,11 @@ Subject: {subject}
 Body:
 {body[:MAX_BODY_CHARS]}"""
 
-    return await _ai_call(prompt, timeout=60)
+    return await _ai_call(prompt, timeout=60, email_id=email_id, model_key=model_key)
 
 
 async def generate_ai_reply(from_addr: str, subject: str, body: str,
-                            message_id: str = "") -> dict:
+                            message_id: str = "", model_key: str = "") -> dict:
     """Generate an AI reply for a single message on demand.
 
     Returns {ok, reply_text, subject} or {error}.
@@ -1155,6 +1186,8 @@ async def generate_ai_reply(from_addr: str, subject: str, body: str,
         from_addr=from_addr,
         subject=subject,
         body=body,
+        email_id=message_id,
+        model_key=model_key,
     )
 
     if not reply_text or not reply_text.strip():
@@ -1324,7 +1357,8 @@ async def check_and_draft(dry_run: bool = False) -> dict:
                 if spam_filter:
                     try:
                         threshold = spam_filter.get("confidence_threshold", 0.6)
-                        classification = await _classify_spam(from_addr_parsed, subject, body)
+                        classification = await _classify_spam(from_addr_parsed, subject, body,
+                                                               message_id=message_id)
                         if classification["is_spam"] and classification["confidence"] >= threshold:
                             spam_action = spam_filter.get("spam_action", "label")
                             action_desc = spam_action
@@ -1379,6 +1413,7 @@ async def check_and_draft(dry_run: bool = False) -> dict:
                 draft_body = await _generate_draft_reply(
                     style_profile, original_from, subject, body,
                     thread_context=thread_ctx,
+                    email_id=message_id,
                 )
 
                 if not draft_body or len(draft_body.strip()) < 5:
@@ -1853,6 +1888,8 @@ def get_config_dict() -> dict:
         "signature_html": _get_config("drafter.signature_html", DEFAULT_SIGNATURE_HTML),
         "thread_context": _get_config("drafter.thread_context", "full_thread"),
         "sync_interval_sec": int(_get_config("gmail.sync_interval_sec", "180")),
+        "fresh_session_per_email": _get_config("drafter.fresh_session_per_email", "0") == "1",
+        "model_key": _get_config("drafter.model_key", ""),
         "filters": _get_filters(),
     }
 
@@ -1875,6 +1912,10 @@ def save_config_dict(cfg: dict):
     if "sync_interval_sec" in cfg:
         val = max(30, min(600, int(cfg["sync_interval_sec"])))
         _set_config("gmail.sync_interval_sec", str(val))
+    if "fresh_session_per_email" in cfg:
+        _set_config("drafter.fresh_session_per_email", "1" if cfg["fresh_session_per_email"] else "0")
+    if "model_key" in cfg:
+        _set_config("drafter.model_key", str(cfg["model_key"]).strip())
     if "filters" in cfg:
         _save_filters(cfg["filters"])
 
