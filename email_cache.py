@@ -58,6 +58,7 @@ def _ensure_schema(db: sqlite3.Connection):
         );
         CREATE INDEX IF NOT EXISTS idx_messages_folder_date ON messages(folder, date_ts DESC);
         CREATE INDEX IF NOT EXISTS idx_messages_folder_uid ON messages(folder, uid);
+        CREATE INDEX IF NOT EXISTS idx_messages_message_id ON messages(message_id);
         CREATE INDEX IF NOT EXISTS idx_messages_synced ON messages(synced_at);
     """)
     # FTS5 virtual table for fast full-text search

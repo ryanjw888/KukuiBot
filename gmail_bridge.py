@@ -12,7 +12,7 @@ How to get an App Password:
 
 Permissions (stored as config keys):
   gmail.perm.read_inbox, gmail.perm.read_sent, gmail.perm.create_drafts,
-  gmail.perm.send_owner_only, gmail.perm.send_anyone, gmail.perm.trash
+  gmail.perm.send_owner_only, gmail.perm.send_anyone, gmail.perm.manual_send, gmail.perm.trash
 
 Security:
   - App password stored in DB config table (same as other API keys)
@@ -46,8 +46,8 @@ SMTP_PORT = 587
 
 ALL_PERMS = [
     "read_inbox", "read_sent", "create_drafts",
-    "send_owner_only", "send_within_org", "send_anyone", "trash",
-    "auto_draft",
+    "send_owner_only", "send_within_org", "send_anyone", "manual_send",
+    "trash", "auto_draft",
 ]
 
 # --- Helpers ---
@@ -104,6 +104,7 @@ def _sync_tools_md():
             "send_owner_only": f"Send email (to owner only: {owner_list})",
             "send_within_org": f"Send email (within @{owner_domain} only)" if owner_domain else "Send within organization",
             "send_anyone": "Send email to anyone",
+            "manual_send": "Manual send by user (drafts only, not AI)",
             "trash": "Move messages to trash",
         }
         lines = [

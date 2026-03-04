@@ -1591,8 +1591,16 @@ def list_drafts() -> list[dict]:
     return drafts
 
 
-def get_original_for_draft(uid: str) -> dict:
+def get_original_for_draft(uid: str, message_id_hint: str = "") -> dict:
     """Fetch the original email that a draft is replying to, via In-Reply-To header.
+
+    Checks the local SQLite cache first for instant results; falls back to IMAP
+    only when the cache doesn't have the message body.
+
+    Args:
+        uid: Draft UID in [Gmail]/Drafts.
+        message_id_hint: Optional In-Reply-To value from the client (avoids
+            an IMAP round-trip to read the draft headers).
 
     Returns {"ok": True, "from": ..., "to": ..., "subject": ..., "date": ..., "body": ..., "body_html": ...}
     or {"ok": False, "error": "not_reply"} / {"ok": False, "not_found": True}.
@@ -1600,27 +1608,63 @@ def get_original_for_draft(uid: str) -> dict:
     from gmail_bridge import check_permission, _extract_body_both
     check_permission("read_inbox")
 
+    # --- Resolve the In-Reply-To message ID ---
+    original_message_id = (message_id_hint or "").strip()
+
+    if not original_message_id:
+        # Check if the draft is in the local cache with in_reply_to info
+        # Fall back to IMAP to read just the draft header
+        imap = _imap_connect()
+        try:
+            status, _ = imap.select('"[Gmail]/Drafts"', readonly=True)
+            if status != "OK":
+                return {"ok": False, "error": "Could not open Drafts folder"}
+            status, msg_data = imap.uid('fetch', uid.encode(), "(BODY.PEEK[HEADER.FIELDS (In-Reply-To)])")
+            if status != "OK" or not msg_data or not msg_data[0]:
+                return {"ok": False, "error": f"Draft {uid} not found"}
+            hdr_msg = email.message_from_bytes(msg_data[0][1])
+            original_message_id = (hdr_msg.get("In-Reply-To") or "").strip()
+        finally:
+            try:
+                imap.logout()
+            except Exception:
+                pass
+
+    if not original_message_id:
+        return {"ok": False, "error": "not_reply"}
+
+    # --- Try local SQLite cache first (instant) ---
+    try:
+        import email_cache
+        db = email_cache._get_db()
+        try:
+            row = db.execute(
+                "SELECT * FROM messages WHERE message_id = ? AND body_text IS NOT NULL AND body_text != '' LIMIT 1",
+                (original_message_id,),
+            ).fetchone()
+            if row:
+                d = email_cache._row_to_dict(row)
+                logger.debug(f"Original for draft {uid} served from cache (message_id={original_message_id[:40]})")
+                return {
+                    "ok": True,
+                    "from": d.get("from_addr", ""),
+                    "to": d.get("to_addr", ""),
+                    "subject": d.get("subject", ""),
+                    "date": d.get("date", ""),
+                    "body": d.get("body_text", ""),
+                    "body_html": d.get("body_html"),
+                }
+        finally:
+            db.close()
+    except Exception as e:
+        logger.debug(f"Cache lookup failed for original: {e}")
+
+    # --- Cache miss — fall back to IMAP ---
+    clean_id = original_message_id.strip("<>")
+    search_folders = ["INBOX", '"[Gmail]/All Mail"', '"[Gmail]/Sent Mail"']
+
     imap = _imap_connect()
     try:
-        status, _ = imap.select('"[Gmail]/Drafts"', readonly=True)
-        if status != "OK":
-            return {"ok": False, "error": "Could not open Drafts folder"}
-
-        status, msg_data = imap.uid('fetch', uid.encode(), "(BODY.PEEK[])")
-        if status != "OK" or not msg_data or not msg_data[0]:
-            return {"ok": False, "error": f"Draft {uid} not found"}
-
-        raw = msg_data[0][1]
-        msg = email.message_from_bytes(raw)
-
-        original_message_id = msg.get("In-Reply-To", "").strip()
-        if not original_message_id:
-            return {"ok": False, "error": "not_reply"}
-
-        # Search for original in multiple folders
-        clean_id = original_message_id.strip("<>")
-        search_folders = ["INBOX", '"[Gmail]/All Mail"', '"[Gmail]/Sent Mail"']
-
         for folder in search_folders:
             try:
                 status, _ = imap.select(folder, readonly=True)
@@ -1738,7 +1782,9 @@ def send_draft(uid: str) -> dict:
     # Need at least one send permission
     from gmail_bridge import get_permissions
     perms = get_permissions()
-    if not (perms.get("send_owner_only") or perms.get("send_within_org") or perms.get("send_anyone")):
+    has_send_perm = (perms.get("send_owner_only") or perms.get("send_within_org")
+                     or perms.get("send_anyone") or perms.get("manual_send"))
+    if not has_send_perm:
         raise PermissionError("No send permission enabled — enable one in Settings > Gmail")
 
     email_addr = gmail_config("gmail.email", "")
@@ -1773,6 +1819,8 @@ def send_draft(uid: str) -> dict:
 
         if perms.get("send_anyone"):
             pass
+        elif perms.get("manual_send"):
+            pass  # User manually sending a draft — no recipient restrictions
         elif perms.get("send_within_org"):
             owner_domain = email_addr.split('@')[-1] if '@' in email_addr else None
             to_domain = to_lower.split('@')[-1] if '@' in to_lower else None

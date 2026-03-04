@@ -128,11 +128,15 @@ async def api_drafter_drafts():
 
 
 @router.get("/api/drafter/drafts/{uid}/original")
-async def api_drafter_original(uid: str):
-    """Fetch the original email that a draft is replying to."""
+async def api_drafter_original(uid: str, message_id: str = ""):
+    """Fetch the original email that a draft is replying to.
+
+    Optional query param `message_id` is the In-Reply-To value from the client,
+    allowing the server to skip an IMAP round-trip to read the draft headers.
+    """
     from email_drafter import get_original_for_draft
     try:
-        result = await asyncio.to_thread(get_original_for_draft, uid)
+        result = await asyncio.to_thread(get_original_for_draft, uid, message_id)
         if result.get("not_found"):
             return JSONResponse(result, status_code=404)
         return result

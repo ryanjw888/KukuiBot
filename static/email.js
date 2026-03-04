@@ -108,6 +108,13 @@ const EmailModule = (function () {
     // Skip full re-renders while the profile Ace editor is active —
     // requestRender does root.innerHTML=... which would destroy the editor.
     if (profileAce && activeTab === 'profile') return;
+    // Before innerHTML rebuild, save Quill content and null the reference so
+    // _initComposeQuill can re-create it on the new DOM.
+    if (composeQuill && showCompose && composeRichMode) {
+      composeData.body_html = composeQuill.root.innerHTML;
+      composeData.body = composeQuill.getText().trim();
+      composeQuill = null;
+    }
     // Signal that this is an intentional email module render (not a background SSE event).
     // Without this flag, requestRender skips renders in email mode to prevent DOM destruction.
     if (typeof _emailRenderRequested !== 'undefined') _emailRenderRequested = true;
@@ -679,7 +686,10 @@ const EmailModule = (function () {
     draftOriginalLoading = true;
     rerender();
     try {
-      const resp = await apiFetch(`/api/drafter/drafts/${encodeURIComponent(uid)}/original`);
+      const draft = drafts.find(d => d.uid === uid);
+      const inReplyTo = (draft && draft.in_reply_to) || '';
+      const qs = inReplyTo ? `?message_id=${encodeURIComponent(inReplyTo)}` : '';
+      const resp = await apiFetch(`/api/drafter/drafts/${encodeURIComponent(uid)}/original${qs}`);
       draftOriginal = resp.ok ? resp : null;
     } catch (e) {
       draftOriginal = null;
@@ -1072,8 +1082,10 @@ const EmailModule = (function () {
     pollTimer = setInterval(async () => {
       if (typeof appMode !== 'undefined' && appMode === 'email') {
         await Promise.all([fetchStatus(), fetchDrafts(), fetchHistory()]);
-        if (activeTab === 'drafts') rerender();
-        if (activeTab === 'inbox') fetchInbox();
+        // Skip rerender while compose overlay is open — innerHTML rebuild
+        // destroys the Quill editor instance and leaves the overlay blank.
+        if (activeTab === 'drafts' && !showCompose) rerender();
+        if (activeTab === 'inbox' && !showCompose) fetchInbox();
       }
     }, 30000);
   }
