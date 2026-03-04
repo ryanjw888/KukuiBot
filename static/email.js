@@ -20,7 +20,14 @@ const EmailModule = (function () {
   let profileAce = null;
   let loading = false;
   let runningOp = ''; // 'run' | 'dry-run' | 'rebuild' | 'send:uid' | 'discard:uid'
-  let expandedDrafts = new Set();
+  let selectedDraftUid = null;
+  let selectedDraft = null;
+  let draftOriginal = null;
+  let draftOriginalLoading = false;
+  let draftEditMode = false;
+  let draftEditQuill = null;
+  let draftSaving = false;
+  let draftRewriting = false;
   let initialized = false;
   let pollTimer = null;
 
@@ -537,8 +544,152 @@ const EmailModule = (function () {
     if (resp.error) {
       alert('Discard error: ' + resp.error);
     }
-    expandedDrafts.delete(uid);
+    if (selectedDraftUid === uid) {
+      selectedDraftUid = null;
+      selectedDraft = null;
+      draftOriginal = null;
+    }
     await refreshAll();
+  }
+
+  // --- Draft split-pane functions ---
+
+  async function selectDraft(uid) {
+    selectedDraftUid = uid;
+    selectedDraft = drafts.find(d => d.uid === uid) || null;
+    draftEditMode = false;
+    _destroyDraftQuill();
+    draftOriginal = null;
+    draftOriginalLoading = true;
+    rerender();
+    try {
+      const resp = await apiFetch(`/api/drafter/drafts/${encodeURIComponent(uid)}/original`);
+      draftOriginal = resp.ok ? resp : null;
+    } catch (e) {
+      draftOriginal = null;
+    }
+    draftOriginalLoading = false;
+    rerender();
+  }
+
+  function editDraft() {
+    draftEditMode = true;
+    rerender();
+    requestAnimationFrame(() => _initDraftQuill());
+  }
+
+  function _initDraftQuill() {
+    if (draftEditQuill) return;
+    if (typeof Quill === 'undefined') {
+      // Quill CDN should already be loaded by compose; retry after a tick
+      requestAnimationFrame(() => _initDraftQuill());
+      return;
+    }
+    const container = document.getElementById('draft-editor');
+    if (!container) return;
+    draftEditQuill = new Quill('#draft-editor', {
+      theme: 'snow',
+      placeholder: 'Edit draft...',
+      modules: {
+        toolbar: [
+          ['bold', 'italic', 'underline', 'strike'],
+          [{ header: [1, 2, 3, false] }],
+          [{ list: 'ordered' }, { list: 'bullet' }],
+          ['link', 'clean'],
+        ],
+      },
+    });
+    if (selectedDraft) {
+      draftEditQuill.clipboard.dangerouslyPasteHTML(selectedDraft.body_html || selectedDraft.body || '');
+    }
+  }
+
+  function _destroyDraftQuill() {
+    if (draftEditQuill) {
+      draftEditQuill = null;
+    }
+  }
+
+  async function saveDraftEdit() {
+    if (!selectedDraft || draftSaving) return;
+    draftSaving = true;
+    rerender();
+    const html = draftEditQuill ? draftEditQuill.root.innerHTML : '';
+    const resp = await apiFetch(`/api/drafter/drafts/${encodeURIComponent(selectedDraftUid)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body_html: html }),
+    });
+    if (resp.error) {
+      alert('Save error: ' + resp.error);
+      draftSaving = false;
+      rerender();
+      return;
+    }
+    // Update local state with new content and UID
+    selectedDraft.body_html = html;
+    selectedDraft.body = draftEditQuill ? draftEditQuill.getText().trim() : '';
+    selectedDraft.snippet = selectedDraft.body.replace(/\n/g, ' ').trim().substring(0, 120);
+    if (resp.new_uid) {
+      const oldUid = selectedDraftUid;
+      selectedDraftUid = resp.new_uid;
+      selectedDraft.uid = resp.new_uid;
+      // Update the drafts array entry
+      const idx = drafts.findIndex(d => d.uid === oldUid);
+      if (idx >= 0) drafts[idx] = selectedDraft;
+    }
+    draftEditMode = false;
+    draftSaving = false;
+    _destroyDraftQuill();
+    rerender();
+  }
+
+  function cancelDraftEdit() {
+    draftEditMode = false;
+    _destroyDraftQuill();
+    rerender();
+  }
+
+  async function aiRewriteDraft() {
+    if (!selectedDraft || draftRewriting) return;
+    draftRewriting = true;
+    rerender();
+    const resp = await apiFetch('/api/drafter/ai-reply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: draftOriginal ? draftOriginal.from : selectedDraft.to,
+        subject: selectedDraft.subject || '',
+        body: draftOriginal ? draftOriginal.body : '',
+        message_id: selectedDraft.in_reply_to || '',
+      }),
+    }, 120000);
+    if (resp.error) {
+      alert('AI Rewrite error: ' + resp.error);
+      draftRewriting = false;
+      rerender();
+      return;
+    }
+    // Convert AI reply to HTML
+    const newHtml = (resp.reply_text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+    // Auto-save the rewritten draft
+    const saveResp = await apiFetch(`/api/drafter/drafts/${encodeURIComponent(selectedDraftUid)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body_html: newHtml }),
+    });
+    selectedDraft.body_html = newHtml;
+    selectedDraft.body = resp.reply_text || '';
+    selectedDraft.snippet = selectedDraft.body.replace(/\n/g, ' ').trim().substring(0, 120);
+    if (saveResp.new_uid) {
+      const oldUid = selectedDraftUid;
+      selectedDraftUid = saveResp.new_uid;
+      selectedDraft.uid = saveResp.new_uid;
+      const idx = drafts.findIndex(d => d.uid === oldUid);
+      if (idx >= 0) drafts[idx] = selectedDraft;
+    }
+    draftRewriting = false;
+    rerender();
   }
 
   async function rebuildProfile() {
@@ -568,12 +719,6 @@ const EmailModule = (function () {
     if (resp.config) config = resp.config;
     if (resp.error) alert('Save error: ' + resp.error);
     await fetchStatus();
-    rerender();
-  }
-
-  function toggleDraftExpand(uid) {
-    if (expandedDrafts.has(uid)) expandedDrafts.delete(uid);
-    else expandedDrafts.add(uid);
     rerender();
   }
 
@@ -1404,13 +1549,113 @@ const EmailModule = (function () {
 
   // --- Render: Drafts Tab ---
 
+  function buildDraftListHtml() {
+    return drafts.map(d => {
+      const isSelected = d.uid === selectedDraftUid;
+      return `<div class="draft-msg-row${isSelected ? ' selected' : ''}"
+                   onclick="EmailModule.selectDraft('${escHtml(d.uid)}')">
+        <div class="draft-msg-content">
+          <div class="inbox-msg-sender">${escHtml(d.from_name || d.to)}</div>
+          <div class="inbox-msg-subject">${escHtml(d.subject)}</div>
+          <div class="inbox-msg-snippet">${escHtml(d.snippet || '')}</div>
+        </div>
+        <div class="inbox-msg-date">${fmtInboxDate(d.date)}</div>
+      </div>`;
+    }).join('');
+  }
+
+  function buildDraftPreviewHtml() {
+    if (!selectedDraft) {
+      return '<div class="inbox-empty"><div style="font-size:32px;opacity:0.3">&#128221;</div><div>Select a draft to preview</div></div>';
+    }
+
+    const d = selectedDraft;
+    const isSending = runningOp === 'send:' + d.uid;
+    const isDiscarding = runningOp === 'discard:' + d.uid;
+    const busy = isSending || isDiscarding;
+
+    // Header block
+    let html = `<div class="inbox-preview-header">
+      <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:4px">${escHtml(d.subject || '(no subject)')}</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:2px">To: ${escHtml(d.to || '')}</div>
+      <div style="font-size:12px;color:var(--muted)">Date: ${escHtml(d.date || '')}</div>`;
+
+    if (draftEditMode) {
+      // Edit mode action bar
+      html += `<div class="inbox-preview-actions">
+        <button class="email-action-btn primary" onclick="EmailModule.saveDraftEdit()" ${draftSaving ? 'disabled' : ''}>
+          ${draftSaving ? '<span class="email-spinner"></span> Saving...' : 'Save'}
+        </button>
+        <button class="email-action-btn" onclick="EmailModule.cancelDraftEdit()">Cancel Edit</button>
+      </div>`;
+    } else {
+      // Preview mode action bar
+      html += `<div class="inbox-preview-actions">
+        <button class="email-action-btn primary" onclick="EmailModule.sendDraft('${escHtml(d.uid)}')" ${busy ? 'disabled' : ''}>
+          ${isSending ? '<span class="email-spinner"></span> Sending...' : 'Send'}
+        </button>
+        <button class="email-action-btn" onclick="EmailModule.editDraft()">Edit</button>
+        <button class="email-action-btn" onclick="EmailModule.aiRewriteDraft()" ${draftRewriting ? 'disabled' : ''}>
+          ${draftRewriting ? '<span class="email-spinner"></span> Rewriting...' : 'AI Rewrite'}
+        </button>
+        <button class="email-action-btn danger" onclick="EmailModule.discardDraft('${escHtml(d.uid)}')" ${busy ? 'disabled' : ''}>
+          ${isDiscarding ? '<span class="email-spinner"></span> Discarding...' : 'Discard'}
+        </button>
+      </div>`;
+    }
+    html += '</div>';
+
+    // Draft body area
+    if (draftEditMode) {
+      html += '<div class="draft-editor-wrap"><div id="draft-editor"></div></div>';
+    } else {
+      // Render draft body in sandboxed iframe (same CSP as inbox)
+      html += '<div class="inbox-preview-body">';
+      if (d.body_html) {
+        const cspMeta = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src * data: blob:; style-src * \'unsafe-inline\'; font-src *;">';
+        const wrappedHtml = '<!DOCTYPE html><html><head>' + cspMeta + '<style>body{margin:0;padding:8px;font-family:tahoma,sans-serif;font-size:14px;color:#333;line-height:1.6;}</style></head><body>' + d.body_html + '</body></html>';
+        const safeHtml = wrappedHtml.replace(/"/g, '&quot;');
+        html += `<iframe class="inbox-preview-iframe" srcdoc="${safeHtml}" onload="this.style.height=this.contentDocument.body.scrollHeight+'px'"></iframe>`;
+      } else {
+        html += `<pre class="inbox-preview-text">${escHtml(d.body || '(empty)')}</pre>`;
+      }
+      html += '</div>';
+    }
+
+    // Original message separator + content
+    html += '<div class="draft-original-sep">&mdash;&mdash; Original Message &mdash;&mdash;</div>';
+
+    if (draftOriginalLoading) {
+      html += '<div class="inbox-empty" style="padding:20px"><span class="email-spinner"></span><div>Loading original...</div></div>';
+    } else if (draftOriginal) {
+      html += `<div class="inbox-preview-header" style="border-top:none">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:2px">From: ${escHtml(draftOriginal.from || '')}</div>
+        <div style="font-size:12px;color:var(--muted)">Date: ${escHtml(draftOriginal.date || '')}</div>
+      </div>`;
+      html += '<div class="inbox-preview-body">';
+      if (draftOriginal.body_html) {
+        const cspMeta = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src * data: blob:; style-src * \'unsafe-inline\'; font-src *;">';
+        const wrappedHtml = '<!DOCTYPE html><html><head>' + cspMeta + '<style>body{margin:0;padding:8px;font-family:sans-serif;color:#333;}</style></head><body>' + draftOriginal.body_html + '</body></html>';
+        const safeHtml = wrappedHtml.replace(/"/g, '&quot;');
+        html += `<iframe class="inbox-preview-iframe" srcdoc="${safeHtml}" onload="this.style.height=this.contentDocument.body.scrollHeight+'px'"></iframe>`;
+      } else {
+        html += `<pre class="inbox-preview-text">${escHtml(draftOriginal.body || '(empty)')}</pre>`;
+      }
+      html += '</div>';
+    } else {
+      html += '<div style="padding:16px;font-size:12px;color:var(--muted)">Original message not available</div>';
+    }
+
+    return html;
+  }
+
   function renderDraftsTab() {
     const isRunning = runningOp === 'run' || runningOp === 'dry-run';
     const canRun = status && status.gmail_connected && status.has_api_key && status.has_auto_draft_perm;
 
     let html = renderStatusBanner();
 
-    // Run controls
+    // Run controls toolbar
     html += `<div class="email-drafts-toolbar">
       <button class="email-action-btn" onclick="EmailModule.runDrafter(true)" ${!canRun || isRunning ? 'disabled' : ''} title="Preview what would be drafted">
         ${runningOp === 'dry-run' ? '<span class="email-spinner"></span> Checking...' : 'Dry Run'}
@@ -1438,33 +1683,12 @@ const EmailModule = (function () {
       return html;
     }
 
-    html += '<div class="email-draft-list">';
-    for (const d of drafts) {
-      const expanded = expandedDrafts.has(d.uid);
-      const isSending = runningOp === 'send:' + d.uid;
-      const isDiscarding = runningOp === 'discard:' + d.uid;
-      const busy = isSending || isDiscarding;
+    // Split-pane layout
+    html += `<div class="draft-split">
+      <div class="draft-list">${buildDraftListHtml()}</div>
+      <div class="draft-preview">${buildDraftPreviewHtml()}</div>
+    </div>`;
 
-      html += `<div class="email-draft-card">
-        <div class="email-draft-header">
-          <div class="email-draft-meta">
-            <div class="email-draft-subject">${escHtml(d.subject)}</div>
-            <div class="email-draft-from">To: ${escHtml(d.to)}</div>
-          </div>
-          <div class="email-draft-actions">
-            <button class="email-action-btn primary" onclick="EmailModule.sendDraft('${escHtml(d.uid)}')" ${busy ? 'disabled' : ''}>
-              ${isSending ? '<span class="email-spinner"></span>' : 'Send'}
-            </button>
-            <button class="email-action-btn danger" onclick="EmailModule.discardDraft('${escHtml(d.uid)}')" ${busy ? 'disabled' : ''}>
-              ${isDiscarding ? '<span class="email-spinner"></span>' : 'Discard'}
-            </button>
-          </div>
-        </div>
-        <button class="email-draft-toggle" onclick="EmailModule.toggleDraftExpand('${escHtml(d.uid)}')">${expanded ? 'Hide preview' : 'Show preview'}</button>
-        ${expanded ? `<div class="email-draft-body">${escHtml(d.body || '(empty)')}</div>` : ''}
-      </div>`;
-    }
-    html += '</div>';
     return html;
   }
 
@@ -1999,7 +2223,11 @@ const EmailModule = (function () {
     toggleFilter,
     saveFilterPatterns,
     saveSpamSetting,
-    toggleDraftExpand,
+    selectDraft,
+    editDraft,
+    cancelDraftEdit,
+    saveDraftEdit,
+    aiRewriteDraft,
     refreshAll,
     chatSend,
     chatKeyDown,
