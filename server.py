@@ -2905,6 +2905,35 @@ async def api_listener_wake(req: Request):
     return {"ok": True}
 
 
+_CHIME_SOUND = os.path.join(os.path.dirname(__file__), "static", "blow.mp3")
+
+@app.post("/api/listener/chime")
+async def api_listener_chime(req: Request):
+    """Play the wake word chime on the server machine (macOS afplay)."""
+    import asyncio
+    loop = asyncio.get_event_loop()
+
+    def _play():
+        sound = _CHIME_SOUND
+        if not os.path.isfile(sound):
+            # Fallback to macOS system sound
+            sound = "/System/Library/Sounds/Tink.aiff"
+        try:
+            subprocess.run(
+                ["afplay", sound],
+                timeout=3, check=False,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            return {"ok": True, "sound": os.path.basename(sound)}
+        except FileNotFoundError:
+            return {"ok": False, "error": "afplay not available (not macOS?)"}
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "error": "chime playback timed out"}
+
+    result = await loop.run_in_executor(None, _play)
+    return result
+
+
 @app.get("/api/listener/devices")
 async def api_listener_devices():
     """List available audio input devices via PyAudio (runs in wake-listener venv)."""

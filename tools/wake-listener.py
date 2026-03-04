@@ -197,14 +197,21 @@ def send_to_jarvis(text: str, room: str) -> str:
         return ""
 
 
-def fire_chime(room: str):
-    """Fire-and-forget: play wake chime on Sonos via Jarvis backend."""
+def fire_chime(kukuibot_url: str):
+    """Fire-and-forget: play wake chime via KukuiBot server, local afplay fallback."""
     def _do():
         try:
-            url = f"{JARVIS_BACKEND_URL}/jarvis/chime?room={room}"
-            urlrequest.urlopen(url, timeout=3)
-        except Exception:
-            pass
+            url = f"{kukuibot_url}/api/listener/chime"
+            req = urlrequest.Request(url, data=b'{}',
+                                     headers={"Content-Type": "application/json"},
+                                     method="POST")
+            with urlrequest.urlopen(req, timeout=5, context=_ssl_ctx) as resp:
+                logger.debug(f"Chime response: {resp.read().decode()}")
+                return
+        except Exception as e:
+            logger.debug(f"Remote chime failed ({e}), falling back to local afplay")
+        # Fallback: play locally via afplay
+        play_chime()
     threading.Thread(target=_do, daemon=True).start()
 
 
@@ -339,7 +346,7 @@ def main():
 
         if cached_mode == "remote":
             # --- Remote mode: record → transcribe → Jarvis chat → Sonos TTS ---
-            fire_chime(args.room)
+            fire_chime(kukuibot_url)
 
             # Record speech until silence or max duration
             frames = []
@@ -403,6 +410,7 @@ def main():
             last_wake_time = time.time()
         else:
             # --- Local mode: POST wake event → SSE → browser STT ---
+            play_chime()
             post_wake_event(kukuibot_url, score, args.username, args.room)
 
     logger.info("Shutting down...")
