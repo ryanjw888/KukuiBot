@@ -1461,8 +1461,13 @@ async def check_and_draft(dry_run: bool = False) -> dict:
 # ---------------------------------------------------------------------------
 
 def list_drafts() -> list[dict]:
-    """List Gmail drafts created by the auto-drafter (identified by X-KukuiBot-Draft header)."""
-    from gmail_bridge import check_permission
+    """List Gmail drafts created by the auto-drafter (identified by X-KukuiBot-Draft header).
+
+    Uses two-phase IMAP fetch:
+      Phase A — headers only to filter by X-KukuiBot-Draft
+      Phase B — full body for matching drafts only
+    """
+    from gmail_bridge import check_permission, _extract_body_both
     check_permission("read_inbox")
 
     imap = _imap_connect()
@@ -1480,31 +1485,60 @@ def list_drafts() -> list[dict]:
         msg_nums = data[0].split()
         msg_nums.reverse()  # newest first
 
+        # Phase A: fetch headers only, filter by X-KukuiBot-Draft
+        matching_nums = []
         for num in msg_nums[:50]:  # cap at 50
             try:
-                status, msg_data = imap.fetch(num, "(BODY.PEEK[])")
-                if status != "OK" or not msg_data or not msg_data[0]:
+                status2, hdr_data = imap.fetch(num, "(BODY.PEEK[HEADER])")
+                if status2 != "OK" or not hdr_data or not hdr_data[0]:
+                    continue
+                hdr_msg = email.message_from_bytes(hdr_data[0][1])
+                if hdr_msg.get(X_DRAFTER_HEADER) == X_DRAFTER_VALUE:
+                    matching_nums.append(num)
+            except Exception as e:
+                logger.warning(f"Error reading draft header {num}: {e}")
+                continue
+
+        # Phase B: fetch full body for matching drafts
+        for num in matching_nums:
+            try:
+                status2, msg_data = imap.fetch(num, "(BODY.PEEK[])")
+                if status2 != "OK" or not msg_data or not msg_data[0]:
                     continue
                 raw = msg_data[0][1]
                 msg = email.message_from_bytes(raw)
 
-                # Only include our auto-drafted emails
-                if msg.get(X_DRAFTER_HEADER) != X_DRAFTER_VALUE:
-                    continue
-
                 subject = _parse_header(msg.get("Subject", "(no subject)"))
                 to_addr = msg.get("To", "")
-                # The "To" of the draft = the person we're replying to
-                # Get the original sender from In-Reply-To context
                 in_reply_to = msg.get("In-Reply-To", "")
 
-                body = _extract_body(msg)
+                # Extract both plain + HTML body
+                body_plain, body_html = _extract_body_both(msg)
+
+                # Build snippet: first 120 chars of plain body
+                snippet = ""
+                if body_plain:
+                    snippet = body_plain.replace("\n", " ").replace("\r", " ").strip()[:120]
+
+                # Parse display name from To header
+                from_name = ""
+                if to_addr:
+                    m = re.match(r'^"?([^"<]+?)"?\s*<', to_addr)
+                    if m:
+                        from_name = m.group(1).strip()
+                    else:
+                        # Fallback to email local part
+                        addr_part = email.utils.parseaddr(to_addr)[1]
+                        from_name = addr_part.split("@")[0] if addr_part else to_addr
 
                 drafts.append({
                     "uid": num.decode(),
                     "to": to_addr,
                     "subject": subject,
-                    "body": body,
+                    "body": body_plain,
+                    "body_html": body_html,
+                    "snippet": snippet,
+                    "from_name": from_name,
                     "in_reply_to": in_reply_to,
                     "date": msg.get("Date", ""),
                 })
