@@ -35,7 +35,8 @@ MAX_RECORD_SECS = 15          # max recording length after wake word
 MIN_RECORD_SECS = 2.0         # minimum recording time before silence detection kicks in
 PRE_BUFFER_SECS = 3.0         # seconds of audio to keep before wake detection
 
-JARVIS_BACKEND_URL = os.getenv("JARVIS_BACKEND_URL", "http://127.0.0.1:5080")
+# Legacy env var — prefer kukuibot_url routing, fall back to direct Jarvis connection
+_JARVIS_BACKEND_URL_OVERRIDE = os.getenv("JARVIS_BACKEND_URL", "")
 
 logger = logging.getLogger("wake-listener")
 logging.basicConfig(
@@ -212,12 +213,15 @@ def pcm_to_wav_bytes(frames: list) -> bytes:
 # Backend communication (remote mode)
 # ---------------------------------------------------------------------------
 
-def transcribe_audio(wav_bytes: bytes) -> str:
-    """POST WAV audio to Jarvis backend Whisper STT, return transcript."""
+def transcribe_audio(wav_bytes: bytes, kukuibot_url: str = "https://localhost:7000") -> str:
+    """POST WAV audio to KukuiBot /api/listener/transcribe proxy, return transcript."""
     import http.client
     import urllib.parse
 
-    url = f"{JARVIS_BACKEND_URL}/api/transcribe"
+    if _JARVIS_BACKEND_URL_OVERRIDE:
+        url = f"{_JARVIS_BACKEND_URL_OVERRIDE}/api/transcribe"
+    else:
+        url = f"{kukuibot_url}/api/listener/transcribe"
     parsed = urllib.parse.urlparse(url)
 
     boundary = f"----Jarvis{int(time.time()*1000)}"
@@ -227,7 +231,11 @@ def transcribe_audio(wav_bytes: bytes) -> str:
         f"Content-Type: audio/wav\r\n\r\n"
     ).encode() + wav_bytes + f"\r\n--{boundary}--\r\n".encode()
 
-    conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=30)
+    # Use HTTPS with cert verification disabled (self-signed)
+    if parsed.scheme == "https":
+        conn = http.client.HTTPSConnection(parsed.hostname, parsed.port or 443, timeout=30, context=_ssl_ctx)
+    else:
+        conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=30)
     try:
         conn.request("POST", parsed.path, body=body,
                       headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
@@ -241,9 +249,12 @@ def transcribe_audio(wav_bytes: bytes) -> str:
         conn.close()
 
 
-def send_to_jarvis(text: str, room: str) -> str:
-    """POST transcript to /jarvis endpoint. Returns assistant response text."""
-    url = f"{JARVIS_BACKEND_URL}/jarvis"
+def send_to_jarvis(text: str, room: str, kukuibot_url: str = "https://localhost:7000") -> str:
+    """POST transcript to KukuiBot /api/listener/chat proxy. Returns assistant response text."""
+    if _JARVIS_BACKEND_URL_OVERRIDE:
+        url = f"{_JARVIS_BACKEND_URL_OVERRIDE}/jarvis"
+    else:
+        url = f"{kukuibot_url}/api/listener/chat"
     payload = json.dumps({
         "messages": [{"role": "user", "content": text}],
         "room": room,
@@ -254,7 +265,7 @@ def send_to_jarvis(text: str, room: str) -> str:
                              headers={"Content-Type": "application/json"},
                              method="POST")
     try:
-        with urlrequest.urlopen(req, timeout=60) as resp:
+        with urlrequest.urlopen(req, timeout=60, context=_ssl_ctx) as resp:
             # Response is SSE stream — collect the final text
             response_text = ""
             for line in resp:
@@ -314,9 +325,9 @@ def _parse_triggers(triggers_str: str) -> dict:
 
 
 def fetch_listener_config(kukuibot_url: str) -> dict:
-    """Fetch listener config from KukuiBot /api/config."""
+    """Fetch listener config from KukuiBot /api/listener/config (auth-exempt)."""
     try:
-        url = f"{kukuibot_url}/api/config"
+        url = f"{kukuibot_url}/api/listener/config"
         req = urlrequest.Request(url, method="GET")
         with urlrequest.urlopen(req, timeout=5, context=_ssl_ctx) as resp:
             data = json.loads(resp.read().decode())
@@ -562,7 +573,7 @@ def main():
                     # Vosk heard a command — re-transcribe the audio buffer via Qwen3-ASR for accuracy
                     wav_bytes = pcm_to_wav_bytes(pre_frames)
                     logger.info(f"Re-transcribing {len(pre_frames)} frames via Qwen3-ASR...")
-                    accurate_text = transcribe_audio(wav_bytes)
+                    accurate_text = transcribe_audio(wav_bytes, kukuibot_url)
                     if accurate_text:
                         if trigger_type == "direct":
                             # Direct trigger — use the full Qwen3-ASR transcript as the command
@@ -581,7 +592,7 @@ def main():
 
                 if command:
                     logger.info(f"Sending to Jarvis (room={args.room}): '{command}'")
-                    response = send_to_jarvis(command, args.room)
+                    response = send_to_jarvis(command, args.room, kukuibot_url)
                     if response:
                         logger.info(f"Jarvis: {response[:100]}")
                     else:
@@ -631,7 +642,7 @@ def main():
                     # Transcribe follow-up via Whisper
                     wav_bytes = pcm_to_wav_bytes(frames)
                     logger.info("Transcribing follow-up...")
-                    transcript = transcribe_audio(wav_bytes)
+                    transcript = transcribe_audio(wav_bytes, kukuibot_url)
 
                     if not transcript:
                         logger.info("No speech detected -- resuming listening")
@@ -640,7 +651,7 @@ def main():
 
                     logger.info(f"Transcript: '{transcript}'")
                     logger.info(f"Sending to Jarvis (room={args.room})...")
-                    response = send_to_jarvis(transcript, args.room)
+                    response = send_to_jarvis(transcript, args.room, kukuibot_url)
                     if response:
                         logger.info(f"Jarvis: {response[:100]}")
                     else:

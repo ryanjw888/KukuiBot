@@ -73,9 +73,8 @@ AUTH_EXEMPT = {
     "/auth/reset-password-terminal",
     "/api/claude/oauth/callback",
     "/api/claude/oauth/start",
-    "/api/listener/wake",
 }
-AUTH_EXEMPT_PREFIXES = ("/static/", "/setup", "/login")
+AUTH_EXEMPT_PREFIXES = ("/static/", "/setup", "/login", "/api/listener/")
 
 
 def _has_force_login_cookie(request: Request) -> bool:

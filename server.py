@@ -2939,6 +2939,153 @@ async def api_listener_chime(req: Request):
     return result
 
 
+@app.get("/api/listener/config")
+async def api_listener_config():
+    """Return listener-related config (auth-exempt for remote wake-listeners)."""
+    _LISTENER_KEYS = (
+        "listener_enabled", "listener_mode", "listener_device",
+        "listener_cooldown", "listener_silence_threshold", "listener_silence_duration",
+        "listener_max_record", "listener_min_record",
+        "listener_eagle_enabled", "listener_eagle_threshold",
+        "listener_wake_triggers", "listener_jarvis_url", "listener_kukuibot_url",
+        "listener_username", "listener_room",
+    )
+    return {k: _runtime_config.get(k) for k in _LISTENER_KEYS if _runtime_config.get(k) is not None}
+
+
+@app.post("/api/listener/test-address")
+async def api_listener_test_address(req: Request):
+    """Test whether an address resolves to this server (for listener settings UI)."""
+    import socket
+    try:
+        body = await req.json()
+        addr = (body.get("address") or "").strip()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Invalid request"}, status_code=400)
+
+    if not addr:
+        return JSONResponse({"ok": False, "error": "No address provided"}, status_code=400)
+
+    # Resolve the entered address
+    try:
+        resolved_ips = {info[4][0] for info in socket.getaddrinfo(addr, None)}
+    except socket.gaierror:
+        return JSONResponse({"ok": False, "error": f"Cannot resolve '{addr}'"})
+
+    # Get this machine's addresses
+    local_ips = {"127.0.0.1", "::1"}
+    try:
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(hostname, None):
+            local_ips.add(info[4][0])
+    except Exception:
+        pass
+    # Also try getting all interface addresses
+    try:
+        for info in socket.getaddrinfo(socket.getfqdn(), None):
+            local_ips.add(info[4][0])
+    except Exception:
+        pass
+
+    if resolved_ips & local_ips:
+        mode = _runtime_config.get("listener_mode", "unknown")
+        return {"ok": True, "resolved": list(resolved_ips), "mode": mode}
+    else:
+        return JSONResponse({
+            "ok": False,
+            "error": f"Address resolves to {', '.join(resolved_ips)} which doesn't match this server",
+        })
+
+
+@app.post("/api/listener/chat")
+async def api_listener_chat(req: Request):
+    """Proxy voice commands to Jarvis backend /jarvis endpoint."""
+    jarvis_url = (_runtime_config.get("listener_jarvis_url") or "http://127.0.0.1:5080").rstrip("/")
+
+    try:
+        body = await req.body()
+    except Exception:
+        return JSONResponse({"error": "Invalid request body"}, status_code=400)
+
+    # Validate basic shape
+    try:
+        data = json.loads(body)
+        if not isinstance(data.get("messages"), list):
+            return JSONResponse({"error": "messages array required"}, status_code=400)
+    except (json.JSONDecodeError, ValueError):
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    import urllib.request as _urlreq
+    target = f"{jarvis_url}/jarvis"
+
+    async def stream():
+        import queue as _queue
+        loop = asyncio.get_event_loop()
+        result_queue = _queue.Queue()
+
+        def _run_proxy():
+            proxy_req = _urlreq.Request(
+                target, data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            try:
+                resp = _urlreq.urlopen(proxy_req, timeout=90)
+                for line in resp:
+                    result_queue.put(line)
+            except Exception as e:
+                error_evt = json.dumps({"type": "done", "text": f"Jarvis backend error: {e}", "model": "system"})
+                result_queue.put(f"data: {error_evt}\n\n".encode())
+            finally:
+                result_queue.put(None)  # sentinel
+
+        import threading
+        t = threading.Thread(target=_run_proxy, daemon=True)
+        t.start()
+
+        while True:
+            try:
+                line = await loop.run_in_executor(None, result_queue.get, True, 90)
+                if line is None:
+                    break
+                yield line
+            except Exception:
+                break
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post("/api/listener/transcribe")
+async def api_listener_transcribe(req: Request):
+    """Proxy audio transcription to Jarvis backend."""
+    jarvis_url = (_runtime_config.get("listener_jarvis_url") or "http://127.0.0.1:5080").rstrip("/")
+    target = f"{jarvis_url}/api/transcribe"
+
+    content_type = req.headers.get("content-type", "")
+    body = await req.body()
+
+    import urllib.request as _urlreq
+    loop = asyncio.get_event_loop()
+
+    def _proxy():
+        proxy_req = _urlreq.Request(
+            target, data=body,
+            headers={"Content-Type": content_type},
+            method="POST"
+        )
+        try:
+            resp = _urlreq.urlopen(proxy_req, timeout=60)
+            return json.loads(resp.read().decode())
+        except Exception as e:
+            return {"error": str(e)}
+
+    result = await loop.run_in_executor(None, _proxy)
+    if "error" in result:
+        return JSONResponse(result, status_code=502)
+    return result
+
+
 @app.get("/api/listener/devices")
 async def api_listener_devices():
     """List available audio input devices via PyAudio (runs in wake-listener venv)."""
