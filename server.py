@@ -3801,10 +3801,12 @@ async def api_config_set(req: Request):
                "listener_remote_port", "listener_username", "listener_room",
                "listener_device", "listener_threshold", "listener_cooldown",
                "listener_silence_threshold", "listener_silence_duration",
-               "listener_max_record", "listener_min_record"):
+               "listener_max_record", "listener_min_record",
+               "listener_wake_triggers", "listener_eagle_enabled",
+               "listener_eagle_threshold", "listener_jarvis_url"):
         if lk in body:
             val = body[lk]
-            if lk == "listener_enabled":
+            if lk in ("listener_enabled", "listener_eagle_enabled"):
                 _runtime_config[lk] = bool(val)
                 set_config(lk, "1" if val else "0")
             elif lk == "listener_mode" and str(val) in ("local", "remote"):

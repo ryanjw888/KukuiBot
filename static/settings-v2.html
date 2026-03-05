@@ -1356,7 +1356,7 @@
           </div>
         </div>
         <div style="margin-top:10px;">
-          <button class="btn" onclick="saveWakeTriggers()">Save Triggers</button>
+          <button class="btn" onclick="saveWakeTriggers()">Save &amp; Restart Listener</button>
           <span id="trigger-status" style="font-size:11px;color:var(--muted);margin-left:8px;"></span>
         </div>
       </div>
@@ -2061,13 +2061,22 @@ async function saveWakeTriggers() {
     });
     const d = await r.json();
     Object.assign(config, d);
-    st.textContent = 'Saved'; st.style.color = 'var(--green)';
-    toast('Wake triggers saved');
+
+    st.textContent = 'Restarting listener...'; st.style.color = 'var(--muted)';
+    const r2 = await fetch(API + '/api/listener/restart', { method: 'POST' });
+    const d2 = await r2.json();
+    if (d2.ok) {
+      st.textContent = 'Saved & restarted (PID ' + d2.pid + ')'; st.style.color = 'var(--green)';
+      toast('Wake triggers saved — listener restarted');
+    } else {
+      st.textContent = 'Saved but restart failed: ' + (d2.error || 'unknown'); st.style.color = 'var(--yellow)';
+      toast('Triggers saved but restart failed');
+    }
   } catch {
     st.textContent = 'Failed'; st.style.color = 'var(--red)';
     toast('Failed to save triggers');
   }
-  setTimeout(() => { st.textContent = ''; }, 3000);
+  setTimeout(() => { st.textContent = ''; }, 5000);
 }
 
 async function loadEagleStatus() {
