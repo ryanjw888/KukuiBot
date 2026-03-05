@@ -218,7 +218,13 @@ let _wakeTriggeredVoice = false;
 const SILENCE_TIMEOUT_MS = 5000;
 const MIC_IDLE_TIMEOUT_MS = 15000;
 const hasSpeechAPI = (typeof webkitSpeechRecognition !== 'undefined') || (typeof SpeechRecognition !== 'undefined');
+const hasMediaRecorder = typeof MediaRecorder !== 'undefined';
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+// --- Server Voice STT state ---
+let serverVoiceWS = null;
+let serverMediaRecorder = null;
+let serverMediaStream = null;
 
 // --- Listener (always-on voice) ---
 let listenerActive = false;
@@ -3603,7 +3609,15 @@ function cleanupVoice() {
 
 function voiceAutoSend() {
   const text = voiceTranscript.trim();
-  cleanupVoice();
+  // Clean up whichever voice mode is active
+  if (serverVoiceWS || serverMediaRecorder) {
+    if (serverVoiceWS && serverVoiceWS.readyState === WebSocket.OPEN) {
+      try { serverVoiceWS.send(JSON.stringify({ type: 'stop' })); } catch {}
+    }
+    cleanupVoiceServer();
+  } else {
+    cleanupVoice();
+  }
   voiceActive = false;
   voiceTranscript = '';
   if (text) {
@@ -3613,14 +3627,14 @@ function voiceAutoSend() {
     if (tab) { tab.draft = text; persistTabs(); }
     requestRender();
     setTimeout(() => send(), 50);
-    if (listenerActive && listenerMode === 'local') listenerRearm();
+    if (listenerActive && (listenerMode === 'local' || listenerMode === 'server')) listenerRearm();
   } else {
     // Preserve any existing text in the input box
     const input = document.getElementById('input');
     const tab = activeTab();
     if (input && tab) { tab.draft = input.value || ''; persistTabs(); }
     requestRender();
-    if (listenerActive && listenerMode === 'local') listenerRearm();
+    if (listenerActive && (listenerMode === 'local' || listenerMode === 'server')) listenerRearm();
   }
 }
 
@@ -3637,7 +3651,7 @@ function startSilenceDetection() {
       const input = document.getElementById('input');
       const tab = activeTab();
       if (input && tab) { tab.draft = input.value || ''; persistTabs(); }
-      cleanupVoice();
+      if (serverVoiceWS || serverMediaRecorder) { cleanupVoiceServer(); } else { cleanupVoice(); }
       voiceActive = false;
       requestRender();
     }
@@ -3655,7 +3669,7 @@ function startWakeIdleDetection() {
       const input = document.getElementById('input');
       const tab = activeTab();
       if (input && tab) { tab.draft = input.value || ''; persistTabs(); }
-      cleanupVoice();
+      if (serverVoiceWS || serverMediaRecorder) { cleanupVoiceServer(); } else { cleanupVoice(); }
       voiceActive = false;
       _wakeTriggeredVoice = false;
       requestRender();
@@ -3746,6 +3760,167 @@ function startVoice(opts) {
   console.log('[Voice] Started (Web Speech API)');
 }
 
+// --- Server Voice STT (MediaRecorder → WebSocket → Qwen3-ASR) ---
+
+function cleanupVoiceServer() {
+  if (silenceTimer) { clearInterval(silenceTimer); silenceTimer = null; }
+  if (serverMediaRecorder && serverMediaRecorder.state !== 'inactive') {
+    try { serverMediaRecorder.stop(); } catch {}
+  }
+  serverMediaRecorder = null;
+  if (serverMediaStream) {
+    serverMediaStream.getTracks().forEach(t => t.stop());
+    serverMediaStream = null;
+  }
+  if (serverVoiceWS) {
+    try { serverVoiceWS.close(); } catch {}
+    serverVoiceWS = null;
+  }
+}
+
+function startVoiceServer(opts) {
+  const _fromWake = opts && opts.fromWake;
+  if (!hasMediaRecorder) {
+    const tab = activeTab();
+    if (tab) tab.messages.push(_sysCard('MediaRecorder is not available in this browser.', '\u{1F399}', 'Voice'));
+    requestRender({ preserveScroll: true });
+    return;
+  }
+
+  voiceActive = true;
+  voiceTranscript = '';
+  lastTranscriptTime = Date.now();
+  requestRender({ preserveScroll: true });
+
+  const inp = document.getElementById('input');
+  if (inp) {
+    if (isIOS) inp.inputMode = 'none';
+    inp.focus();
+  }
+
+  // Open WebSocket to KukuiBot proxy
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = proto + '//' + location.host + '/ws/listener/voice';
+  const ws = new WebSocket(wsUrl);
+  serverVoiceWS = ws;
+
+  ws.onopen = async () => {
+    console.log('[Voice/Server] WebSocket connected');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      serverMediaStream = stream;
+
+      // Prefer webm/opus; fallback to webm; fallback to whatever is available
+      let mimeType = 'audio/webm;codecs=opus';
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = 'audio/webm';
+        if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = '';
+      }
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+      serverMediaRecorder = recorder;
+
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
+          ws.send(e.data);
+        }
+      };
+      recorder.onerror = () => {
+        console.warn('[Voice/Server] MediaRecorder error');
+        cleanupVoiceServer();
+        voiceActive = false;
+        requestRender();
+      };
+      recorder.start(250); // 250ms timeslice
+      console.log('[Voice/Server] Recording started (' + (mimeType || 'default') + ')');
+    } catch (err) {
+      console.error('[Voice/Server] getUserMedia failed:', err);
+      cleanupVoiceServer();
+      voiceActive = false;
+      const tab = activeTab();
+      if (tab) tab.messages.push(_sysCard('Microphone access denied or unavailable.', '\u{1F399}', 'Voice'));
+      requestRender();
+    }
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'transcript') {
+        const text = (msg.text || '').trim();
+        if (text && text !== voiceTranscript) {
+          lastTranscriptTime = Date.now();
+        }
+        voiceTranscript = text;
+        const input = document.getElementById('input');
+        if (input) input.value = voiceTranscript;
+        const _tab = activeTab();
+        if (_tab) _tab.draft = voiceTranscript;
+        requestRender({ preserveScroll: true });
+
+        if (msg.is_final) {
+          console.log('[Voice/Server] Final transcript received');
+        }
+      } else if (msg.type === 'done') {
+        console.log('[Voice/Server] Done:', msg.transcript);
+        // Transcript already set from the final transcript message above
+      } else if (msg.type === 'error') {
+        console.warn('[Voice/Server] Error from server:', msg.message);
+      }
+    } catch (err) {
+      console.warn('[Voice/Server] Message parse error:', err);
+    }
+  };
+
+  ws.onerror = () => {
+    console.warn('[Voice/Server] WebSocket error');
+  };
+
+  ws.onclose = () => {
+    console.log('[Voice/Server] WebSocket closed');
+    // If still active (unexpected close), clean up
+    if (voiceActive && serverVoiceWS === ws) {
+      cleanupVoiceServer();
+      voiceActive = false;
+      requestRender();
+    }
+  };
+
+  if (_fromWake) {
+    _wakeTriggeredVoice = true;
+    beep();
+    startSilenceDetection();
+  } else {
+    _wakeTriggeredVoice = false;
+    startSilenceDetection();
+    beep();
+  }
+  console.log('[Voice/Server] Started (Qwen3-ASR via WebSocket)');
+}
+
+function stopVoiceServer(shouldSend) {
+  const text = voiceTranscript.trim();
+  // Send stop command to Jarvis before closing
+  if (serverVoiceWS && serverVoiceWS.readyState === WebSocket.OPEN) {
+    try { serverVoiceWS.send(JSON.stringify({ type: 'stop' })); } catch {}
+  }
+  cleanupVoiceServer();
+  voiceActive = false;
+  voiceTranscript = '';
+  const _inp = document.getElementById('input');
+  if (_inp && isIOS) _inp.inputMode = '';
+  if (shouldSend && text) {
+    const input = document.getElementById('input');
+    const tab = activeTab();
+    if (input) input.value = text;
+    if (tab) { tab.draft = text; persistTabs(); }
+    requestRender({ preserveScroll: true });
+    setTimeout(() => send(), 50);
+  } else {
+    requestRender({ preserveScroll: true });
+  }
+  if (listenerActive && (listenerMode === 'server' || listenerMode === 'local')) listenerRearm();
+}
+
 function stopVoice(shouldSend) {
   const text = voiceTranscript.trim();
   cleanupVoice();
@@ -3764,7 +3939,7 @@ function stopVoice(shouldSend) {
   } else {
     requestRender({ preserveScroll: true });
   }
-  if (listenerActive && listenerMode === 'local') listenerRearm();
+  if (listenerActive && (listenerMode === 'local' || listenerMode === 'server')) listenerRearm();
 }
 
 function cancelVoice() {
@@ -3792,6 +3967,8 @@ function startListener() {
   requestRender({ preserveScroll: true });
   if (listenerMode === 'local') {
     startVoice();
+  } else if (listenerMode === 'server') {
+    startVoiceServer();
   }
   // Remote mode: passive — wake events arrive via SSE
 }
@@ -3799,19 +3976,23 @@ function startListener() {
 function stopListener() {
   listenerActive = false;
   if (_listenerRearmTimer) { clearTimeout(_listenerRearmTimer); _listenerRearmTimer = null; }
-  if (voiceActive) { cleanupVoice(); voiceActive = false; voiceTranscript = ''; }
+  if (voiceActive) {
+    if (serverVoiceWS || serverMediaRecorder) { cleanupVoiceServer(); } else { cleanupVoice(); }
+    voiceActive = false; voiceTranscript = '';
+  }
   const _inp = document.getElementById('input');
   if (_inp && isIOS) _inp.inputMode = '';
   requestRender({ preserveScroll: true });
 }
 
 function listenerRearm() {
-  if (!listenerActive || listenerMode !== 'local') return;
+  if (!listenerActive || (listenerMode !== 'local' && listenerMode !== 'server')) return;
   if (_listenerRearmTimer) clearTimeout(_listenerRearmTimer);
   _listenerRearmTimer = setTimeout(() => {
     _listenerRearmTimer = null;
-    if (listenerActive && listenerMode === 'local' && !voiceActive && !isTabLoading(activeTab())) {
-      startVoice();
+    if (listenerActive && !voiceActive && !isTabLoading(activeTab())) {
+      if (listenerMode === 'local') startVoice();
+      else if (listenerMode === 'server') startVoiceServer();
     }
   }, LISTENER_REARM_DELAY_MS);
 }
@@ -3825,9 +4006,9 @@ function handleMicClick() {
     inp.focus();
   }
   if (!voiceActive) {
-    startVoice();
+    if (listenerMode === 'server') { startVoiceServer(); } else { startVoice(); }
   } else {
-    stopVoice(true);
+    if (serverVoiceWS || serverMediaRecorder) { stopVoiceServer(true); } else { stopVoice(true); }
   }
 }
 
@@ -3837,15 +4018,15 @@ document.addEventListener('keydown', (e) => {
   const isTyping = tag === 'input' || tag === 'textarea';
 
   // Right arrow → start voice (when not typing)
-  if (e.key === 'ArrowRight' && !isTyping && !voiceActive && !isTabLoading(activeTab()) && hasSpeechAPI) {
+  if (e.key === 'ArrowRight' && !isTyping && !voiceActive && !isTabLoading(activeTab()) && (hasSpeechAPI || (listenerMode === 'server' && hasMediaRecorder))) {
     e.preventDefault();
-    startVoice();
+    if (listenerMode === 'server') { startVoiceServer(); } else { startVoice(); }
     return;
   }
   // Enter → send voice transcript (when voice active and not in textarea)
   if (e.key === 'Enter' && voiceActive && !isTyping) {
     e.preventDefault();
-    stopVoice(true);
+    if (serverVoiceWS || serverMediaRecorder) { stopVoiceServer(true); } else { stopVoice(true); }
     return;
   }
 });
@@ -3854,7 +4035,7 @@ function handleActionBtn() {
   const input = document.getElementById('input');
 
   if (voiceActive) {
-    stopVoice(true);
+    if (serverVoiceWS || serverMediaRecorder) { stopVoiceServer(true); } else { stopVoice(true); }
     return;
   }
 

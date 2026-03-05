@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import AsyncGenerator, Any
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import StreamingResponse
@@ -3090,6 +3090,93 @@ async def api_listener_transcribe(req: Request):
     return result
 
 
+@app.websocket("/ws/listener/voice")
+async def ws_listener_voice(ws: WebSocket):
+    """Proxy browser audio to Jarvis /ws/voice for Qwen3-ASR streaming STT."""
+    # Auth: check KukuiBot session cookie (or localhost auto-admin)
+    user = get_request_user(ws) or {}
+    if not (user.get("username") or user.get("user") or user.get("role")):
+        await ws.close(code=4001, reason="Unauthorized")
+        return
+
+    # Resolve Jarvis WS URL from config
+    jarvis_http = (_runtime_config.get("listener_jarvis_url") or "http://127.0.0.1:5080").rstrip("/")
+    jarvis_ws = jarvis_http.replace("http://", "ws://").replace("https://", "wss://") + "/ws/voice"
+
+    # Get a valid Jarvis session token from the shared sessions file
+    jarvis_cookie = None
+    sessions_file = os.path.join(os.path.expanduser("~"), ".jarvis", "data", ".sessions.json")
+    try:
+        with open(sessions_file) as f:
+            sessions = json.load(f)
+        now = time.time()
+        for tok, info in sessions.items():
+            if isinstance(info, dict) and info.get("expiry", 0) > now:
+                jarvis_cookie = tok
+                break
+            elif isinstance(info, (int, float)) and info > now:
+                jarvis_cookie = tok
+                break
+    except Exception:
+        pass
+
+    # Connect to Jarvis backend
+    import websockets
+    extra_headers = {}
+    if jarvis_cookie:
+        extra_headers["Cookie"] = f"ultron_session={jarvis_cookie}"
+    try:
+        jarvis = await websockets.connect(jarvis_ws, additional_headers=extra_headers)
+    except Exception as e:
+        logger.warning(f"[ws/listener/voice] Cannot connect to Jarvis: {e}")
+        await ws.close(code=4502, reason="Jarvis backend unavailable")
+        return
+
+    await ws.accept()
+    logger.info("[ws/listener/voice] Connected (user=%s)", user.get("username") or user.get("user"))
+
+    async def browser_to_jarvis():
+        """Forward audio chunks + stop commands from browser to Jarvis."""
+        try:
+            while True:
+                data = await ws.receive()
+                if "bytes" in data and data["bytes"]:
+                    await jarvis.send(data["bytes"])
+                elif "text" in data and data["text"]:
+                    await jarvis.send(data["text"])
+        except (WebSocketDisconnect, RuntimeError):
+            pass
+        except Exception as e:
+            logger.debug("[ws/listener/voice] browser→jarvis error: %s", e)
+
+    async def jarvis_to_browser():
+        """Forward transcript JSON from Jarvis to browser."""
+        try:
+            async for msg in jarvis:
+                if isinstance(msg, str):
+                    await ws.send_text(msg)
+                else:
+                    await ws.send_bytes(msg)
+        except Exception as e:
+            logger.debug("[ws/listener/voice] jarvis→browser error: %s", e)
+
+    try:
+        # Run both directions concurrently; when either ends, cancel the other
+        done, pending = await asyncio.wait(
+            [asyncio.create_task(browser_to_jarvis()),
+             asyncio.create_task(jarvis_to_browser())],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+    finally:
+        try:
+            await jarvis.close()
+        except Exception:
+            pass
+        logger.info("[ws/listener/voice] Disconnected")
+
+
 @app.get("/api/listener/devices")
 async def api_listener_devices():
     """List available audio input devices via PyAudio (runs in wake-listener venv)."""
@@ -3960,7 +4047,7 @@ async def api_config_set(req: Request):
             if lk in ("listener_enabled", "listener_eagle_enabled"):
                 _runtime_config[lk] = bool(val)
                 set_config(lk, "1" if val else "0")
-            elif lk == "listener_mode" and str(val) in ("local", "remote"):
+            elif lk == "listener_mode" and str(val) in ("local", "remote", "server"):
                 _runtime_config[lk] = str(val)
                 set_config(lk, str(val))
             else:

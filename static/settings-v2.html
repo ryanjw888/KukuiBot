@@ -1298,14 +1298,19 @@
           <div class="setting-info">
             <div class="setting-label">Mode</div>
           </div>
-          <select id="listener-mode-select" onchange="setListenerMode(this.value)" style="width:140px;">
-            <option value="local">Local (Browser)</option>
+          <select id="listener-mode-select" onchange="setListenerMode(this.value)" style="width:160px;">
+            <option value="local">Local (Browser STT)</option>
+            <option value="server">Server (Qwen3-ASR)</option>
             <option value="remote">Remote (Jarvis)</option>
           </select>
         </div>
 
         <div id="listener-local-panel" style="margin-top:12px;padding:10px;background:var(--surface2);border-radius:8px;">
           <div style="font-size:12px;color:var(--muted);">Uses your browser's built-in speech recognition. Continuously listens, transcribes, sends, and re-arms automatically.</div>
+        </div>
+
+        <div id="listener-server-panel" style="margin-top:12px;padding:10px;background:var(--surface2);border-radius:8px;display:none;">
+          <div style="font-size:12px;color:var(--muted);">Streams audio to your server's Qwen3-ASR model for transcription. Fully private — no cloud, no browser STT. Works in all browsers.</div>
         </div>
 
         <div id="listener-remote-panel" style="margin-top:12px;padding:10px;background:var(--surface2);border-radius:8px;display:none;">
@@ -2013,6 +2018,7 @@ async function loadListenerConfig() {
   document.getElementById('listener-username').value = config.listener_username || '';
   document.getElementById('listener-room').value = config.listener_room || '';
   document.getElementById('listener-local-panel').style.display = mode === 'local' ? 'block' : 'none';
+  document.getElementById('listener-server-panel').style.display = mode === 'server' ? 'block' : 'none';
   document.getElementById('listener-remote-panel').style.display = mode === 'remote' ? 'block' : 'none';
   document.getElementById('listener-status').textContent = enabled ? 'Listener active' : 'Listener off';
   document.getElementById('listener-status').style.color = enabled ? 'var(--green)' : 'var(--muted)';
@@ -2224,6 +2230,7 @@ function toggleListenerEnabled() {
 function setListenerMode(mode) {
   config.listener_mode = mode;
   document.getElementById('listener-local-panel').style.display = mode === 'local' ? 'block' : 'none';
+  document.getElementById('listener-server-panel').style.display = mode === 'server' ? 'block' : 'none';
   document.getElementById('listener-remote-panel').style.display = mode === 'remote' ? 'block' : 'none';
 }
 
