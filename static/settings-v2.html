@@ -1312,8 +1312,12 @@
           <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Vosk STT trigger detection → Eagle speaker verification → Qwen3-ASR transcription → Jarvis chat → Sonos TTS response.</div>
           <div style="display:flex;flex-direction:column;gap:8px;">
             <div>
-              <label style="font-size:12px;color:var(--muted);">Jarvis Backend URL</label>
-              <input type="text" id="listener-jarvis-url" placeholder="http://127.0.0.1:5080" style="width:100%;">
+              <label style="font-size:12px;color:var(--muted);">KukuiBot Server Address</label>
+              <div style="display:flex;gap:6px;align-items:center;">
+                <input type="text" id="listener-server-address" placeholder="e.g. 192.168.20.110" style="flex:1;">
+                <button type="button" class="btn" onclick="testListenerConnection()" style="padding:4px 12px;font-size:12px;white-space:nowrap;" id="test-connection-btn">Test</button>
+              </div>
+              <div id="connection-status" style="font-size:11px;margin-top:4px;min-height:16px;"></div>
             </div>
             <div>
               <label style="font-size:12px;color:var(--muted);">Microphone</label>
@@ -1331,6 +1335,10 @@
             <div>
               <label style="font-size:12px;color:var(--muted);">Room</label>
               <input type="text" id="listener-room" placeholder="e.g. Office, Kitchen" style="width:100%;">
+            </div>
+            <div style="margin-top:4px;padding:8px;background:rgba(0,0,0,.15);border-radius:6px;font-size:11px;color:var(--muted);">
+              <strong style="color:var(--text);">Quick Setup (remote Mac):</strong><br>
+              <code id="setup-command" style="font-size:10px;word-break:break-all;user-select:all;">curl -sk https://&lt;address&gt;:7000/api/listener/setup-script | bash</code>
             </div>
           </div>
         </div>
@@ -1987,7 +1995,21 @@ async function loadListenerConfig() {
   const mode = config.listener_mode || 'local';
   document.getElementById('listener-enabled-toggle').className = 'toggle' + (enabled ? ' on' : '');
   document.getElementById('listener-mode-select').value = mode;
-  document.getElementById('listener-jarvis-url').value = config.listener_jarvis_url || 'http://127.0.0.1:5080';
+  // Derive display address from stored kukuibot URL
+  const kukuibotUrl = config.listener_kukuibot_url || '';
+  let displayAddr = kukuibotUrl.replace(/^https?:\/\//, '').replace(/:7000\/?$/, '').replace(/:443\/?$/, '');
+  if (!displayAddr && config.listener_jarvis_url) {
+    // Migration: derive from legacy jarvis URL
+    displayAddr = config.listener_jarvis_url.replace(/^https?:\/\//, '').replace(/:5080\/?$/, '').replace(/:80\/?$/, '');
+    if (displayAddr === '127.0.0.1' || displayAddr === 'localhost') displayAddr = '';
+  }
+  document.getElementById('listener-server-address').value = displayAddr;
+  // Update setup command with actual address
+  const cmdEl = document.getElementById('setup-command');
+  if (cmdEl) {
+    const addr = displayAddr || window.location.hostname;
+    cmdEl.textContent = 'curl -sk https://' + addr + ':7000/api/listener/setup-script | bash';
+  }
   document.getElementById('listener-username').value = config.listener_username || '';
   document.getElementById('listener-room').value = config.listener_room || '';
   document.getElementById('listener-local-panel').style.display = mode === 'local' ? 'block' : 'none';
@@ -2206,10 +2228,16 @@ function setListenerMode(mode) {
 }
 
 async function saveListenerConfig() {
+  const addrRaw = document.getElementById('listener-server-address').value.trim();
+  // Strip protocol/port if user pasted a full URL
+  const addr = addrRaw.replace(/^https?:\/\//, '').replace(/:7000\/?$/, '').replace(/:443\/?$/, '');
+  const kukuibotUrl = addr ? 'https://' + addr + ':7000' : '';
+
   const payload = {
     listener_enabled: config.listener_enabled || false,
     listener_mode: document.getElementById('listener-mode-select').value,
-    listener_jarvis_url: document.getElementById('listener-jarvis-url').value,
+    listener_kukuibot_url: kukuibotUrl,
+    listener_jarvis_url: 'http://127.0.0.1:5080',  // Always local — Jarvis is co-located with KukuiBot
     listener_device: document.getElementById('listener-device-select').value,
     listener_username: document.getElementById('listener-username').value,
     listener_room: document.getElementById('listener-room').value,
@@ -2220,6 +2248,43 @@ async function saveListenerConfig() {
     Object.assign(config, d);
     toast('Listener config saved');
   } catch { toast('Failed to save'); }
+}
+
+async function testListenerConnection() {
+  const btn = document.getElementById('test-connection-btn');
+  const statusEl = document.getElementById('connection-status');
+  const addrRaw = document.getElementById('listener-server-address').value.trim();
+  const addr = addrRaw.replace(/^https?:\/\//, '').replace(/:7000\/?$/, '').replace(/:443\/?$/, '');
+
+  if (!addr) {
+    statusEl.innerHTML = '<span style="color:var(--red);">Enter a server address first</span>';
+    return;
+  }
+
+  const url = 'https://' + addr + ':7000';
+  btn.disabled = true;
+  btn.textContent = 'Testing...';
+  statusEl.innerHTML = '<span style="color:var(--muted);">Connecting...</span>';
+
+  try {
+    // Test 1: Health endpoint
+    const r1 = await fetch(url + '/health', { signal: AbortSignal.timeout(5000) });
+    if (!r1.ok) throw new Error('Health check returned ' + r1.status);
+
+    // Test 2: Listener config endpoint (auth-exempt, proves listener API works)
+    const r2 = await fetch(url + '/api/listener/config', { signal: AbortSignal.timeout(5000) });
+    if (!r2.ok) throw new Error('Listener config returned ' + r2.status + ' (auth issue?)');
+
+    const cfg = await r2.json();
+    const mode = cfg.listener_mode || 'unknown';
+    statusEl.innerHTML = '<span style="color:var(--green);">&#10003; Connected</span> <span style="color:var(--muted);">(mode: ' + mode + ')</span>';
+  } catch (e) {
+    const msg = e.name === 'TimeoutError' ? 'Connection timed out' : e.message || 'Connection failed';
+    statusEl.innerHTML = '<span style="color:var(--red);">&#10007; ' + msg + '</span>';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Test';
+  }
 }
 
 // ---- Wake Word Tuning ----
@@ -2261,7 +2326,11 @@ async function restartListener() {
       ..._getWakeTuningPayload(),
       listener_enabled: config.listener_enabled || false,
       listener_mode: document.getElementById('listener-mode-select').value,
-      listener_jarvis_url: document.getElementById('listener-jarvis-url').value,
+      listener_kukuibot_url: (function() {
+        const a = document.getElementById('listener-server-address').value.trim().replace(/^https?:\/\//, '').replace(/:7000\/?$/, '');
+        return a ? 'https://' + a + ':7000' : '';
+      })(),
+      listener_jarvis_url: 'http://127.0.0.1:5080',
       listener_device: document.getElementById('listener-device-select').value,
       listener_username: document.getElementById('listener-username').value,
       listener_room: document.getElementById('listener-room').value,
