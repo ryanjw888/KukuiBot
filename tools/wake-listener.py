@@ -199,6 +199,36 @@ def send_to_jarvis(text: str, room: str) -> str:
         return ""
 
 
+def tts_play_response(text: str):
+    """Speak response text via TTS service + afplay. Non-blocking."""
+    tts_url = os.getenv("TTS_SERVICE_URL", "http://127.0.0.1:5090")
+    payload = json.dumps({"text": text, "voice": "bm_daniel", "speed": 1.0}).encode()
+    try:
+        req = urlrequest.Request(
+            f"{tts_url}/tts/speak/file",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlrequest.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode())
+        if not result.get("ok"):
+            logger.warning(f"TTS generation failed: {result}")
+            return
+        filepath = result.get("path", "")
+        duration = result.get("duration", 0)
+        gen_time = result.get("generation_time", 0)
+        logger.info(f"TTS ready: {duration:.1f}s audio (gen {gen_time:.3f}s)")
+        if filepath and os.path.isfile(filepath):
+            subprocess.Popen(
+                ["afplay", filepath],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+    except Exception as e:
+        logger.warning(f"TTS playback failed: {e}")
+
+
 def fire_chime(kukuibot_url: str):
     """Fire-and-forget: play wake chime via KukuiBot server, local afplay fallback."""
     def _do():
@@ -411,11 +441,13 @@ def main():
 
             logger.info(f"Transcript: '{transcript}'")
 
-            # Send to Jarvis chat (TTS response auto-plays on Sonos)
+            # Send to Jarvis chat
             logger.info(f"Sending to Jarvis (room={args.room})...")
             response = send_to_jarvis(transcript, args.room)
             if response:
                 logger.info(f"Jarvis: {response[:100]}")
+                # Speak the response via TTS
+                tts_play_response(response)
             else:
                 logger.info("No response from Jarvis")
 

@@ -210,6 +210,9 @@ DEFAULT_SELF_COMPACT = True
 TOOL_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 TOOL_ENV = {**os.environ, "PATH": TOOL_PATH}
 
+# --- TTS Service ---
+TTS_SERVICE_PORT = int(os.environ.get("TTS_SERVICE_PORT", "5090"))
+
 # --- Server Port ---
 # WORKER_PORT kept as alias for code that still references it (delegation, claude_bridge, etc.).
 WORKER_PORT = PORT

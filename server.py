@@ -3020,6 +3020,57 @@ async def api_listener_restart(req: Request):
     return result
 
 
+# --- TTS Proxy ---
+
+_TTS_SERVICE_URL = "http://127.0.0.1:5090"
+
+
+@app.get("/api/tts/health")
+async def api_tts_health():
+    """Proxy health check to TTS microservice."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{_TTS_SERVICE_URL}/tts/health")
+            return resp.json()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/tts/speak")
+async def api_tts_speak(req: Request):
+    """Proxy TTS speak request — generate audio and optionally play it."""
+    body = await req.json()
+    text = (body.get("text") or "").strip()
+    if not text:
+        return JSONResponse({"error": "No text provided"}, status_code=400)
+
+    voice = body.get("voice", "bm_daniel")
+    speed = float(body.get("speed", 1.0))
+    play = body.get("play", True)
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{_TTS_SERVICE_URL}/tts/speak/file",
+                json={"text": text, "voice": voice, "speed": speed},
+            )
+            result = resp.json()
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
+
+    if result.get("ok") and play:
+        # Play via afplay in background
+        filepath = result.get("path", "")
+        if filepath and os.path.isfile(filepath):
+            subprocess.Popen(
+                ["afplay", filepath],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            result["played"] = True
+
+    return result
+
+
 # --- OpenRouter Config ---
 
 @app.get("/api/openrouter/config")
