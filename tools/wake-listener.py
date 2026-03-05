@@ -446,8 +446,7 @@ def main():
             response = send_to_jarvis(transcript, args.room)
             if response:
                 logger.info(f"Jarvis: {response[:100]}")
-                # Speak the response via TTS
-                tts_play_response(response)
+                # TTS is handled by the Jarvis backend → Sonos speaker
             else:
                 logger.info("No response from Jarvis")
 
