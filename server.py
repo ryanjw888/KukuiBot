@@ -3015,29 +3015,33 @@ async def api_listener_chat(req: Request):
     except (json.JSONDecodeError, ValueError):
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
-    import urllib.request as _urlreq
     target = f"{jarvis_url}/jarvis"
 
     async def stream():
         import queue as _queue
+        import http.client as _httpclient
+        import urllib.parse as _urlparse
         loop = asyncio.get_event_loop()
         result_queue = _queue.Queue()
 
         def _run_proxy():
-            proxy_req = _urlreq.Request(
-                target, data=body,
-                headers={"Content-Type": "application/json"},
-                method="POST"
-            )
+            parsed = _urlparse.urlparse(target)
+            conn = _httpclient.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=90)
             try:
-                resp = _urlreq.urlopen(proxy_req, timeout=90)
-                for line in resp:
+                conn.request("POST", parsed.path, body=body,
+                             headers={"Content-Type": "application/json"})
+                resp = conn.getresponse()
+                while True:
+                    line = resp.readline()
+                    if not line:
+                        break
                     result_queue.put(line)
             except Exception as e:
                 error_evt = json.dumps({"type": "done", "text": f"Jarvis backend error: {e}", "model": "system"})
                 result_queue.put(f"data: {error_evt}\n\n".encode())
             finally:
                 result_queue.put(None)  # sentinel
+                conn.close()
 
         import threading
         t = threading.Thread(target=_run_proxy, daemon=True)

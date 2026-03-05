@@ -213,13 +213,31 @@ def pcm_to_wav_bytes(frames: list) -> bytes:
 # Backend communication (remote mode)
 # ---------------------------------------------------------------------------
 
-def transcribe_audio(wav_bytes: bytes, kukuibot_url: str = "https://localhost:7000") -> str:
-    """POST WAV audio to KukuiBot /api/listener/transcribe proxy, return transcript."""
+def _probe_jarvis_url(url: str) -> bool:
+    """Probe a Jarvis backend URL to see if it's reachable. Returns True if responsive."""
+    import http.client
+    import urllib.parse
+    try:
+        parsed = urllib.parse.urlparse(url)
+        conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=2)
+        conn.request("GET", "/")
+        resp = conn.getresponse()
+        conn.close()
+        return resp.status < 500
+    except Exception:
+        return False
+
+
+def transcribe_audio(wav_bytes: bytes, kukuibot_url: str = "https://localhost:7000",
+                     jarvis_direct_url: str = "") -> str:
+    """POST WAV audio for transcription. Uses direct Jarvis backend if available, else proxy."""
     import http.client
     import urllib.parse
 
     if _JARVIS_BACKEND_URL_OVERRIDE:
         url = f"{_JARVIS_BACKEND_URL_OVERRIDE}/api/transcribe"
+    elif jarvis_direct_url:
+        url = f"{jarvis_direct_url}/api/transcribe"
     else:
         url = f"{kukuibot_url}/api/listener/transcribe"
     parsed = urllib.parse.urlparse(url)
@@ -249,26 +267,40 @@ def transcribe_audio(wav_bytes: bytes, kukuibot_url: str = "https://localhost:70
         conn.close()
 
 
-def send_to_jarvis(text: str, room: str, kukuibot_url: str = "https://localhost:7000") -> str:
-    """POST transcript to KukuiBot /api/listener/chat proxy. Returns assistant response text."""
+def send_to_jarvis(text: str, room: str, kukuibot_url: str = "https://localhost:7000",
+                   jarvis_direct_url: str = "") -> str:
+    """POST transcript to Jarvis. Uses direct backend if available, else KukuiBot proxy."""
+    import http.client
+    import urllib.parse
+
     if _JARVIS_BACKEND_URL_OVERRIDE:
         url = f"{_JARVIS_BACKEND_URL_OVERRIDE}/jarvis"
+    elif jarvis_direct_url:
+        url = f"{jarvis_direct_url}/jarvis"
     else:
         url = f"{kukuibot_url}/api/listener/chat"
+
     payload = json.dumps({
         "messages": [{"role": "user", "content": text}],
         "room": room,
         "source": "voice",
     }).encode()
 
-    req = urlrequest.Request(url, data=payload,
-                             headers={"Content-Type": "application/json"},
-                             method="POST")
-    try:
-        with urlrequest.urlopen(req, timeout=60, context=_ssl_ctx) as resp:
-            # Response is SSE stream — collect the final text
+    parsed = urllib.parse.urlparse(url)
+    use_direct_http = parsed.scheme == "http"
+
+    if use_direct_http:
+        # Direct HTTP to Jarvis backend — use http.client for reliable SSE streaming
+        try:
+            conn = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=60)
+            conn.request("POST", parsed.path, body=payload,
+                         headers={"Content-Type": "application/json"})
+            resp = conn.getresponse()
             response_text = ""
-            for line in resp:
+            while True:
+                line = resp.readline()
+                if not line:
+                    break
                 line = line.decode("utf-8", errors="replace").strip()
                 if line.startswith("data: "):
                     try:
@@ -277,10 +309,32 @@ def send_to_jarvis(text: str, room: str, kukuibot_url: str = "https://localhost:
                             response_text = evt.get("text", "")
                     except (json.JSONDecodeError, ValueError):
                         pass
+            conn.close()
             return response_text
-    except Exception as e:
-        logger.error(f"Jarvis chat failed: {e}")
-        return ""
+        except Exception as e:
+            logger.error(f"Jarvis chat (direct) failed: {e}")
+            return ""
+    else:
+        # HTTPS proxy via urllib (self-signed cert)
+        req = urlrequest.Request(url, data=payload,
+                                 headers={"Content-Type": "application/json"},
+                                 method="POST")
+        try:
+            with urlrequest.urlopen(req, timeout=60, context=_ssl_ctx) as resp:
+                response_text = ""
+                for line in resp:
+                    line = line.decode("utf-8", errors="replace").strip()
+                    if line.startswith("data: "):
+                        try:
+                            evt = json.loads(line[6:])
+                            if evt.get("type") == "done":
+                                response_text = evt.get("text", "")
+                        except (json.JSONDecodeError, ValueError):
+                            pass
+                return response_text
+        except Exception as e:
+            logger.error(f"Jarvis chat (proxy) failed: {e}")
+            return ""
 
 
 def fire_chime(kukuibot_url: str):
@@ -346,6 +400,7 @@ def fetch_listener_config(kukuibot_url: str) -> dict:
                 "eagle_threshold": _safe_float(data.get("listener_eagle_threshold"), EAGLE_SCORE_THRESHOLD),
                 "triggers": _parse_triggers(triggers_str),
                 "triggers_str": triggers_str,
+                "jarvis_url": data.get("listener_jarvis_url", ""),
             }
     except Exception as e:
         logger.warning(f"Config fetch failed: {e}")
@@ -367,6 +422,17 @@ def start_config_refresh_thread(kukuibot_url, config_state, interval=30.0):
             time.sleep(interval)
             try:
                 cfg = fetch_listener_config(kukuibot_url)
+                # Re-probe direct Jarvis URL if config changed (skip if env override active)
+                if not _JARVIS_BACKEND_URL_OVERRIDE:
+                    cfg_jarvis = (cfg.get("jarvis_url") or "").rstrip("/")
+                    if cfg_jarvis and _probe_jarvis_url(cfg_jarvis):
+                        if cfg_jarvis != config_state.get("jarvis_direct_url"):
+                            logger.info(f"Direct Jarvis backend now reachable: {cfg_jarvis}")
+                        cfg["jarvis_direct_url"] = cfg_jarvis
+                    else:
+                        if config_state.get("jarvis_direct_url"):
+                            logger.info("Direct Jarvis backend unreachable, falling back to proxy")
+                        cfg["jarvis_direct_url"] = ""
                 config_state.update(cfg)
             except Exception:
                 pass
@@ -467,6 +533,19 @@ def main():
         device = initial_cfg["device"]
         logger.info(f"Using mic from config: device={device}")
 
+    # Resolve direct Jarvis backend URL (bypass proxy for local connections)
+    jarvis_direct_url = ""
+    if _JARVIS_BACKEND_URL_OVERRIDE:
+        jarvis_direct_url = _JARVIS_BACKEND_URL_OVERRIDE.rstrip("/")
+        logger.info(f"Using direct Jarvis backend (env override): {jarvis_direct_url}")
+    else:
+        cfg_jarvis = (initial_cfg.get("jarvis_url") or "").rstrip("/")
+        if cfg_jarvis and _probe_jarvis_url(cfg_jarvis):
+            jarvis_direct_url = cfg_jarvis
+            logger.info(f"Using direct Jarvis backend: {jarvis_direct_url}")
+        else:
+            logger.info("Using KukuiBot proxy for Jarvis API")
+
     # Apply tuning from server config
     cooldown = initial_cfg.get("cooldown", COOLDOWN_SECS)
     silence_thresh = initial_cfg.get("silence_threshold", SILENCE_THRESHOLD)
@@ -505,6 +584,7 @@ def main():
         "eagle_enabled": eagle_enabled,
         "eagle_threshold": eagle_threshold,
         "triggers": initial_cfg.get("triggers", DIRECT_TRIGGERS),
+        "jarvis_direct_url": jarvis_direct_url,
     }
     start_config_refresh_thread(kukuibot_url, config_state)
     triggers_list = list(config_state.get("triggers", {}).keys())
@@ -573,7 +653,7 @@ def main():
                     # Vosk heard a command — re-transcribe the audio buffer via Qwen3-ASR for accuracy
                     wav_bytes = pcm_to_wav_bytes(pre_frames)
                     logger.info(f"Re-transcribing {len(pre_frames)} frames via Qwen3-ASR...")
-                    accurate_text = transcribe_audio(wav_bytes, kukuibot_url)
+                    accurate_text = transcribe_audio(wav_bytes, kukuibot_url, config_state.get("jarvis_direct_url", ""))
                     if accurate_text:
                         if trigger_type == "direct":
                             # Direct trigger — use the full Qwen3-ASR transcript as the command
@@ -592,7 +672,7 @@ def main():
 
                 if command:
                     logger.info(f"Sending to Jarvis (room={args.room}): '{command}'")
-                    response = send_to_jarvis(command, args.room, kukuibot_url)
+                    response = send_to_jarvis(command, args.room, kukuibot_url, config_state.get("jarvis_direct_url", ""))
                     if response:
                         logger.info(f"Jarvis: {response[:100]}")
                     else:
@@ -642,7 +722,7 @@ def main():
                     # Transcribe follow-up via Whisper
                     wav_bytes = pcm_to_wav_bytes(frames)
                     logger.info("Transcribing follow-up...")
-                    transcript = transcribe_audio(wav_bytes, kukuibot_url)
+                    transcript = transcribe_audio(wav_bytes, kukuibot_url, config_state.get("jarvis_direct_url", ""))
 
                     if not transcript:
                         logger.info("No speech detected -- resuming listening")
@@ -651,7 +731,7 @@ def main():
 
                     logger.info(f"Transcript: '{transcript}'")
                     logger.info(f"Sending to Jarvis (room={args.room})...")
-                    response = send_to_jarvis(transcript, args.room, kukuibot_url)
+                    response = send_to_jarvis(transcript, args.room, kukuibot_url, config_state.get("jarvis_direct_url", ""))
                     if response:
                         logger.info(f"Jarvis: {response[:100]}")
                     else:
