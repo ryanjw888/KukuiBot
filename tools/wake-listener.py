@@ -45,6 +45,10 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
+# Local ASR state (auto-detected at startup)
+_local_asr_session = None
+_local_asr_available = None  # None=unchecked, True/False after init
+
 # SSL context that skips cert verification (self-signed *.wilmot.org cert)
 _ssl_ctx = ssl.create_default_context()
 _ssl_ctx.check_hostname = False
@@ -178,6 +182,22 @@ def post_wake_event(base_url: str, score: float, username: str, room: str):
         logger.error(f"POST /api/listener/wake failed: {e}")
 
 
+def post_transcript_event(base_url: str, text: str, room: str, is_final: bool = True):
+    """POST transcript to KukuiBot for browser injection via SSE."""
+    url = f"{base_url}/api/listener/transcript"
+    payload = json.dumps({
+        "text": text, "room": room, "is_final": is_final,
+        "source": "wake-listener",
+    }).encode()
+    req = urlrequest.Request(url, data=payload,
+                             headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urlrequest.urlopen(req, timeout=5, context=_ssl_ctx) as resp:
+            logger.info(f"POST /api/listener/transcript -> {resp.status}")
+    except Exception as e:
+        logger.error(f"POST /api/listener/transcript failed: {e}")
+
+
 def play_chime():
     """Play a short listening chime via macOS afplay."""
     try:
@@ -186,6 +206,69 @@ def play_chime():
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Local ASR (Qwen3-ASR via mlx_qwen3_asr — auto-detected)
+# ---------------------------------------------------------------------------
+
+def _init_local_asr() -> bool:
+    """Try to initialize local Qwen3-ASR. Returns True if available."""
+    global _local_asr_session, _local_asr_available
+    if _local_asr_available is not None:
+        return _local_asr_available
+    try:
+        from mlx_qwen3_asr import Session
+        import tempfile, struct
+        logger.info("[asr] Initializing local Qwen3-ASR...")
+        _local_asr_session = Session(model="Qwen/Qwen3-ASR-0.6B")
+        # Warm up with 1s silence
+        dummy = tempfile.mktemp(suffix=".wav")
+        try:
+            with wave.open(dummy, "w") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(16000)
+                w.writeframes(struct.pack("<" + "h" * 16000, *([0] * 16000)))
+            _local_asr_session.transcribe(dummy, language="English")
+        finally:
+            try: os.unlink(dummy)
+            except OSError: pass
+        _local_asr_available = True
+        logger.info("[asr] Local Qwen3-ASR ready")
+        return True
+    except ImportError:
+        logger.info("[asr] mlx_qwen3_asr not installed — using remote transcription")
+        _local_asr_available = False
+        return False
+    except Exception as e:
+        logger.warning(f"[asr] Local ASR init failed: {e} — using remote transcription")
+        _local_asr_available = False
+        return False
+
+
+def _transcribe_local(wav_bytes: bytes) -> str:
+    """Transcribe WAV audio bytes using local Qwen3-ASR. Returns transcript text."""
+    global _local_asr_session
+    if _local_asr_session is None:
+        return ""
+    import tempfile
+    t0 = time.time()
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        f.write(wav_bytes)
+        tmp_path = f.name
+    try:
+        result = _local_asr_session.transcribe(tmp_path, language="English")
+        text = result.text.strip() if hasattr(result, 'text') else str(result).strip()
+        elapsed = time.time() - t0
+        logger.info(f"[asr] Local transcription in {elapsed:.2f}s: {text[:60]}")
+        return text
+    except Exception as e:
+        logger.error(f"[asr] Local transcription failed: {e}")
+        return ""
+    finally:
+        try: os.unlink(tmp_path)
+        except OSError: pass
 
 
 # ---------------------------------------------------------------------------
@@ -230,9 +313,16 @@ def _probe_jarvis_url(url: str) -> bool:
 
 def transcribe_audio(wav_bytes: bytes, kukuibot_url: str = "https://localhost:7000",
                      jarvis_direct_url: str = "") -> str:
-    """POST WAV audio for transcription. Uses direct Jarvis backend if available, else proxy."""
+    """POST WAV audio for transcription. Uses local ASR if available, else remote."""
     import http.client
     import urllib.parse
+
+    # Priority 0: Local ASR (if available on this machine)
+    if _local_asr_available:
+        local_result = _transcribe_local(wav_bytes)
+        if local_result:
+            return local_result
+        logger.warning("[asr] Local transcription returned empty, falling back to remote")
 
     if _JARVIS_BACKEND_URL_OVERRIDE:
         url = f"{_JARVIS_BACKEND_URL_OVERRIDE}/api/transcribe"
@@ -566,6 +656,9 @@ def main():
     pa, stream = open_mic(device, VOSK_CHUNK_SAMPLES)
     logger.info(f"Microphone open (rate={SAMPLE_RATE}, chunk={VOSK_CHUNK_SAMPLES}, device={device or 'system default'})")
 
+    # Initialize local ASR if available (auto-detect mlx_qwen3_asr)
+    _init_local_asr()
+
     stop = False
     def _stop(sig, frame):
         nonlocal stop
@@ -730,8 +823,9 @@ def main():
                         continue
 
                     logger.info(f"Transcript: '{transcript}'")
-                    logger.info(f"Sending to Jarvis (room={args.room})...")
-                    response = send_to_jarvis(transcript, args.room, kukuibot_url, config_state.get("jarvis_direct_url", ""))
+                    command = extract_command(transcript) or transcript
+                    logger.info(f"Sending to Jarvis (room={args.room}): '{command}'")
+                    response = send_to_jarvis(command, args.room, kukuibot_url, config_state.get("jarvis_direct_url", ""))
                     if response:
                         logger.info(f"Jarvis: {response[:100]}")
                     else:
@@ -739,7 +833,7 @@ def main():
 
                 last_wake_time = time.time()
             else:
-                # --- Local mode: POST wake event -> SSE -> browser STT ---
+                # --- Local mode ---
                 if eagle_recognizer:
                     pre_frames = list(audio_ring)
                     passed, avg_score = verify_speaker(eagle_recognizer, pre_frames, eagle_threshold)
@@ -750,7 +844,63 @@ def main():
                     logger.info(f"Speaker verified (score {avg_score:.3f})")
 
                 threading.Thread(target=play_chime, daemon=True).start()
-                threading.Thread(target=post_wake_event, args=(kukuibot_url, 1.0, args.username, args.room), daemon=True).start()
+
+                if _local_asr_available and command:
+                    # Local ASR + command detected in wake phrase — transcribe for accuracy
+                    wav_bytes = pcm_to_wav_bytes(list(audio_ring))
+                    accurate_text = _transcribe_local(wav_bytes)
+                    if accurate_text:
+                        cmd = extract_command(accurate_text) or accurate_text
+                        threading.Thread(target=post_transcript_event,
+                                         args=(kukuibot_url, cmd, args.room, True), daemon=True).start()
+                    else:
+                        # Transcription failed — fall back to wake event for browser STT
+                        threading.Thread(target=post_wake_event, args=(kukuibot_url, 1.0, args.username, args.room), daemon=True).start()
+                elif _local_asr_available and not command:
+                    # Local ASR + wake word only — record follow-up speech
+                    silence_thresh_val = config_state.get("silence_threshold", silence_thresh)
+                    silence_dur_val = config_state.get("silence_duration", silence_dur)
+                    max_record_val = config_state.get("max_record", max_record)
+                    min_record_val = config_state.get("min_record", min_record)
+
+                    frames = list(audio_ring)
+                    silence_chunks = 0
+                    silence_limit = int(silence_dur_val * SAMPLE_RATE / VOSK_CHUNK_SAMPLES)
+                    max_chunks = int(max_record_val * SAMPLE_RATE / VOSK_CHUNK_SAMPLES)
+                    min_chunks = int(min_record_val * SAMPLE_RATE / VOSK_CHUNK_SAMPLES)
+                    recorded = 0
+
+                    logger.info("Recording follow-up speech (local STT)...")
+                    while not stop and recorded < max_chunks:
+                        try:
+                            rec_pcm = read_chunk(stream, VOSK_CHUNK_SAMPLES)
+                        except Exception:
+                            break
+                        frames.append(rec_pcm)
+                        recorded += 1
+                        amp = rms(rec_pcm)
+                        if amp < silence_thresh_val:
+                            silence_chunks += 1
+                        else:
+                            silence_chunks = 0
+                        if silence_chunks >= silence_limit and recorded >= min_chunks:
+                            logger.info(f"Silence detected after {recorded} chunks")
+                            break
+
+                    duration = recorded * VOSK_CHUNK_SAMPLES / SAMPLE_RATE
+                    logger.info(f"Recorded {duration:.1f}s of speech")
+                    if recorded >= min_chunks:
+                        wav_bytes = pcm_to_wav_bytes(frames)
+                        transcript = _transcribe_local(wav_bytes)
+                        if transcript:
+                            cmd = extract_command(transcript) or transcript
+                            threading.Thread(target=post_transcript_event,
+                                             args=(kukuibot_url, cmd, args.room, True), daemon=True).start()
+                        else:
+                            logger.info("No speech detected from local STT")
+                else:
+                    # No local ASR — fall back to existing behavior: wake event → browser STT
+                    threading.Thread(target=post_wake_event, args=(kukuibot_url, 1.0, args.username, args.room), daemon=True).start()
         else:
             # Partial result — we can optionally log it for debugging
             pass

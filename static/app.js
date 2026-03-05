@@ -683,6 +683,22 @@ function connectGlobalEvents() {
             }
           }
         }
+      } else if (evt.type === 'listener_transcript') {
+        // Listener sent a transcript — inject into text input and auto-submit
+        const input = document.getElementById('input');
+        if (input && document.hasFocus()) {
+          const text = (evt.text || '').trim();
+          if (text) {
+            input.value = text;
+            const _tab = activeTab();
+            if (_tab) _tab.draft = text;
+            requestRender({ preserveScroll: true });
+            // Auto-submit on final transcript
+            if (evt.is_final) {
+              setTimeout(() => { send(); }, 100);
+            }
+          }
+        }
       }
     } catch (err) { console.warn('Global SSE parse error:', err); }
   };

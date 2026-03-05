@@ -2910,6 +2910,29 @@ async def api_listener_wake(req: Request):
     return {"ok": True}
 
 
+@app.post("/api/listener/transcript")
+async def api_listener_transcript(req: Request):
+    """Receive transcript from wake-listener and broadcast to browsers via SSE."""
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=400)
+
+    text = (body.get("text") or "").strip()
+    if not text:
+        return {"ok": True, "ignored": True}
+
+    _broadcast_global_event({
+        "type": "listener_transcript",
+        "text": text,
+        "room": body.get("room", ""),
+        "is_final": body.get("is_final", True),
+        "source": body.get("source", "unknown"),
+        "ts": int(time.time() * 1000),
+    })
+    return {"ok": True}
+
+
 _CHIME_SOUND = os.path.join(os.path.dirname(__file__), "static", "blow.mp3")
 
 @app.post("/api/listener/chime")
