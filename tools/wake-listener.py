@@ -450,21 +450,26 @@ def fire_chime(kukuibot_url: str):
 # ---------------------------------------------------------------------------
 
 def _parse_triggers(triggers_str: str) -> dict:
-    """Parse comma-separated trigger words into a trigger dict.
+    """Parse comma-separated trigger words/phrases into a trigger dict.
 
     'jarvis' is handled specially as the wake word.
-    Other words map to control types: lights/light -> light_control, shades/shade/blinds -> shade_control.
+    Single words map to control types: lights/light -> light_control, shades/shade/blinds -> shade_control.
+    Multi-word phrases (e.g., "what's the weather") map to 'jarvis_query' — sent to Jarvis as-is.
     """
     triggers = {}
     _type_map = {
         "lights": "light_control", "light": "light_control",
         "shades": "shade_control", "shade": "shade_control", "blinds": "shade_control",
     }
-    for word in triggers_str.lower().split(","):
-        word = word.strip()
-        if not word or word == "jarvis":
+    for phrase in triggers_str.lower().split(","):
+        phrase = phrase.strip()
+        if not phrase or phrase == "jarvis":
             continue
-        triggers[word] = _type_map.get(word, "direct_action")
+        if " " in phrase:
+            # Multi-word phrase — treat as a jarvis query trigger
+            triggers[phrase] = "jarvis_query"
+        else:
+            triggers[phrase] = _type_map.get(phrase, "direct_action")
     return triggers
 
 
@@ -565,7 +570,7 @@ def detect_trigger(text: str, triggers: dict = None) -> tuple:
 
     Args:
         text: Vosk transcript text
-        triggers: Dict of trigger_word -> control_type (from server config).
+        triggers: Dict of trigger_word/phrase -> control_type (from server config).
                   Falls back to DIRECT_TRIGGERS if None.
 
     Returns (trigger_type, command):
@@ -581,10 +586,16 @@ def detect_trigger(text: str, triggers: dict = None) -> tuple:
     if "jarvis" in lower:
         return "jarvis", extract_command(text)
 
-    # Check for direct-action triggers
+    # Check for multi-word phrase triggers first (longer matches win)
+    for phrase, ttype in sorted(active_triggers.items(), key=lambda x: -len(x[0])):
+        if " " in phrase and phrase in lower:
+            # Multi-word phrase matched — send the full utterance as a jarvis query
+            return "jarvis", text.strip()
+
+    # Check for single-word direct-action triggers
     words = lower.split()
     for word in words:
-        if word in active_triggers:
+        if word in active_triggers and " " not in word:
             # The entire utterance IS the command (e.g., "lights fifty percent")
             return "direct", text.strip()
 
