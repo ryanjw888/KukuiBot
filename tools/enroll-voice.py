@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Enroll Ryan's voice for Eagle speaker verification.
+"""Enroll a speaker's voice for Eagle speaker verification.
 
-Usage: python3 enroll-voice.py [--device <mic>] [--output <profile_path>]
+Usage: python3 enroll-voice.py --name Ryan [--device <mic>] [--duration 40]
 
-Records ~10 seconds of speech, creates an Eagle speaker profile,
-and saves it to disk. Run this once; the wake-listener loads the profile at startup.
+Records speech, creates an Eagle speaker profile, and saves it as
+~/.jarvis/data/eagle_profile_{name}.bin. The wake-listener loads all
+profiles at startup and identifies who is speaking.
 """
 import argparse
 import logging
@@ -17,15 +18,21 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 logger = logging.getLogger("enroll-voice")
 
 ACCESS_KEY = os.getenv("PICOVOICE_ACCESS_KEY", "c7cXxfOZp42ls99y7tlBYNfwnIHS9yt9J/nyZAq5xaRz9PSzLm/JtQ==")
-DEFAULT_PROFILE_PATH = os.path.expanduser("~/.jarvis/data/eagle_profile.bin")
+PROFILE_DIR = os.path.expanduser("~/.jarvis/data")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Enroll voice for Eagle speaker verification")
+    parser.add_argument("--name", required=True, help="Speaker name (e.g. Ryan, Sarah)")
     parser.add_argument("--device", default=None, help="Mic device index or name")
-    parser.add_argument("--output", default=DEFAULT_PROFILE_PATH, help="Output profile path")
-    parser.add_argument("--duration", type=float, default=10.0, help="Recording duration in seconds")
+    parser.add_argument("--output", default=None, help="Output profile path (auto-generated from name if omitted)")
+    parser.add_argument("--duration", type=float, default=40.0, help="Recording duration in seconds")
     args = parser.parse_args()
+
+    # Build output path from name if not specified
+    if args.output is None:
+        safe_name = args.name.strip().lower().replace(" ", "_")
+        args.output = os.path.join(PROFILE_DIR, f"eagle_profile_{safe_name}.bin")
 
     import pveagle
     import pyaudio
@@ -82,11 +89,12 @@ def main():
     print()
 
     if enroll_percentage < 100.0:
-        print(f"\n  Enrollment only {enroll_percentage:.0f}% complete. Run again with more speech for better accuracy.")
-        if enroll_percentage < 20.0:
-            print("   Too little data to create a profile. Try again.")
-            profiler.delete()
-            return 1
+        print(f"\n  Enrollment only {enroll_percentage:.0f}% complete.")
+        print("   Eagle requires 100% enrollment to create a profile.")
+        print("   Tips: speak louder, closer to the mic, minimize background noise.")
+        print("   Try again with: python3 enroll-voice.py --duration 60")
+        profiler.delete()
+        return 1
 
     # Export and save profile
     profile = profiler.export()

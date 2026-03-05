@@ -373,10 +373,14 @@ _app_state.runtime_config = {
     "listener_eagle_threshold": get_config("listener_eagle_threshold", "0.35"),
     "listener_wake_triggers": get_config("listener_wake_triggers", "jarvis,lights,light,shades,shade,blinds"),
     "listener_jarvis_url": get_config("listener_jarvis_url", "http://127.0.0.1:5080"),
+    # Transient enrollment signals — runtime-only, never persisted to DB
+    "listener_enroll_speaker": "",
+    "listener_enroll_duration": "40",
 }
 # Module-level aliases — existing code (and lazy imports from routes) can still use these.
 # All point to the same dict/list objects on _app_state, so mutations are shared.
 _runtime_config = _app_state.runtime_config
+_enroll_progress = {}  # Transient enrollment progress from wake-listener
 _last_api_usage = _app_state.last_api_usage
 _active_tasks = _app_state.active_tasks
 _active_docs = _app_state.active_docs
@@ -2972,6 +2976,7 @@ async def api_listener_config():
         "listener_eagle_enabled", "listener_eagle_threshold",
         "listener_wake_triggers", "listener_jarvis_url", "listener_kukuibot_url",
         "listener_username", "listener_room",
+        "listener_enroll_speaker", "listener_enroll_duration",
     )
     return {k: _runtime_config.get(k) for k in _LISTENER_KEYS if _runtime_config.get(k) is not None}
 
@@ -3298,16 +3303,33 @@ async def api_listener_restart(req: Request):
 
 @app.get("/api/listener/eagle/status")
 async def api_eagle_status():
-    """Check Eagle voice profile status."""
-    profile_path = os.path.expanduser("~/.jarvis/data/eagle_profile.bin")
-    exists = os.path.isfile(profile_path)
-    size = os.path.getsize(profile_path) if exists else 0
-    mtime = os.path.getmtime(profile_path) if exists else 0
+    """Check Eagle voice profile status — lists all enrolled speakers."""
+    import glob
+    profile_dir = os.path.expanduser("~/.jarvis/data")
+    pattern = os.path.join(profile_dir, "eagle_profile_*.bin")
+    profile_files = sorted(glob.glob(pattern))
+
+    # Also check legacy single profile
+    legacy_path = os.path.join(profile_dir, "eagle_profile.bin")
+    has_legacy = os.path.isfile(legacy_path) and legacy_path not in profile_files
+
+    speakers = []
+    for pf in profile_files:
+        basename = os.path.basename(pf)
+        name = basename[len("eagle_profile_"):-len(".bin")]
+        size = os.path.getsize(pf)
+        mtime = os.path.getmtime(pf)
+        speakers.append({
+            "name": name,
+            "profile_path": pf,
+            "profile_size": size,
+            "enrolled_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime)),
+        })
+
     return {
-        "enrolled": exists and size > 0,
-        "profile_path": profile_path,
-        "profile_size": size,
-        "enrolled_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime)) if mtime else None,
+        "enrolled": len(speakers) > 0 or has_legacy,
+        "speakers": speakers,
+        "has_legacy_profile": has_legacy,
         "eagle_enabled": _runtime_config.get("listener_eagle_enabled", True),
         "eagle_threshold": _runtime_config.get("listener_eagle_threshold", "0.35"),
     }
@@ -3315,46 +3337,64 @@ async def api_eagle_status():
 
 @app.post("/api/listener/eagle/enroll")
 async def api_eagle_enroll(req: Request):
-    """Start Eagle voice enrollment process (runs enroll-voice.py in background)."""
+    """Signal the wake-listener to start Eagle voice enrollment."""
     if not _is_admin(req):
         return JSONResponse({"ok": False, "error": "Admin only"}, status_code=403)
 
     body = await req.json() if req.headers.get("content-type", "").startswith("application/json") else {}
-    duration = body.get("duration", 20)
+    duration = body.get("duration", 40)
+    speaker_name = body.get("name", "").strip()
+    if not speaker_name:
+        return JSONResponse({"ok": False, "error": "Speaker name required (e.g. 'Ryan')"}, status_code=400)
 
-    import subprocess
-    venv_python = "/Users/jarvis/jarvis-voice/.venv/bin/python"
-    enroll_script = str(Path(__file__).parent / "tools" / "enroll-voice.py")
-    log_path = "/tmp/kukuibot-enroll.log"
+    # Clear any previous progress
+    _enroll_progress.clear()
+    _enroll_progress["name"] = speaker_name
+    _enroll_progress["status"] = "pending"
+    _enroll_progress["percentage"] = 0
 
-    # Run enrollment in background
-    try:
-        env = os.environ.copy()
-        picovoice_key = (get_config("picovoice.access_key", "") or "").strip()
-        if not picovoice_key:
-            picovoice_key = "c7cXxfOZp42ls99y7tlBYNfwnIHS9yt9J/nyZAq5xaRz9PSzLm/JtQ=="
-        env["PICOVOICE_ACCESS_KEY"] = picovoice_key
+    # Set transient config flag — wake-listener picks this up via config refresh
+    _runtime_config["listener_enroll_speaker"] = speaker_name
+    _runtime_config["listener_enroll_duration"] = str(duration)
 
-        with open(log_path, "w") as logf:
-            proc = subprocess.Popen(
-                [venv_python, enroll_script, "--duration", str(duration)],
-                stdout=logf, stderr=logf,
-                start_new_session=True, env=env,
-            )
-        return {"ok": True, "pid": proc.pid, "duration": duration, "log": log_path}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    return {"ok": True, "name": speaker_name, "duration": duration, "method": "config-signal"}
 
 
 @app.get("/api/listener/eagle/enroll/log")
 async def api_eagle_enroll_log():
-    """Get enrollment log output."""
-    log_path = "/tmp/kukuibot-enroll.log"
-    try:
-        with open(log_path) as f:
-            return {"ok": True, "log": f.read()}
-    except FileNotFoundError:
+    """Get enrollment progress (from wake-listener reports)."""
+    if not _enroll_progress:
         return {"ok": True, "log": ""}
+    log_lines = []
+    name = _enroll_progress.get("name", "")
+    status = _enroll_progress.get("status", "")
+    pct = _enroll_progress.get("percentage", 0)
+    if status == "pending":
+        log_lines.append(f"Waiting for wake-listener to start enrollment for {name}...")
+    elif status == "enrolling":
+        log_lines.append(f"Enrolling {name}...")
+        log_lines.append(f"   Enrolled: {pct:.0f}%")
+        feedback = _enroll_progress.get("feedback", "")
+        if feedback:
+            log_lines.append(f"   [{feedback}]")
+    elif status == "complete":
+        log_lines.append(f"Voice profile saved for {name}")
+        log_lines.append("Enrollment complete")
+    elif status == "failed":
+        error = _enroll_progress.get("error", "unknown error")
+        log_lines.append(f"ERROR: {error}")
+    return {"ok": True, "log": "\n".join(log_lines)}
+
+
+@app.post("/api/listener/eagle/enroll/progress")
+async def api_eagle_enroll_progress(req: Request):
+    """Receive enrollment progress updates from wake-listener."""
+    body = await req.json()
+    _enroll_progress.update(body)
+    # Auto-clear the config flag when enrollment completes
+    if body.get("status") in ("complete", "failed"):
+        _runtime_config["listener_enroll_speaker"] = ""
+    return {"ok": True}
 
 
 @app.get("/api/listener/setup-script")
@@ -4065,9 +4105,14 @@ async def api_config_set(req: Request):
                "listener_silence_threshold", "listener_silence_duration",
                "listener_max_record", "listener_min_record",
                "listener_wake_triggers", "listener_eagle_enabled",
-               "listener_eagle_threshold", "listener_jarvis_url"):
+               "listener_eagle_threshold", "listener_jarvis_url",
+               "listener_enroll_speaker", "listener_enroll_duration"):
         if lk in body:
             val = body[lk]
+            # Enrollment keys are transient — runtime only, never persist to DB
+            if lk in ("listener_enroll_speaker", "listener_enroll_duration"):
+                _runtime_config[lk] = str(val)[:200]
+                continue
             if lk in ("listener_enabled", "listener_eagle_enabled"):
                 _runtime_config[lk] = bool(val)
                 set_config(lk, "1" if val else "0")

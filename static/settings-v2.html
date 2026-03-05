@@ -1399,13 +1399,11 @@
           </div>
 
           <div id="eagle-enrollment-status" style="padding:10px;background:var(--surface2);border-radius:8px;font-size:12px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;">
-              <span id="eagle-profile-status" style="color:var(--muted);">Checking enrollment...</span>
-              <span id="eagle-enrolled-date" style="font-size:11px;color:var(--muted);"></span>
-            </div>
+            <div id="eagle-profile-status" style="color:var(--muted);">Checking enrollment...</div>
           </div>
 
-          <div style="display:flex;gap:8px;align-items:center;">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <input type="text" id="enroll-speaker-name" placeholder="Speaker name (e.g. Ryan)" style="width:180px;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px;">
             <button class="btn" onclick="startEnrollment()">Enroll Voice</button>
             <button class="btn" onclick="saveEagleConfig()">Save Auth Config</button>
             <span id="eagle-status" style="font-size:11px;color:var(--muted);"></span>
@@ -2112,13 +2110,22 @@ async function loadEagleStatus() {
     const r = await fetch(API + '/api/listener/eagle/status');
     const d = await r.json();
     const statusEl = document.getElementById('eagle-profile-status');
-    const dateEl = document.getElementById('eagle-enrolled-date');
-    if (d.enrolled) {
-      statusEl.innerHTML = '<span style="color:var(--green);">Voice profile enrolled</span> (' + d.profile_size + ' bytes)';
-      dateEl.textContent = 'Enrolled: ' + (d.enrolled_at || 'unknown');
+    if (d.speakers && d.speakers.length > 0) {
+      let html = '<div style="color:var(--green);margin-bottom:6px;">Enrolled speakers:</div>';
+      d.speakers.forEach(s => {
+        html += '<div style="display:flex;justify-content:space-between;padding:2px 0;">';
+        html += '<span style="text-transform:capitalize;font-weight:500;">' + s.name + '</span>';
+        html += '<span style="color:var(--muted);font-size:11px;">' + (s.enrolled_at || '') + ' (' + s.profile_size + ' bytes)</span>';
+        html += '</div>';
+      });
+      if (d.has_legacy_profile) {
+        html += '<div style="color:var(--yellow);font-size:11px;margin-top:4px;">Legacy profile also present (eagle_profile.bin)</div>';
+      }
+      statusEl.innerHTML = html;
+    } else if (d.has_legacy_profile) {
+      statusEl.innerHTML = '<span style="color:var(--yellow);">Legacy profile found</span> — re-enroll with a name below';
     } else {
-      statusEl.innerHTML = '<span style="color:var(--yellow);">No voice profile</span> — enroll below';
-      dateEl.textContent = '';
+      statusEl.innerHTML = '<span style="color:var(--yellow);">No voice profiles</span> — enroll below';
     }
   } catch {
     document.getElementById('eagle-profile-status').textContent = 'Could not check enrollment status';
@@ -2158,30 +2165,41 @@ async function startEnrollment() {
   const progressEl = document.getElementById('enroll-progress');
   const logEl = document.getElementById('enroll-log');
   const st = document.getElementById('eagle-status');
+  const nameInput = document.getElementById('enroll-speaker-name');
+  const speakerName = (nameInput.value || '').trim();
+  if (!speakerName) {
+    toast('Enter a speaker name first');
+    nameInput.focus();
+    return;
+  }
   progressEl.style.display = 'block';
-  logEl.textContent = 'Starting enrollment (speak naturally for ~20 seconds)...\n';
+  logEl.textContent = 'Enrollment signal sent for ' + speakerName + '.\nWaiting for wake-listener to pick up request (up to 30s)...\nSpeak near the wake-listener mic for ~40 seconds.\n';
   st.textContent = 'Enrolling...'; st.style.color = 'var(--accent)';
 
   try {
     const r = await fetch(API + '/api/listener/eagle/enroll', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ duration: 20 }),
+      body: JSON.stringify({ name: speakerName, duration: 40 }),
     });
     const d = await r.json();
-    if (!d.ok) { logEl.textContent += 'Error: ' + (d.error || 'unknown'); return; }
-    logEl.textContent += 'Enrollment started (PID ' + d.pid + ')\n';
+    if (!d.ok) { logEl.textContent += 'Error: ' + (d.error || 'unknown'); st.textContent = 'Failed'; st.style.color = 'var(--red)'; return; }
+    logEl.textContent += 'Enrollment request accepted (' + d.method + ')\n';
 
-    // Poll log every 2 seconds for 30 seconds
+    // Poll log every 2 seconds — allow up to 100s (30s config delay + 40s enrollment + 30s buffer)
     let polls = 0;
     const interval = setInterval(async () => {
       polls++;
       try {
         const lr = await fetch(API + '/api/listener/eagle/enroll/log');
         const ld = await lr.json();
-        logEl.textContent = ld.log || '';
+        if (ld.log) logEl.textContent = ld.log;
         logEl.scrollTop = logEl.scrollHeight;
+        // Warn if no listener response after 40 seconds
+        if (polls === 20 && (!ld.log || ld.log.includes('Waiting for wake-listener'))) {
+          logEl.textContent += '\nNo wake-listener response yet. Make sure the listener is running and can reach this server.';
+        }
         // Check for completion markers
-        if (ld.log && (ld.log.includes('Profile saved') || ld.log.includes('ERROR') || ld.log.includes('Enrollment complete'))) {
+        if (ld.log && (ld.log.includes('profile saved') || ld.log.includes('Profile saved') || ld.log.includes('Voice profile saved') || ld.log.includes('ERROR') || ld.log.includes('Enrollment complete') || ld.log.includes('only'))) {
           clearInterval(interval);
           st.textContent = ld.log.includes('ERROR') ? 'Enrollment failed' : 'Enrollment complete';
           st.style.color = ld.log.includes('ERROR') ? 'var(--red)' : 'var(--green)';
@@ -2189,7 +2207,7 @@ async function startEnrollment() {
           setTimeout(() => { st.textContent = ''; }, 5000);
         }
       } catch {}
-      if (polls > 30) { clearInterval(interval); st.textContent = ''; }
+      if (polls > 50) { clearInterval(interval); st.textContent = ''; }
     }, 2000);
   } catch {
     logEl.textContent += 'Failed to start enrollment\n';
