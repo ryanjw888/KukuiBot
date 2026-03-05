@@ -1282,6 +1282,8 @@
     <!-- ===== LISTENER SECTION ===== -->
     <div class="settings-section" id="section-listener">
       <div class="section-title">Voice Listener</div>
+
+      <!-- Listener Enable + Mode -->
       <div class="card">
         <h2>Listener</h2>
         <div class="setting-row">
@@ -1307,14 +1309,11 @@
         </div>
 
         <div id="listener-remote-panel" style="margin-top:12px;padding:10px;background:var(--surface2);border-radius:8px;display:none;">
-          <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Wake word detection → record speech → Whisper STT → Jarvis chat → Sonos TTS response.</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Vosk STT trigger detection → Eagle speaker verification → Qwen3-ASR transcription → Jarvis chat → Sonos TTS response.</div>
           <div style="display:flex;flex-direction:column;gap:8px;">
             <div>
-              <label style="font-size:12px;color:var(--muted);">Jarvis Backend</label>
-              <input type="text" id="listener-remote-ip" style="width:100%;" readonly>
-            </div>
-            <div style="display:none;">
-              <input type="number" id="listener-remote-port" value="5080">
+              <label style="font-size:12px;color:var(--muted);">Jarvis Backend URL</label>
+              <input type="text" id="listener-jarvis-url" placeholder="http://127.0.0.1:5080" style="width:100%;">
             </div>
             <div>
               <label style="font-size:12px;color:var(--muted);">Microphone</label>
@@ -1341,44 +1340,115 @@
         <div style="margin-top:12px;">
           <button class="btn" onclick="saveListenerConfig()">Save Listener Config</button>
         </div>
+      </div>
 
-        <details style="margin-top:16px;font-size:12px;color:var(--muted);">
-          <summary style="cursor:pointer;font-size:12px;color:var(--accent);">Wake Word Tuning</summary>
-          <div style="margin-top:10px;padding:10px;background:var(--surface2);border-radius:8px;">
-            <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">
-              Changes are saved to the server and picked up by the listener on its next config refresh (~30s), or immediately on restart.
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 80px;gap:6px 10px;align-items:center;font-size:11px;">
-              <label style="color:var(--muted);">Detection threshold <span style="opacity:.5">(0.0–1.0)</span></label>
-              <input type="number" id="wt-threshold" step="0.05" min="0.1" max="1.0" style="width:100%;padding:3px 6px;font-size:11px;font-family:'SF Mono',Menlo,monospace;border-radius:4px;border:1px solid var(--border);background:rgba(0,0,0,.25);color:var(--text);">
+      <!-- Wake Triggers -->
+      <div class="card">
+        <h2>Wake Triggers</h2>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">
+          Words that activate the listener. "jarvis" is the main wake word; others (lights, shades) are direct-action triggers that pass the full phrase as a command.
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <div id="trigger-list" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <input type="text" id="trigger-new-input" placeholder="Add trigger..." style="flex:1;padding:4px 8px;font-size:12px;" onkeydown="if(event.key==='Enter'){addTrigger();}">
+            <button class="btn" onclick="addTrigger()" style="padding:4px 12px;font-size:12px;">Add</button>
+          </div>
+        </div>
+        <div style="margin-top:10px;">
+          <button class="btn" onclick="saveWakeTriggers()">Save Triggers</button>
+          <span id="trigger-status" style="font-size:11px;color:var(--muted);margin-left:8px;"></span>
+        </div>
+      </div>
 
-              <label style="color:var(--muted);">Cooldown after wake <span style="opacity:.5">(seconds)</span></label>
-              <input type="number" id="wt-cooldown" step="0.5" min="0.5" max="30" style="width:100%;padding:3px 6px;font-size:11px;font-family:'SF Mono',Menlo,monospace;border-radius:4px;border:1px solid var(--border);background:rgba(0,0,0,.25);color:var(--text);">
+      <!-- Voice Authentication (Eagle) -->
+      <div class="card">
+        <h2>Voice Authentication (Eagle)</h2>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">
+          Picovoice Eagle speaker verification ensures only your voice can trigger commands.
+        </div>
 
-              <label style="color:var(--muted);">Silence threshold <span style="opacity:.5">(RMS, int16)</span></label>
-              <input type="number" id="wt-silence-threshold" step="10" min="10" max="2000" style="width:100%;padding:3px 6px;font-size:11px;font-family:'SF Mono',Menlo,monospace;border-radius:4px;border:1px solid var(--border);background:rgba(0,0,0,.25);color:var(--text);">
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-label">Enable Voice Auth</div>
+            <div class="setting-desc">Require speaker verification before processing commands.</div>
+          </div>
+          <div id="eagle-enabled-toggle" class="toggle" onclick="toggleEagleEnabled()"></div>
+        </div>
 
-              <label style="color:var(--muted);">Silence duration <span style="opacity:.5">(seconds to stop)</span></label>
-              <input type="number" id="wt-silence-duration" step="0.1" min="0.3" max="10" style="width:100%;padding:3px 6px;font-size:11px;font-family:'SF Mono',Menlo,monospace;border-radius:4px;border:1px solid var(--border);background:rgba(0,0,0,.25);color:var(--text);">
-
-              <label style="color:var(--muted);">Max recording <span style="opacity:.5">(seconds)</span></label>
-              <input type="number" id="wt-max-record" step="1" min="3" max="120" style="width:100%;padding:3px 6px;font-size:11px;font-family:'SF Mono',Menlo,monospace;border-radius:4px;border:1px solid var(--border);background:rgba(0,0,0,.25);color:var(--text);">
-
-              <label style="color:var(--muted);">Min recording <span style="opacity:.5">(seconds)</span></label>
-              <input type="number" id="wt-min-record" step="0.1" min="0.2" max="10" style="width:100%;padding:3px 6px;font-size:11px;font-family:'SF Mono',Menlo,monospace;border-radius:4px;border:1px solid var(--border);background:rgba(0,0,0,.25);color:var(--text);">
-            </div>
-            <div style="margin-top:10px;display:flex;gap:8px;align-items:center;">
-              <button class="btn" onclick="saveWakeTuning()">Save Tuning</button>
-              <button class="btn" onclick="restartListener()" title="Save config and restart the wake-listener process">Save &amp; Restart Listener</button>
-              <span id="wt-status" style="font-size:11px;color:var(--muted);"></span>
-            </div>
-            <div style="font-size:11px;color:var(--muted);margin-top:10px;border-top:1px solid var(--border);padding-top:8px;">
-              <strong style="color:var(--text);">Model:</strong>
-              <code style="font-size:11px;">hey_jarvis_v0.1.onnx</code> (openWakeWord, ONNX, 16kHz / 80ms chunks)
-              &middot; Config refresh every ~30s
+        <div style="margin-top:12px;display:flex;flex-direction:column;gap:8px;">
+          <div>
+            <label style="font-size:12px;color:var(--muted);">Verification Threshold <span style="opacity:.5">(0.0–1.0, lower = more permissive)</span></label>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <input type="range" id="eagle-threshold" min="0.1" max="0.9" step="0.05" style="flex:1;" oninput="document.getElementById('eagle-threshold-val').textContent=this.value">
+              <span id="eagle-threshold-val" style="font-size:12px;font-family:'SF Mono',Menlo,monospace;color:var(--text);min-width:32px;text-align:right;">0.35</span>
             </div>
           </div>
-        </details>
+
+          <div id="eagle-enrollment-status" style="padding:10px;background:var(--surface2);border-radius:8px;font-size:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <span id="eagle-profile-status" style="color:var(--muted);">Checking enrollment...</span>
+              <span id="eagle-enrolled-date" style="font-size:11px;color:var(--muted);"></span>
+            </div>
+          </div>
+
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button class="btn" onclick="startEnrollment()">Enroll Voice</button>
+            <button class="btn" onclick="saveEagleConfig()">Save Auth Config</button>
+            <span id="eagle-status" style="font-size:11px;color:var(--muted);"></span>
+          </div>
+
+          <div id="enroll-progress" style="display:none;padding:10px;background:var(--surface2);border-radius:8px;font-size:11px;">
+            <div style="margin-bottom:6px;color:var(--accent);font-weight:500;">Enrolling voice...</div>
+            <pre id="enroll-log" style="margin:0;max-height:200px;overflow-y:auto;font-size:10px;color:var(--muted);white-space:pre-wrap;"></pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- Wake Word Tuning -->
+      <div class="card">
+        <h2>Recording Tuning</h2>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">
+          Fine-tune recording behavior. Changes are picked up on next config refresh (~30s) or immediately on restart.
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 80px;gap:6px 10px;align-items:center;font-size:11px;">
+          <label style="color:var(--muted);">Cooldown after wake <span style="opacity:.5">(seconds)</span></label>
+          <input type="number" id="wt-cooldown" step="0.5" min="0.5" max="30" style="width:100%;padding:3px 6px;font-size:11px;font-family:'SF Mono',Menlo,monospace;border-radius:4px;border:1px solid var(--border);background:rgba(0,0,0,.25);color:var(--text);">
+
+          <label style="color:var(--muted);">Silence threshold <span style="opacity:.5">(RMS, int16)</span></label>
+          <input type="number" id="wt-silence-threshold" step="10" min="10" max="2000" style="width:100%;padding:3px 6px;font-size:11px;font-family:'SF Mono',Menlo,monospace;border-radius:4px;border:1px solid var(--border);background:rgba(0,0,0,.25);color:var(--text);">
+
+          <label style="color:var(--muted);">Silence duration <span style="opacity:.5">(seconds to stop)</span></label>
+          <input type="number" id="wt-silence-duration" step="0.1" min="0.3" max="10" style="width:100%;padding:3px 6px;font-size:11px;font-family:'SF Mono',Menlo,monospace;border-radius:4px;border:1px solid var(--border);background:rgba(0,0,0,.25);color:var(--text);">
+
+          <label style="color:var(--muted);">Max recording <span style="opacity:.5">(seconds)</span></label>
+          <input type="number" id="wt-max-record" step="1" min="3" max="120" style="width:100%;padding:3px 6px;font-size:11px;font-family:'SF Mono',Menlo,monospace;border-radius:4px;border:1px solid var(--border);background:rgba(0,0,0,.25);color:var(--text);">
+
+          <label style="color:var(--muted);">Min recording <span style="opacity:.5">(seconds)</span></label>
+          <input type="number" id="wt-min-record" step="0.1" min="0.2" max="10" style="width:100%;padding:3px 6px;font-size:11px;font-family:'SF Mono',Menlo,monospace;border-radius:4px;border:1px solid var(--border);background:rgba(0,0,0,.25);color:var(--text);">
+        </div>
+        <div style="margin-top:10px;display:flex;gap:8px;align-items:center;">
+          <button class="btn" onclick="saveWakeTuning()">Save Tuning</button>
+          <button class="btn" onclick="restartListener()" title="Save config and restart the wake-listener process">Save &amp; Restart Listener</button>
+          <span id="wt-status" style="font-size:11px;color:var(--muted);"></span>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:10px;border-top:1px solid var(--border);padding-top:8px;">
+          <strong style="color:var(--text);">Engine:</strong>
+          Vosk streaming STT (16kHz) + Picovoice Eagle speaker verification
+          &middot; Config refresh every ~30s
+        </div>
+      </div>
+
+      <!-- Remote Deployment -->
+      <div class="card">
+        <h2>Remote Deployment</h2>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">
+          Deploy the wake listener to another Mac on your LAN. The setup script installs Vosk, Eagle, and configures a launchd service.
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button class="btn" onclick="downloadSetupScript()">Download Setup Script</button>
+          <span id="deploy-status" style="font-size:11px;color:var(--muted);"></span>
+        </div>
       </div>
     </div>
 
@@ -1917,23 +1987,178 @@ async function loadListenerConfig() {
   const mode = config.listener_mode || 'local';
   document.getElementById('listener-enabled-toggle').className = 'toggle' + (enabled ? ' on' : '');
   document.getElementById('listener-mode-select').value = mode;
-  document.getElementById('listener-remote-ip').value = 'http://127.0.0.1:5080';
-  document.getElementById('listener-remote-port').value = config.listener_remote_port || '5080';
+  document.getElementById('listener-jarvis-url').value = config.listener_jarvis_url || 'http://127.0.0.1:5080';
   document.getElementById('listener-username').value = config.listener_username || '';
   document.getElementById('listener-room').value = config.listener_room || '';
   document.getElementById('listener-local-panel').style.display = mode === 'local' ? 'block' : 'none';
   document.getElementById('listener-remote-panel').style.display = mode === 'remote' ? 'block' : 'none';
   document.getElementById('listener-status').textContent = enabled ? 'Listener active' : 'Listener off';
   document.getElementById('listener-status').style.color = enabled ? 'var(--green)' : 'var(--muted)';
-  // Wake word tuning fields
-  document.getElementById('wt-threshold').value = config.listener_threshold || '0.5';
+  // Wake tuning fields
   document.getElementById('wt-cooldown').value = config.listener_cooldown || '5.0';
   document.getElementById('wt-silence-threshold').value = config.listener_silence_threshold || '150';
   document.getElementById('wt-silence-duration').value = config.listener_silence_duration || '1.2';
   document.getElementById('wt-max-record').value = config.listener_max_record || '15';
   document.getElementById('wt-min-record').value = config.listener_min_record || '1.0';
+  // Wake triggers
+  loadWakeTriggers(config.listener_wake_triggers || 'jarvis,lights,light,shades,shade,blinds');
+  // Eagle config
+  const eagleEnabled = config.listener_eagle_enabled !== false && config.listener_eagle_enabled !== '0';
+  document.getElementById('eagle-enabled-toggle').className = 'toggle' + (eagleEnabled ? ' on' : '');
+  const threshold = config.listener_eagle_threshold || '0.35';
+  document.getElementById('eagle-threshold').value = threshold;
+  document.getElementById('eagle-threshold-val').textContent = threshold;
+  // Load Eagle enrollment status
+  loadEagleStatus();
   // Populate microphone dropdown
   await refreshMicList();
+}
+
+function loadWakeTriggers(triggersStr) {
+  const container = document.getElementById('trigger-list');
+  container.innerHTML = '';
+  const triggers = triggersStr.split(',').map(t => t.trim()).filter(Boolean);
+  triggers.forEach(t => addTriggerChip(t));
+}
+
+function addTriggerChip(word) {
+  const container = document.getElementById('trigger-list');
+  const chip = document.createElement('span');
+  chip.style.cssText = 'display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:var(--accent);color:#fff;border-radius:12px;font-size:11px;font-family:"SF Mono",Menlo,monospace;';
+  chip.dataset.trigger = word;
+  chip.textContent = word;
+  const x = document.createElement('span');
+  x.textContent = '\u00d7';
+  x.style.cssText = 'cursor:pointer;font-size:14px;line-height:1;opacity:.7;';
+  x.onclick = () => chip.remove();
+  chip.appendChild(x);
+  container.appendChild(chip);
+}
+
+function addTrigger() {
+  const input = document.getElementById('trigger-new-input');
+  const word = input.value.trim().toLowerCase();
+  if (!word) return;
+  // Don't add duplicates
+  const existing = document.querySelectorAll('#trigger-list span[data-trigger]');
+  for (const el of existing) { if (el.dataset.trigger === word) { input.value = ''; return; } }
+  addTriggerChip(word);
+  input.value = '';
+}
+
+function getTriggersString() {
+  const chips = document.querySelectorAll('#trigger-list span[data-trigger]');
+  return Array.from(chips).map(c => c.dataset.trigger).join(',');
+}
+
+async function saveWakeTriggers() {
+  const st = document.getElementById('trigger-status');
+  st.textContent = 'Saving...'; st.style.color = 'var(--muted)';
+  try {
+    const r = await fetch(API + '/api/config', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ listener_wake_triggers: getTriggersString() }),
+    });
+    const d = await r.json();
+    Object.assign(config, d);
+    st.textContent = 'Saved'; st.style.color = 'var(--green)';
+    toast('Wake triggers saved');
+  } catch {
+    st.textContent = 'Failed'; st.style.color = 'var(--red)';
+    toast('Failed to save triggers');
+  }
+  setTimeout(() => { st.textContent = ''; }, 3000);
+}
+
+async function loadEagleStatus() {
+  try {
+    const r = await fetch(API + '/api/listener/eagle/status');
+    const d = await r.json();
+    const statusEl = document.getElementById('eagle-profile-status');
+    const dateEl = document.getElementById('eagle-enrolled-date');
+    if (d.enrolled) {
+      statusEl.innerHTML = '<span style="color:var(--green);">Voice profile enrolled</span> (' + d.profile_size + ' bytes)';
+      dateEl.textContent = 'Enrolled: ' + (d.enrolled_at || 'unknown');
+    } else {
+      statusEl.innerHTML = '<span style="color:var(--yellow);">No voice profile</span> — enroll below';
+      dateEl.textContent = '';
+    }
+  } catch {
+    document.getElementById('eagle-profile-status').textContent = 'Could not check enrollment status';
+  }
+}
+
+function toggleEagleEnabled() {
+  const tog = document.getElementById('eagle-enabled-toggle');
+  const isOn = tog.classList.contains('on');
+  tog.className = 'toggle' + (isOn ? '' : ' on');
+  config.listener_eagle_enabled = !isOn;
+}
+
+async function saveEagleConfig() {
+  const st = document.getElementById('eagle-status');
+  st.textContent = 'Saving...'; st.style.color = 'var(--muted)';
+  try {
+    const r = await fetch(API + '/api/config', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        listener_eagle_enabled: config.listener_eagle_enabled ? '1' : '0',
+        listener_eagle_threshold: document.getElementById('eagle-threshold').value,
+      }),
+    });
+    const d = await r.json();
+    Object.assign(config, d);
+    st.textContent = 'Saved'; st.style.color = 'var(--green)';
+    toast('Voice auth config saved');
+  } catch {
+    st.textContent = 'Failed'; st.style.color = 'var(--red)';
+    toast('Failed to save');
+  }
+  setTimeout(() => { st.textContent = ''; }, 3000);
+}
+
+async function startEnrollment() {
+  const progressEl = document.getElementById('enroll-progress');
+  const logEl = document.getElementById('enroll-log');
+  const st = document.getElementById('eagle-status');
+  progressEl.style.display = 'block';
+  logEl.textContent = 'Starting enrollment (speak naturally for ~20 seconds)...\n';
+  st.textContent = 'Enrolling...'; st.style.color = 'var(--accent)';
+
+  try {
+    const r = await fetch(API + '/api/listener/eagle/enroll', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ duration: 20 }),
+    });
+    const d = await r.json();
+    if (!d.ok) { logEl.textContent += 'Error: ' + (d.error || 'unknown'); return; }
+    logEl.textContent += 'Enrollment started (PID ' + d.pid + ')\n';
+
+    // Poll log every 2 seconds for 30 seconds
+    let polls = 0;
+    const interval = setInterval(async () => {
+      polls++;
+      try {
+        const lr = await fetch(API + '/api/listener/eagle/enroll/log');
+        const ld = await lr.json();
+        logEl.textContent = ld.log || '';
+        logEl.scrollTop = logEl.scrollHeight;
+        // Check for completion markers
+        if (ld.log && (ld.log.includes('Profile saved') || ld.log.includes('ERROR') || ld.log.includes('Enrollment complete'))) {
+          clearInterval(interval);
+          st.textContent = ld.log.includes('ERROR') ? 'Enrollment failed' : 'Enrollment complete';
+          st.style.color = ld.log.includes('ERROR') ? 'var(--red)' : 'var(--green)';
+          loadEagleStatus();
+          setTimeout(() => { st.textContent = ''; }, 5000);
+        }
+      } catch {}
+      if (polls > 30) { clearInterval(interval); st.textContent = ''; }
+    }, 2000);
+  } catch {
+    logEl.textContent += 'Failed to start enrollment\n';
+    st.textContent = 'Failed'; st.style.color = 'var(--red)';
+    setTimeout(() => { st.textContent = ''; }, 3000);
+  }
 }
 
 async function refreshMicList() {
@@ -1975,8 +2200,7 @@ async function saveListenerConfig() {
   const payload = {
     listener_enabled: config.listener_enabled || false,
     listener_mode: document.getElementById('listener-mode-select').value,
-    listener_remote_ip: document.getElementById('listener-remote-ip').value,
-    listener_remote_port: document.getElementById('listener-remote-port').value,
+    listener_jarvis_url: document.getElementById('listener-jarvis-url').value,
     listener_device: document.getElementById('listener-device-select').value,
     listener_username: document.getElementById('listener-username').value,
     listener_room: document.getElementById('listener-room').value,
@@ -1992,7 +2216,6 @@ async function saveListenerConfig() {
 // ---- Wake Word Tuning ----
 function _getWakeTuningPayload() {
   return {
-    listener_threshold: document.getElementById('wt-threshold').value,
     listener_cooldown: document.getElementById('wt-cooldown').value,
     listener_silence_threshold: document.getElementById('wt-silence-threshold').value,
     listener_silence_duration: document.getElementById('wt-silence-duration').value,
@@ -2012,7 +2235,7 @@ async function saveWakeTuning() {
     const d = await r.json();
     Object.assign(config, d);
     st.textContent = 'Saved'; st.style.color = 'var(--green)';
-    toast('Wake tuning saved');
+    toast('Recording tuning saved');
   } catch {
     st.textContent = 'Failed'; st.style.color = 'var(--red)';
     toast('Failed to save tuning');
@@ -2029,11 +2252,13 @@ async function restartListener() {
       ..._getWakeTuningPayload(),
       listener_enabled: config.listener_enabled || false,
       listener_mode: document.getElementById('listener-mode-select').value,
-      listener_remote_ip: document.getElementById('listener-remote-ip').value,
-      listener_remote_port: document.getElementById('listener-remote-port').value,
+      listener_jarvis_url: document.getElementById('listener-jarvis-url').value,
       listener_device: document.getElementById('listener-device-select').value,
       listener_username: document.getElementById('listener-username').value,
       listener_room: document.getElementById('listener-room').value,
+      listener_wake_triggers: getTriggersString(),
+      listener_eagle_enabled: config.listener_eagle_enabled ? '1' : '0',
+      listener_eagle_threshold: document.getElementById('eagle-threshold').value,
     };
     const r = await fetch(API + '/api/config', {
       method: 'POST', headers: {'Content-Type':'application/json'},
@@ -2057,6 +2282,26 @@ async function restartListener() {
     toast('Restart failed');
   }
   setTimeout(() => { st.textContent = ''; }, 5000);
+}
+
+async function downloadSetupScript() {
+  const st = document.getElementById('deploy-status');
+  st.textContent = 'Generating...'; st.style.color = 'var(--muted)';
+  try {
+    const r = await fetch(API + '/api/listener/setup-script');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'setup-listener.sh'; a.click();
+    URL.revokeObjectURL(url);
+    st.textContent = 'Downloaded'; st.style.color = 'var(--green)';
+    toast('Setup script downloaded');
+  } catch {
+    st.textContent = 'Failed'; st.style.color = 'var(--red)';
+    toast('Failed to download setup script');
+  }
+  setTimeout(() => { st.textContent = ''; }, 3000);
 }
 
 // ---- Claude Code Token ----

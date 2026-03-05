@@ -1,32 +1,39 @@
 #!/usr/bin/env python3
 """
-KukuiBot Wake Word Listener — dual-mode "Hey Jarvis" detection.
+KukuiBot Wake Word Listener — always-on Vosk STT with Eagle speaker verification.
+
+Detection: Vosk streaming STT watches for "jarvis" in transcripts (no pause needed)
+Speaker verification: Picovoice Eagle (optional — requires enrolled voice profile)
 
 Modes (configured via KukuiBot Settings → listener_mode):
   local:  POST /api/listener/wake → SSE → browser beeps + Web Speech API STT
-  remote: Sonos chime → record speech → Whisper STT → Jarvis chat → Sonos TTS
+  remote: verify speaker → send Vosk transcript to Jarvis chat → TTS response
 
 The mode is fetched from /api/config and cached (refreshed every 30s).
 
-Requires: openwakeword, numpy, pyaudio, onnxruntime
+Requires: vosk, pveagle, numpy, pyaudio
 """
 import argparse, io, json, logging, os, signal, ssl, subprocess, sys, threading, time, wave
 from collections import deque
 from pathlib import Path
 from urllib import request as urlrequest
 import numpy as np
-from openwakeword.model import Model
 
 SAMPLE_RATE = 16000
-CHUNK_SAMPLES = 1280          # 80ms — openWakeWord expects this
+VOSK_CHUNK_SAMPLES = 4000       # 250ms chunks for Vosk (good balance of latency vs efficiency)
+
+EAGLE_PROFILE_PATH = os.path.expanduser("~/.jarvis/data/eagle_profile.bin")
+EAGLE_SCORE_THRESHOLD = 0.7     # minimum speaker similarity score (0.0-1.0)
+
+VOSK_MODEL_PATH = os.path.expanduser("~/jarvis-voice/models/vosk-model-small-en-us-0.15")
 
 # Defaults — overridden at startup by /api/config values
-COOLDOWN_SECS = 2.5           # ignore wake scores for this long after detection
+COOLDOWN_SECS = 2.5           # ignore triggers for this long after a command
 SILENCE_THRESHOLD = 150       # RMS amplitude threshold for silence (int16 scale)
-SILENCE_DURATION = 1.2        # seconds of sustained silence to stop recording
+SILENCE_DURATION = 1.5        # seconds of sustained silence to stop recording
 MAX_RECORD_SECS = 15          # max recording length after wake word
-MIN_RECORD_SECS = 1.0         # minimum recording time before silence detection kicks in
-PRE_BUFFER_SECS = 2.0         # seconds of audio to keep before wake detection
+MIN_RECORD_SECS = 2.0         # minimum recording time before silence detection kicks in
+PRE_BUFFER_SECS = 3.0         # seconds of audio to keep before wake detection
 
 JARVIS_BACKEND_URL = os.getenv("JARVIS_BACKEND_URL", "http://127.0.0.1:5080")
 
@@ -43,25 +50,91 @@ _ssl_ctx.check_hostname = False
 _ssl_ctx.verify_mode = ssl.CERT_NONE
 
 
-def build_model(model_path: str):
-    mp = Path(model_path)
-    if not mp.exists():
-        raise FileNotFoundError(f"Model not found: {model_path}")
-    framework = "onnx" if mp.suffix.lower() == ".onnx" else "tflite"
-    model_dir = mp.parent
-    m = Model(
-        wakeword_models=[str(mp)],
-        inference_framework=framework,
-        melspec_model_path=str(model_dir / f"melspectrogram.{framework}"),
-        embedding_model_path=str(model_dir / f"embedding_model.{framework}"),
+# ---------------------------------------------------------------------------
+# Wake engine: Vosk streaming STT
+# ---------------------------------------------------------------------------
+
+def build_vosk_recognizer(model_path: str):
+    """Create a Vosk recognizer for streaming keyword detection."""
+    from vosk import Model, KaldiRecognizer, SetLogLevel
+    SetLogLevel(-1)  # suppress Vosk internal logs
+    model = Model(model_path)
+    rec = KaldiRecognizer(model, SAMPLE_RATE)
+    rec.SetWords(True)
+    return rec
+
+
+# ---------------------------------------------------------------------------
+# Wake engine: Porcupine (fallback)
+# ---------------------------------------------------------------------------
+
+def build_porcupine(access_key: str, keywords: list = None, sensitivity: float = 0.8):
+    """Create a Porcupine wake word engine for the 'jarvis' keyword."""
+    import pvporcupine
+    keywords = keywords or ["jarvis"]
+    porcupine = pvporcupine.create(
+        access_key=access_key,
+        keywords=keywords,
+        sensitivities=[sensitivity] * len(keywords),
     )
-    model_name = mp.stem
-    if model_name not in m.models:
-        model_name = list(m.models.keys())[0]
-    return m, model_name
+    return porcupine
 
 
-def open_mic(device=None):
+# ---------------------------------------------------------------------------
+# Speaker verification: Eagle
+# ---------------------------------------------------------------------------
+
+def load_eagle_recognizer(access_key: str, profile_path: str = EAGLE_PROFILE_PATH):
+    """Load Eagle speaker recognizer from saved profile. Returns None if no profile exists."""
+    import pveagle
+    if not os.path.isfile(profile_path):
+        logger.warning(f"No Eagle voice profile at {profile_path} -- speaker verification disabled")
+        return None
+    with open(profile_path, "rb") as f:
+        profile_bytes = f.read()
+    profile = pveagle.EagleProfile.from_bytes(profile_bytes)
+    recognizer = pveagle.create_recognizer(access_key=access_key, speaker_profiles=[profile])
+    logger.info(f"Eagle speaker verification loaded (profile: {profile_path}, frame_length: {recognizer.frame_length})")
+    return recognizer
+
+
+def verify_speaker(eagle_recognizer, frames: list, threshold: float = EAGLE_SCORE_THRESHOLD) -> tuple:
+    """Run Eagle speaker verification on recorded audio frames.
+
+    Returns (passed: bool, avg_score: float).
+    Concatenates all frames and re-chunks to Eagle's required frame_length.
+    """
+    if eagle_recognizer is None:
+        return True, 1.0  # no profile → skip verification
+
+    eagle_frame_len = eagle_recognizer.frame_length
+    # Concatenate all recorded PCM into one array
+    all_pcm = np.concatenate(frames)
+    scores = []
+
+    eagle_recognizer.reset()
+    # Process in Eagle-sized chunks
+    offset = 0
+    while offset + eagle_frame_len <= len(all_pcm):
+        chunk = all_pcm[offset:offset + eagle_frame_len]
+        s = eagle_recognizer.process(chunk)
+        scores.extend(s)
+        offset += eagle_frame_len
+
+    if not scores:
+        logger.warning("Eagle: no scores produced (audio too short for verification)")
+        return True, 0.0  # too short to verify, allow through
+
+    avg_score = sum(scores) / len(scores)
+    passed = avg_score >= threshold
+    return passed, avg_score
+
+
+# ---------------------------------------------------------------------------
+# Mic / audio
+# ---------------------------------------------------------------------------
+
+def open_mic(device=None, chunk_samples=VOSK_CHUNK_SAMPLES):
     import pyaudio
     pa = pyaudio.PyAudio()
     device_index = None
@@ -79,13 +152,13 @@ def open_mic(device=None):
     stream = pa.open(
         format=pyaudio.paInt16, channels=1, rate=SAMPLE_RATE,
         input=True, input_device_index=device_index,
-        frames_per_buffer=CHUNK_SAMPLES,
+        frames_per_buffer=chunk_samples,
     )
     return pa, stream
 
 
-def read_chunk(stream) -> np.ndarray:
-    return np.frombuffer(stream.read(CHUNK_SAMPLES, exception_on_overflow=False), dtype=np.int16)
+def read_chunk(stream, chunk_samples=VOSK_CHUNK_SAMPLES) -> np.ndarray:
+    return np.frombuffer(stream.read(chunk_samples, exception_on_overflow=False), dtype=np.int16)
 
 
 def post_wake_event(base_url: str, score: float, username: str, room: str):
@@ -99,7 +172,7 @@ def post_wake_event(base_url: str, score: float, username: str, room: str):
                              headers={"Content-Type": "application/json"}, method="POST")
     try:
         with urlrequest.urlopen(req, timeout=5, context=_ssl_ctx) as resp:
-            logger.info(f"POST /api/listener/wake → {resp.status}  {resp.read().decode()}")
+            logger.info(f"POST /api/listener/wake -> {resp.status}  {resp.read().decode()}")
     except Exception as e:
         logger.error(f"POST /api/listener/wake failed: {e}")
 
@@ -115,7 +188,7 @@ def play_chime():
 
 
 # ---------------------------------------------------------------------------
-# Audio helpers (remote mode)
+# Audio helpers
 # ---------------------------------------------------------------------------
 
 def rms(pcm: np.ndarray) -> float:
@@ -199,36 +272,6 @@ def send_to_jarvis(text: str, room: str) -> str:
         return ""
 
 
-def tts_play_response(text: str):
-    """Speak response text via TTS service + afplay. Non-blocking."""
-    tts_url = os.getenv("TTS_SERVICE_URL", "http://127.0.0.1:5090")
-    payload = json.dumps({"text": text, "voice": "bm_daniel", "speed": 1.0}).encode()
-    try:
-        req = urlrequest.Request(
-            f"{tts_url}/tts/speak/file",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urlrequest.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode())
-        if not result.get("ok"):
-            logger.warning(f"TTS generation failed: {result}")
-            return
-        filepath = result.get("path", "")
-        duration = result.get("duration", 0)
-        gen_time = result.get("generation_time", 0)
-        logger.info(f"TTS ready: {duration:.1f}s audio (gen {gen_time:.3f}s)")
-        if filepath and os.path.isfile(filepath):
-            subprocess.Popen(
-                ["afplay", filepath],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-    except Exception as e:
-        logger.warning(f"TTS playback failed: {e}")
-
-
 def fire_chime(kukuibot_url: str):
     """Fire-and-forget: play wake chime via KukuiBot server, local afplay fallback."""
     def _do():
@@ -251,6 +294,25 @@ def fire_chime(kukuibot_url: str):
 # Config polling
 # ---------------------------------------------------------------------------
 
+def _parse_triggers(triggers_str: str) -> dict:
+    """Parse comma-separated trigger words into a trigger dict.
+
+    'jarvis' is handled specially as the wake word.
+    Other words map to control types: lights/light -> light_control, shades/shade/blinds -> shade_control.
+    """
+    triggers = {}
+    _type_map = {
+        "lights": "light_control", "light": "light_control",
+        "shades": "shade_control", "shade": "shade_control", "blinds": "shade_control",
+    }
+    for word in triggers_str.lower().split(","):
+        word = word.strip()
+        if not word or word == "jarvis":
+            continue
+        triggers[word] = _type_map.get(word, "direct_action")
+    return triggers
+
+
 def fetch_listener_config(kukuibot_url: str) -> dict:
     """Fetch listener config from KukuiBot /api/config."""
     try:
@@ -258,15 +320,21 @@ def fetch_listener_config(kukuibot_url: str) -> dict:
         req = urlrequest.Request(url, method="GET")
         with urlrequest.urlopen(req, timeout=5, context=_ssl_ctx) as resp:
             data = json.loads(resp.read().decode())
+            triggers_str = data.get("listener_wake_triggers", "jarvis,lights,light,shades,shade,blinds")
+            eagle_enabled_raw = data.get("listener_eagle_enabled", True)
+            eagle_enabled = eagle_enabled_raw not in (False, "0", "false", 0)
             return {
                 "mode": data.get("listener_mode", "local"),
                 "device": data.get("listener_device", ""),
-                "threshold": _safe_float(data.get("listener_threshold"), 0.5),
                 "cooldown": _safe_float(data.get("listener_cooldown"), COOLDOWN_SECS),
                 "silence_threshold": _safe_float(data.get("listener_silence_threshold"), SILENCE_THRESHOLD),
                 "silence_duration": _safe_float(data.get("listener_silence_duration"), SILENCE_DURATION),
                 "max_record": _safe_float(data.get("listener_max_record"), MAX_RECORD_SECS),
                 "min_record": _safe_float(data.get("listener_min_record"), MIN_RECORD_SECS),
+                "eagle_enabled": eagle_enabled,
+                "eagle_threshold": _safe_float(data.get("listener_eagle_threshold"), EAGLE_SCORE_THRESHOLD),
+                "triggers": _parse_triggers(triggers_str),
+                "triggers_str": triggers_str,
             }
     except Exception as e:
         logger.warning(f"Config fetch failed: {e}")
@@ -296,16 +364,87 @@ def start_config_refresh_thread(kukuibot_url, config_state, interval=30.0):
     return t
 
 
+def extract_command(text: str) -> str:
+    """Extract the command portion after 'jarvis' from a transcript.
+
+    Examples:
+        'jarvis turn on the lights' -> 'turn on the lights'
+        'hey jarvis what time is it' -> 'what time is it'
+        'jarvis' -> ''
+    """
+    lower = text.lower()
+    # Find the last occurrence of 'jarvis' and take everything after it
+    idx = lower.rfind("jarvis")
+    if idx < 0:
+        return text.strip()
+    after = text[idx + len("jarvis"):].strip()
+    # Strip leading punctuation/comma
+    after = after.lstrip(",.!? ")
+    return after
+
+
+# Default direct-action triggers (overridden by server config)
+DIRECT_TRIGGERS = {
+    "lights": "light_control",
+    "light": "light_control",
+    "shades": "shade_control",
+    "shade": "shade_control",
+    "blinds": "shade_control",
+}
+
+
+def detect_trigger(text: str, triggers: dict = None) -> tuple:
+    """Detect wake word or direct-action trigger in transcript.
+
+    Args:
+        text: Vosk transcript text
+        triggers: Dict of trigger_word -> control_type (from server config).
+                  Falls back to DIRECT_TRIGGERS if None.
+
+    Returns (trigger_type, command):
+        ('jarvis', 'turn on the lights')     — full assistant command
+        ('jarvis', '')                        — wake word only, needs follow-up
+        ('direct', 'lights fifty percent')    — direct action, full utterance is the command
+        (None, '')                            — no trigger found
+    """
+    lower = text.lower()
+    active_triggers = triggers if triggers is not None else DIRECT_TRIGGERS
+
+    # Check for "jarvis" first (takes priority)
+    if "jarvis" in lower:
+        return "jarvis", extract_command(text)
+
+    # Check for direct-action triggers
+    words = lower.split()
+    for word in words:
+        if word in active_triggers:
+            # The entire utterance IS the command (e.g., "lights fifty percent")
+            return "direct", text.strip()
+
+    return None, ""
+
+
 def main():
     parser = argparse.ArgumentParser(description="KukuiBot wake word listener")
-    parser.add_argument("--threshold", type=float, default=0.5, help="Wake word detection threshold")
+    parser.add_argument("--threshold", type=float, default=0.5,
+                        help="Wake word detection threshold (kept for config compat)")
     parser.add_argument("--device", default=None, help="Audio input device index or name")
     parser.add_argument("--room", default="Office", help="Room name sent in wake event")
     parser.add_argument("--username", default="", help="Username sent in wake event")
-    parser.add_argument("--model", default="/Users/jarvis/.jarvis/data/wakeword-models/hey_jarvis_v0.1.onnx",
-                        help="Path to wake word model")
+    parser.add_argument("--model", default=None, help="[DEPRECATED] ignored")
+    parser.add_argument("--access-key",
+                        default=os.getenv("PICOVOICE_ACCESS_KEY", "c7cXxfOZp42ls99y7tlBYNfwnIHS9yt9J/nyZAq5xaRz9PSzLm/JtQ=="),
+                        help="Picovoice access key for Eagle speaker verification")
+    parser.add_argument("--eagle-profile", default=EAGLE_PROFILE_PATH,
+                        help="Path to Eagle speaker profile for voice verification")
+    parser.add_argument("--eagle-threshold", type=float, default=EAGLE_SCORE_THRESHOLD,
+                        help="Eagle speaker verification threshold (0.0-1.0)")
+    parser.add_argument("--vosk-model", default=VOSK_MODEL_PATH,
+                        help="Path to Vosk model directory")
     parser.add_argument("--kukuibot-url", default=None,
                         help="KukuiBot base URL (default: KUKUIBOT_URL env or https://localhost:7000)")
+    # Legacy args kept for plist compatibility
+    parser.add_argument("--porcupine-sensitivity", type=float, default=0.8, help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     kukuibot_url = (args.kukuibot_url or os.getenv("KUKUIBOT_URL", "https://localhost:7000")).rstrip("/")
@@ -317,21 +456,25 @@ def main():
         device = initial_cfg["device"]
         logger.info(f"Using mic from config: device={device}")
 
-    # Apply tuning from server config (CLI --threshold overrides if explicitly set)
-    threshold = args.threshold
-    if threshold == 0.5 and "threshold" in initial_cfg:
-        threshold = initial_cfg["threshold"]
+    # Apply tuning from server config
     cooldown = initial_cfg.get("cooldown", COOLDOWN_SECS)
     silence_thresh = initial_cfg.get("silence_threshold", SILENCE_THRESHOLD)
     silence_dur = initial_cfg.get("silence_duration", SILENCE_DURATION)
     max_record = initial_cfg.get("max_record", MAX_RECORD_SECS)
     min_record = initial_cfg.get("min_record", MIN_RECORD_SECS)
 
-    model, label = build_model(args.model)
-    logger.info(f"Wake word model loaded: {label} (threshold={threshold})")
+    # Initialize Vosk streaming recognizer
+    vosk_rec = build_vosk_recognizer(args.vosk_model)
+    logger.info(f"Vosk STT loaded: model={args.vosk_model}")
 
-    pa, stream = open_mic(device)
-    logger.info(f"Microphone open (rate={SAMPLE_RATE}, chunk={CHUNK_SAMPLES}, device={device or 'system default'})")
+    # Initialize Eagle speaker verification (optional)
+    eagle_recognizer = load_eagle_recognizer(args.access_key, args.eagle_profile)
+    # Eagle threshold: prefer config, fall back to CLI arg
+    eagle_threshold = initial_cfg.get("eagle_threshold", args.eagle_threshold)
+    eagle_enabled = initial_cfg.get("eagle_enabled", True) if eagle_recognizer else False
+
+    pa, stream = open_mic(device, VOSK_CHUNK_SAMPLES)
+    logger.info(f"Microphone open (rate={SAMPLE_RATE}, chunk={VOSK_CHUNK_SAMPLES}, device={device or 'system default'})")
 
     stop = False
     def _stop(sig, frame):
@@ -343,124 +486,190 @@ def main():
     last_wake_time = 0.0
     config_state = {
         "mode": initial_cfg.get("mode", "local"),
-        "threshold": threshold,
         "cooldown": cooldown,
         "silence_threshold": silence_thresh,
         "silence_duration": silence_dur,
         "max_record": max_record,
         "min_record": min_record,
+        "eagle_enabled": eagle_enabled,
+        "eagle_threshold": eagle_threshold,
+        "triggers": initial_cfg.get("triggers", DIRECT_TRIGGERS),
     }
     start_config_refresh_thread(kukuibot_url, config_state)
-    logger.info(f"Listening for 'Hey Jarvis' — room={args.room}, mode={config_state['mode']}, device={device or 'system default'}, url={kukuibot_url}")
-    logger.info(f"Tuning: threshold={threshold}, cooldown={cooldown}s, silence={silence_thresh}RMS/{silence_dur}s, record={min_record}-{max_record}s")
+    triggers_list = list(config_state.get("triggers", {}).keys())
+    eagle_status = f"eagle={'ON' if eagle_recognizer and eagle_enabled else 'OFF'} (threshold={eagle_threshold})"
+    logger.info(f"Listening for 'Jarvis' via Vosk STT -- room={args.room}, mode={config_state['mode']}, {eagle_status}, device={device or 'system default'}, url={kukuibot_url}")
+    logger.info(f"Triggers: jarvis + {triggers_list}")
+    logger.info(f"Tuning: cooldown={cooldown}s, silence={silence_thresh}RMS/{silence_dur}s, record={min_record}-{max_record}s")
 
-    pre_buffer_chunks = int(PRE_BUFFER_SECS * SAMPLE_RATE / CHUNK_SAMPLES)
+    # Audio ring buffer for Eagle verification (keeps last N seconds)
+    pre_buffer_chunks = int(PRE_BUFFER_SECS * SAMPLE_RATE / VOSK_CHUNK_SAMPLES)
     audio_ring = deque(maxlen=pre_buffer_chunks)
 
     while not stop:
         try:
-            pcm = read_chunk(stream)
+            pcm = read_chunk(stream, VOSK_CHUNK_SAMPLES)
         except Exception as e:
             logger.error(f"Audio read error: {e}")
             time.sleep(0.5)
             continue
 
         audio_ring.append(pcm)
-        pred = model.predict(pcm)
-        score = float(pred.get(label, 0.0))
 
-        now = time.time()
-        if now - last_wake_time < cooldown:
-            continue
-        if score < threshold:
-            continue
+        # Feed audio to Vosk
+        raw_bytes = pcm.tobytes()
+        if vosk_rec.AcceptWaveform(raw_bytes):
+            # Final result for this utterance
+            result = json.loads(vosk_rec.Result())
+            text = result.get("text", "").strip()
 
-        # --- Wake word detected! ---
-        last_wake_time = time.time()
-        logger.info(f"WAKE DETECTED (score={score:.3f})")
-
-        cached_mode = config_state.get("mode", "local")
-        threshold = config_state.get("threshold", threshold)
-        cooldown = config_state.get("cooldown", cooldown)
-        silence_thresh = config_state.get("silence_threshold", silence_thresh)
-        silence_dur = config_state.get("silence_duration", silence_dur)
-        max_record = config_state.get("max_record", max_record)
-        min_record = config_state.get("min_record", min_record)
-
-        if cached_mode == "remote":
-            # --- Remote mode: record → transcribe → Jarvis chat → Sonos TTS ---
-            fire_chime(kukuibot_url)
-
-            # Record speech until silence or max duration
-            frames = list(audio_ring)  # prepend pre-buffered audio
-            silence_chunks = 0
-            silence_limit = int(silence_dur * SAMPLE_RATE / CHUNK_SAMPLES)
-            max_chunks = int(max_record * SAMPLE_RATE / CHUNK_SAMPLES)
-            min_chunks = int(min_record * SAMPLE_RATE / CHUNK_SAMPLES)
-            recorded = 0
-
-            logger.info("Recording speech...")
-            while not stop and recorded < max_chunks:
-                try:
-                    pcm = read_chunk(stream)
-                except Exception:
-                    break
-                frames.append(pcm)
-                recorded += 1
-
-                amp = rms(pcm)
-                if amp < silence_thresh:
-                    silence_chunks += 1
-                else:
-                    silence_chunks = 0
-
-                if silence_chunks >= silence_limit and recorded >= min_chunks:
-                    logger.info(f"Silence detected after {recorded} chunks (rms={amp:.0f})")
-                    break
-
-            duration = recorded * CHUNK_SAMPLES / SAMPLE_RATE
-            logger.info(f"Recorded {duration:.1f}s of speech ({recorded} chunks)")
-
-            if recorded < min_chunks:
-                logger.info("Too short — ignoring")
-                last_wake_time = time.time()
+            if not text:
                 continue
 
-            # Convert to WAV
-            wav_bytes = pcm_to_wav_bytes(frames)
-            logger.info(f"WAV: {len(wav_bytes)} bytes")
-
-            # Transcribe via Jarvis backend Whisper
-            logger.info("Transcribing...")
-            transcript = transcribe_audio(wav_bytes)
-
-            if not transcript:
-                logger.info("No speech detected — resuming listening")
-                last_wake_time = time.time()
+            now = time.time()
+            if now - last_wake_time < config_state.get("cooldown", cooldown):
                 continue
 
-            logger.info(f"Transcript: '{transcript}'")
+            # Check for wake word or direct-action trigger
+            trigger_type, command = detect_trigger(text, config_state.get("triggers"))
+            if trigger_type is None:
+                continue
 
-            # Send to Jarvis chat
-            logger.info(f"Sending to Jarvis (room={args.room})...")
-            response = send_to_jarvis(transcript, args.room)
-            if response:
-                logger.info(f"Jarvis: {response[:100]}")
-                # TTS is handled by the Jarvis backend → Sonos speaker
-            else:
-                logger.info("No response from Jarvis")
-
-            # Extend cooldown after full interaction (TTS may be playing)
+            # --- Trigger detected! ---
             last_wake_time = time.time()
+            logger.info(f"WAKE DETECTED [{trigger_type}] via Vosk: '{text}' -> command: '{command}'")
+
+            cached_mode = config_state.get("mode", "local")
+            cooldown = config_state.get("cooldown", cooldown)
+
+            if cached_mode == "remote":
+                # --- Remote mode: verify speaker -> re-transcribe via Qwen3-ASR -> send to Jarvis ---
+                fire_chime(kukuibot_url)
+
+                # Speaker verification on the audio ring buffer
+                pre_frames = list(audio_ring)
+                cur_eagle_enabled = config_state.get("eagle_enabled", eagle_enabled)
+                cur_eagle_threshold = config_state.get("eagle_threshold", eagle_threshold)
+                if eagle_recognizer and cur_eagle_enabled:
+                    passed, avg_score = verify_speaker(eagle_recognizer, pre_frames, cur_eagle_threshold)
+                    if not passed:
+                        logger.info(f"Speaker verification FAILED (score {avg_score:.3f} < {cur_eagle_threshold}) -- ignoring")
+                        last_wake_time = time.time()
+                        continue
+                    logger.info(f"Speaker verified (score {avg_score:.3f})")
+
+                if command:
+                    # Vosk heard a command — re-transcribe the audio buffer via Qwen3-ASR for accuracy
+                    wav_bytes = pcm_to_wav_bytes(pre_frames)
+                    logger.info(f"Re-transcribing {len(pre_frames)} frames via Qwen3-ASR...")
+                    accurate_text = transcribe_audio(wav_bytes)
+                    if accurate_text:
+                        if trigger_type == "direct":
+                            # Direct trigger — use the full Qwen3-ASR transcript as the command
+                            logger.info(f"Qwen3-ASR: '{accurate_text}'")
+                            command = accurate_text.strip()
+                        else:
+                            # Jarvis trigger — extract command portion after "jarvis"
+                            accurate_cmd = extract_command(accurate_text)
+                            logger.info(f"Qwen3-ASR: '{accurate_text}' -> command: '{accurate_cmd}'")
+                            if accurate_cmd:
+                                command = accurate_cmd
+                            elif "jarvis" in accurate_text.lower():
+                                command = ""
+                    else:
+                        logger.info("Qwen3-ASR returned empty — using Vosk transcript")
+
+                if command:
+                    logger.info(f"Sending to Jarvis (room={args.room}): '{command}'")
+                    response = send_to_jarvis(command, args.room)
+                    if response:
+                        logger.info(f"Jarvis: {response[:100]}")
+                    else:
+                        logger.info("No response from Jarvis")
+                else:
+                    # Just "Jarvis" with no command — record follow-up speech
+                    logger.info("Wake word only, recording follow-up...")
+                    silence_thresh_val = config_state.get("silence_threshold", silence_thresh)
+                    silence_dur_val = config_state.get("silence_duration", silence_dur)
+                    max_record_val = config_state.get("max_record", max_record)
+                    min_record_val = config_state.get("min_record", min_record)
+
+                    frames = list(audio_ring)
+                    silence_chunks = 0
+                    silence_limit = int(silence_dur_val * SAMPLE_RATE / VOSK_CHUNK_SAMPLES)
+                    max_chunks = int(max_record_val * SAMPLE_RATE / VOSK_CHUNK_SAMPLES)
+                    min_chunks = int(min_record_val * SAMPLE_RATE / VOSK_CHUNK_SAMPLES)
+                    recorded = 0
+
+                    logger.info("Recording speech...")
+                    while not stop and recorded < max_chunks:
+                        try:
+                            rec_pcm = read_chunk(stream, VOSK_CHUNK_SAMPLES)
+                        except Exception:
+                            break
+                        frames.append(rec_pcm)
+                        recorded += 1
+
+                        amp = rms(rec_pcm)
+                        if amp < silence_thresh_val:
+                            silence_chunks += 1
+                        else:
+                            silence_chunks = 0
+
+                        if silence_chunks >= silence_limit and recorded >= min_chunks:
+                            logger.info(f"Silence detected after {recorded} chunks (rms={amp:.0f})")
+                            break
+
+                    duration = recorded * VOSK_CHUNK_SAMPLES / SAMPLE_RATE
+                    logger.info(f"Recorded {duration:.1f}s of speech ({recorded} chunks)")
+
+                    if recorded < min_chunks:
+                        logger.info("Too short -- ignoring")
+                        last_wake_time = time.time()
+                        continue
+
+                    # Transcribe follow-up via Whisper
+                    wav_bytes = pcm_to_wav_bytes(frames)
+                    logger.info("Transcribing follow-up...")
+                    transcript = transcribe_audio(wav_bytes)
+
+                    if not transcript:
+                        logger.info("No speech detected -- resuming listening")
+                        last_wake_time = time.time()
+                        continue
+
+                    logger.info(f"Transcript: '{transcript}'")
+                    logger.info(f"Sending to Jarvis (room={args.room})...")
+                    response = send_to_jarvis(transcript, args.room)
+                    if response:
+                        logger.info(f"Jarvis: {response[:100]}")
+                    else:
+                        logger.info("No response from Jarvis")
+
+                last_wake_time = time.time()
+            else:
+                # --- Local mode: POST wake event -> SSE -> browser STT ---
+                if eagle_recognizer:
+                    pre_frames = list(audio_ring)
+                    passed, avg_score = verify_speaker(eagle_recognizer, pre_frames, eagle_threshold)
+                    if not passed:
+                        logger.info(f"Speaker verification FAILED (score {avg_score:.3f} < {eagle_threshold}) -- ignoring")
+                        last_wake_time = time.time()
+                        continue
+                    logger.info(f"Speaker verified (score {avg_score:.3f})")
+
+                threading.Thread(target=play_chime, daemon=True).start()
+                threading.Thread(target=post_wake_event, args=(kukuibot_url, 1.0, args.username, args.room), daemon=True).start()
         else:
-            # --- Local mode: POST wake event → SSE → browser STT ---
-            threading.Thread(target=play_chime, daemon=True).start()
-            threading.Thread(target=post_wake_event, args=(kukuibot_url, score, args.username, args.room), daemon=True).start()
+            # Partial result — we can optionally log it for debugging
+            pass
 
     logger.info("Shutting down...")
     stream.stop_stream()
     stream.close()
     pa.terminate()
+    if eagle_recognizer:
+        eagle_recognizer.delete()
     return 0
 
 

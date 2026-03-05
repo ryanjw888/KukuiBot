@@ -368,6 +368,11 @@ _app_state.runtime_config = {
     "listener_silence_duration": get_config("listener_silence_duration", "1.2"),
     "listener_max_record": get_config("listener_max_record", "15"),
     "listener_min_record": get_config("listener_min_record", "1.0"),
+    # Voice auth + wake triggers
+    "listener_eagle_enabled": get_config("listener_eagle_enabled", "1") == "1",
+    "listener_eagle_threshold": get_config("listener_eagle_threshold", "0.35"),
+    "listener_wake_triggers": get_config("listener_wake_triggers", "jarvis,lights,light,shades,shade,blinds"),
+    "listener_jarvis_url": get_config("listener_jarvis_url", "http://127.0.0.1:5080"),
 }
 # Module-level aliases — existing code (and lazy imports from routes) can still use these.
 # All point to the same dict/list objects on _app_state, so mutations are shared.
@@ -2994,8 +2999,10 @@ async def api_listener_restart(req: Request):
         room = cfg.get("listener_room", "") or "Office"
         username = cfg.get("listener_username", "")
 
+        # Use the jarvis-voice venv Python (has pvporcupine, pveagle, pyaudio)
+        venv_python = "/Users/jarvis/jarvis-voice/.venv/bin/python"
         cmd = [
-            sys.executable,
+            venv_python,
             str(Path(__file__).parent / "tools" / "wake-listener.py"),
             "--threshold", str(threshold),
             "--room", room,
@@ -3005,12 +3012,19 @@ async def api_listener_restart(req: Request):
         if device:
             cmd += ["--device", device]
 
+        # Pass Picovoice access key via environment variable
+        env = os.environ.copy()
+        picovoice_key = (get_config("picovoice.access_key", "") or "").strip()
+        if picovoice_key:
+            env["PICOVOICE_ACCESS_KEY"] = picovoice_key
+
         try:
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
+                env=env,
             )
             return {"ok": True, "pid": proc.pid}
         except Exception as e:
@@ -3018,6 +3032,206 @@ async def api_listener_restart(req: Request):
 
     result = await loop.run_in_executor(None, _restart)
     return result
+
+
+@app.get("/api/listener/eagle/status")
+async def api_eagle_status():
+    """Check Eagle voice profile status."""
+    profile_path = os.path.expanduser("~/.jarvis/data/eagle_profile.bin")
+    exists = os.path.isfile(profile_path)
+    size = os.path.getsize(profile_path) if exists else 0
+    mtime = os.path.getmtime(profile_path) if exists else 0
+    return {
+        "enrolled": exists and size > 0,
+        "profile_path": profile_path,
+        "profile_size": size,
+        "enrolled_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime)) if mtime else None,
+        "eagle_enabled": _runtime_config.get("listener_eagle_enabled", True),
+        "eagle_threshold": _runtime_config.get("listener_eagle_threshold", "0.35"),
+    }
+
+
+@app.post("/api/listener/eagle/enroll")
+async def api_eagle_enroll(req: Request):
+    """Start Eagle voice enrollment process (runs enroll-voice.py in background)."""
+    if not _is_admin(req):
+        return JSONResponse({"ok": False, "error": "Admin only"}, status_code=403)
+
+    body = await req.json() if req.headers.get("content-type", "").startswith("application/json") else {}
+    duration = body.get("duration", 20)
+
+    import subprocess
+    venv_python = "/Users/jarvis/jarvis-voice/.venv/bin/python"
+    enroll_script = str(Path(__file__).parent / "tools" / "enroll-voice.py")
+    log_path = "/tmp/kukuibot-enroll.log"
+
+    # Run enrollment in background
+    try:
+        env = os.environ.copy()
+        picovoice_key = (get_config("picovoice.access_key", "") or "").strip()
+        if not picovoice_key:
+            picovoice_key = "c7cXxfOZp42ls99y7tlBYNfwnIHS9yt9J/nyZAq5xaRz9PSzLm/JtQ=="
+        env["PICOVOICE_ACCESS_KEY"] = picovoice_key
+
+        with open(log_path, "w") as logf:
+            proc = subprocess.Popen(
+                [venv_python, enroll_script, "--duration", str(duration)],
+                stdout=logf, stderr=logf,
+                start_new_session=True, env=env,
+            )
+        return {"ok": True, "pid": proc.pid, "duration": duration, "log": log_path}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/listener/eagle/enroll/log")
+async def api_eagle_enroll_log():
+    """Get enrollment log output."""
+    log_path = "/tmp/kukuibot-enroll.log"
+    try:
+        with open(log_path) as f:
+            return {"ok": True, "log": f.read()}
+    except FileNotFoundError:
+        return {"ok": True, "log": ""}
+
+
+@app.get("/api/listener/setup-script")
+async def api_listener_setup_script(req: Request):
+    """Generate a setup script for deploying the wake-listener on a remote LAN machine."""
+    if not _is_admin(req):
+        return JSONResponse({"ok": False, "error": "Admin only"}, status_code=403)
+    from starlette.responses import PlainTextResponse
+
+    cfg = _runtime_config
+    kukuibot_host = req.headers.get("host", "localhost:7000").split(":")[0]
+    kukuibot_port = req.headers.get("host", "localhost:7000").split(":")[-1] if ":" in req.headers.get("host", "") else "7000"
+    jarvis_url = cfg.get("listener_jarvis_url", "http://127.0.0.1:5080")
+    eagle_threshold = cfg.get("listener_eagle_threshold", "0.35")
+    triggers = cfg.get("listener_wake_triggers", "jarvis,lights,shades")
+    room = cfg.get("listener_room", "Office")
+
+    script = f"""#!/bin/bash
+# KukuiBot Wake Listener — Remote Setup Script
+# Generated {time.strftime('%Y-%m-%d %H:%M:%S')}
+# Run this on a Mac on the same LAN as your KukuiBot server.
+
+set -e
+
+INSTALL_DIR="$HOME/.kukuibot-listener"
+VENV_DIR="$INSTALL_DIR/.venv"
+KUKUIBOT_URL="https://{kukuibot_host}:{kukuibot_port}"
+JARVIS_URL="{jarvis_url}"
+EAGLE_THRESHOLD="{eagle_threshold}"
+ROOM="{room}"
+
+echo "=== KukuiBot Wake Listener Setup ==="
+echo "KukuiBot: $KUKUIBOT_URL"
+echo "Jarvis:   $JARVIS_URL"
+echo "Room:     $ROOM"
+echo ""
+
+# Create install directory
+mkdir -p "$INSTALL_DIR/tools" "$INSTALL_DIR/models"
+
+# Download wake-listener and enrollment scripts from KukuiBot
+echo "Downloading scripts..."
+curl -sk "$KUKUIBOT_URL/api/listener/download/wake-listener.py" -o "$INSTALL_DIR/tools/wake-listener.py"
+curl -sk "$KUKUIBOT_URL/api/listener/download/enroll-voice.py" -o "$INSTALL_DIR/tools/enroll-voice.py"
+
+# Create Python venv
+echo "Creating Python venv..."
+python3 -m venv "$VENV_DIR"
+"$VENV_DIR/bin/pip" install -q --upgrade pip
+"$VENV_DIR/bin/pip" install -q vosk pveagle numpy pyaudio
+
+# Download Vosk model
+if [ ! -d "$INSTALL_DIR/models/vosk-model-small-en-us-0.15" ]; then
+    echo "Downloading Vosk model (~40MB)..."
+    cd "$INSTALL_DIR/models"
+    curl -LO https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+    unzip -q vosk-model-small-en-us-0.15.zip
+    rm vosk-model-small-en-us-0.15.zip
+    cd -
+fi
+
+# Create launchd plist for auto-start
+PLIST_PATH="$HOME/Library/LaunchAgents/com.kukuibot.wake-listener.plist"
+cat > "$PLIST_PATH" << 'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.kukuibot.wake-listener</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>VENV_PYTHON</string>
+        <string>LISTENER_SCRIPT</string>
+        <string>--room</string>
+        <string>ROOM_NAME</string>
+        <string>--eagle-threshold</string>
+        <string>EAGLE_THRESH</string>
+        <string>--kukuibot-url</string>
+        <string>KUKUIBOT_ENDPOINT</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>INSTALL_PATH</string>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/kukuibot-wake-listener.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/kukuibot-wake-listener.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+        <key>KUKUIBOT_URL</key>
+        <string>KUKUIBOT_ENDPOINT</string>
+        <key>JARVIS_BACKEND_URL</key>
+        <string>JARVIS_ENDPOINT</string>
+    </dict>
+</dict>
+</plist>
+PLIST
+
+# Replace placeholders
+sed -i '' "s|VENV_PYTHON|$VENV_DIR/bin/python|g" "$PLIST_PATH"
+sed -i '' "s|LISTENER_SCRIPT|$INSTALL_DIR/tools/wake-listener.py|g" "$PLIST_PATH"
+sed -i '' "s|ROOM_NAME|$ROOM|g" "$PLIST_PATH"
+sed -i '' "s|EAGLE_THRESH|$EAGLE_THRESHOLD|g" "$PLIST_PATH"
+sed -i '' "s|KUKUIBOT_ENDPOINT|$KUKUIBOT_URL|g" "$PLIST_PATH"
+sed -i '' "s|JARVIS_ENDPOINT|$JARVIS_URL|g" "$PLIST_PATH"
+sed -i '' "s|INSTALL_PATH|$INSTALL_DIR|g" "$PLIST_PATH"
+
+echo ""
+echo "=== Setup Complete ==="
+echo "Install dir: $INSTALL_DIR"
+echo "Plist:       $PLIST_PATH"
+echo ""
+echo "Next steps:"
+echo "  1. Enroll your voice:  $VENV_DIR/bin/python $INSTALL_DIR/tools/enroll-voice.py"
+echo "  2. Start the listener: launchctl bootstrap gui/$(id -u) $PLIST_PATH"
+echo "  3. Check logs:         tail -f /tmp/kukuibot-wake-listener.log"
+echo ""
+echo "To stop:  launchctl bootout gui/$(id -u)/com.kukuibot.wake-listener"
+echo "To start: launchctl bootstrap gui/$(id -u) $PLIST_PATH"
+"""
+    return PlainTextResponse(script, media_type="text/x-shellscript",
+                             headers={"Content-Disposition": "attachment; filename=setup-listener.sh"})
+
+
+@app.get("/api/listener/download/{filename}")
+async def api_listener_download(filename: str, req: Request):
+    """Download wake-listener or enroll-voice scripts for remote deployment."""
+    allowed = {"wake-listener.py", "enroll-voice.py"}
+    if filename not in allowed:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    from starlette.responses import FileResponse
+    fpath = Path(__file__).parent / "tools" / filename
+    if not fpath.is_file():
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    return FileResponse(str(fpath), filename=filename)
 
 
 # --- TTS Proxy ---
