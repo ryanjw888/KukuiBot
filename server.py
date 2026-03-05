@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import AsyncGenerator, Any
 
 import httpx
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import StreamingResponse
@@ -3265,7 +3265,7 @@ async def api_listener_restart(req: Request):
         room = cfg.get("listener_room", "") or "Office"
         username = cfg.get("listener_username", "")
 
-        # Use the jarvis-voice venv Python (has pvporcupine, pveagle, pyaudio)
+        # Use the jarvis-voice venv Python (has vosk, pyaudio, speechbrain, torch)
         venv_python = "/Users/jarvis/jarvis-voice/.venv/bin/python"
         cmd = [
             venv_python,
@@ -3278,11 +3278,7 @@ async def api_listener_restart(req: Request):
         if device:
             cmd += ["--device", device]
 
-        # Pass Picovoice access key via environment variable
         env = os.environ.copy()
-        picovoice_key = (get_config("picovoice.access_key", "") or "").strip()
-        if picovoice_key:
-            env["PICOVOICE_ACCESS_KEY"] = picovoice_key
 
         try:
             log_fh = open("/tmp/kukuibot-wake-listener.log", "a")
@@ -3303,31 +3299,20 @@ async def api_listener_restart(req: Request):
 
 @app.get("/api/listener/eagle/status")
 async def api_eagle_status():
-    """Check Eagle voice profile status — lists all enrolled speakers."""
-    import glob
+    """Check speaker verification profile status — lists all enrolled speakers."""
+    from speaker_verify import get_enrolled_speakers
+
+    speakers = get_enrolled_speakers()
+
+    # Also check legacy Eagle profiles for migration notice
+    import glob as globmod
     profile_dir = os.path.expanduser("~/.jarvis/data")
-    pattern = os.path.join(profile_dir, "eagle_profile_*.bin")
-    profile_files = sorted(glob.glob(pattern))
-
-    # Also check legacy single profile
+    eagle_files = globmod.glob(os.path.join(profile_dir, "eagle_profile_*.bin"))
     legacy_path = os.path.join(profile_dir, "eagle_profile.bin")
-    has_legacy = os.path.isfile(legacy_path) and legacy_path not in profile_files
-
-    speakers = []
-    for pf in profile_files:
-        basename = os.path.basename(pf)
-        name = basename[len("eagle_profile_"):-len(".bin")]
-        size = os.path.getsize(pf)
-        mtime = os.path.getmtime(pf)
-        speakers.append({
-            "name": name,
-            "profile_path": pf,
-            "profile_size": size,
-            "enrolled_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime)),
-        })
+    has_legacy = bool(eagle_files) or os.path.isfile(legacy_path)
 
     return {
-        "enrolled": len(speakers) > 0 or has_legacy,
+        "enrolled": len(speakers) > 0,
         "speakers": speakers,
         "has_legacy_profile": has_legacy,
         "eagle_enabled": _runtime_config.get("listener_eagle_enabled", True),
@@ -3397,6 +3382,71 @@ async def api_eagle_enroll_progress(req: Request):
     return {"ok": True}
 
 
+@app.post("/api/listener/eagle/enroll-file")
+async def api_eagle_enroll_file(req: Request, file: UploadFile):
+    """Enroll a speaker from an uploaded audio file using ECAPA-TDNN embeddings."""
+    if not _is_admin(req):
+        return JSONResponse({"ok": False, "error": "Admin only"}, status_code=403)
+
+    speaker_name = req.query_params.get("name", "").strip()
+    if not speaker_name:
+        return JSONResponse({"ok": False, "error": "Speaker name required (?name=Ryan)"}, status_code=400)
+
+    safe_name = speaker_name.strip().lower().replace(" ", "_")
+    if not safe_name or "/" in safe_name or ".." in safe_name:
+        return JSONResponse({"ok": False, "error": "Invalid speaker name"}, status_code=400)
+
+    def _do_enroll():
+        import io
+        import wave
+
+        raw = file.file.read()
+
+        # Try to open as WAV; if not, convert with ffmpeg
+        try:
+            wave.open(io.BytesIO(raw), "rb").close()
+            wav_bytes = raw
+        except Exception:
+            import subprocess, tempfile
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp_in:
+                    tmp_in.write(raw)
+                    tmp_in_path = tmp_in.name
+                tmp_out_path = tmp_in_path + ".wav"
+                result = subprocess.run(
+                    ["ffmpeg", "-y", "-i", tmp_in_path, "-ar", "16000", "-ac", "1", "-f", "wav", tmp_out_path],
+                    capture_output=True, timeout=30,
+                )
+                os.unlink(tmp_in_path)
+                if result.returncode != 0:
+                    try: os.unlink(tmp_out_path)
+                    except: pass
+                    return {"ok": False, "error": f"ffmpeg conversion failed: {result.stderr.decode()[-200:]}"}
+                with open(tmp_out_path, "rb") as f2:
+                    wav_bytes = f2.read()
+                os.unlink(tmp_out_path)
+            except Exception as e:
+                return {"ok": False, "error": f"Could not decode audio: {e}"}
+
+        from speaker_verify import enroll_speaker
+        return enroll_speaker(speaker_name, wav_bytes)
+
+    _enroll_progress.clear()
+    _enroll_progress["name"] = speaker_name
+    _enroll_progress["status"] = "enrolling"
+    _enroll_progress["percentage"] = 0
+
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, _do_enroll)
+
+    if result.get("ok"):
+        _enroll_progress.update({"status": "complete", "percentage": 100})
+    else:
+        _enroll_progress.update({"status": "failed", "error": result.get("error", "unknown")})
+
+    return result
+
+
 @app.get("/api/listener/setup-script")
 async def api_listener_setup_script(req: Request):
     """Generate a setup script for deploying the wake-listener on a remote LAN machine."""
@@ -3444,7 +3494,7 @@ curl -sk "$KUKUIBOT_URL/api/listener/download/enroll-voice.py" -o "$INSTALL_DIR/
 echo "Creating Python venv..."
 python3 -m venv "$VENV_DIR"
 "$VENV_DIR/bin/pip" install -q --upgrade pip
-"$VENV_DIR/bin/pip" install -q vosk pveagle numpy pyaudio
+"$VENV_DIR/bin/pip" install -q vosk numpy pyaudio speechbrain torch torchaudio
 
 # Download Vosk model
 if [ ! -d "$INSTALL_DIR/models/vosk-model-small-en-us-0.15" ]; then

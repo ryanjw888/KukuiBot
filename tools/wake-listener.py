@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-KukuiBot Wake Word Listener — always-on Vosk STT with Eagle speaker verification.
+KukuiBot Wake Word Listener — always-on Vosk STT with speaker verification.
 
 Detection: Vosk streaming STT watches for "jarvis" in transcripts (no pause needed)
-Speaker verification: Picovoice Eagle (optional — requires enrolled voice profile)
+Speaker verification: ECAPA-TDNN embeddings via SpeechBrain (optional — requires enrolled voice profile)
 
 Modes (configured via KukuiBot Settings → listener_mode):
   local:  POST /api/listener/wake → SSE → browser beeps + Web Speech API STT
@@ -11,7 +11,7 @@ Modes (configured via KukuiBot Settings → listener_mode):
 
 The mode is fetched from /api/config and cached (refreshed every 30s).
 
-Requires: vosk, pveagle, numpy, pyaudio
+Requires: vosk, numpy, pyaudio, speechbrain, torch
 """
 import argparse, io, json, logging, os, signal, ssl, subprocess, sys, threading, time, wave
 from collections import deque
@@ -22,9 +22,8 @@ import numpy as np
 SAMPLE_RATE = 16000
 VOSK_CHUNK_SAMPLES = 4000       # 250ms chunks for Vosk (good balance of latency vs efficiency)
 
-EAGLE_PROFILE_DIR = os.path.expanduser("~/.jarvis/data")
-EAGLE_PROFILE_PATH = os.path.join(EAGLE_PROFILE_DIR, "eagle_profile.bin")  # legacy single-profile path
-EAGLE_SCORE_THRESHOLD = 0.7     # minimum speaker similarity score (0.0-1.0)
+SPEAKER_PROFILE_DIR = os.path.expanduser("~/.jarvis/data")
+SPEAKER_SCORE_THRESHOLD = 0.35  # minimum cosine similarity for speaker verification (0.0-1.0)
 
 VOSK_MODEL_PATH = os.path.expanduser("~/jarvis-voice/models/vosk-model-small-en-us-0.15")
 
@@ -87,93 +86,80 @@ def build_porcupine(access_key: str, keywords: list = None, sensitivity: float =
 
 
 # ---------------------------------------------------------------------------
-# Speaker verification: Eagle
+# Speaker verification: ECAPA-TDNN (SpeechBrain)
 # ---------------------------------------------------------------------------
 
-def load_eagle_recognizer(access_key: str, profile_path: str = EAGLE_PROFILE_PATH):
-    """Load Eagle speaker recognizer from all enrolled profiles in EAGLE_PROFILE_DIR.
+def load_speaker_verifier():
+    """Load all enrolled speaker profiles (ECAPA-TDNN embeddings).
 
-    Returns (recognizer, speaker_names) or (None, []) if no profiles found.
-    Profiles are named eagle_profile_{name}.bin — the name is extracted from the filename.
-    Falls back to legacy single eagle_profile.bin (mapped to 'unknown').
+    Returns (embeddings_dict, speaker_names) or ({}, []) if no profiles found.
+    Profiles are named speaker_profile_{name}.npy in SPEAKER_PROFILE_DIR.
     """
     import glob
-    import pveagle
 
-    profile_dir = os.path.dirname(profile_path)
-    pattern = os.path.join(profile_dir, "eagle_profile_*.bin")
+    os.makedirs(SPEAKER_PROFILE_DIR, exist_ok=True)
+    pattern = os.path.join(SPEAKER_PROFILE_DIR, "speaker_profile_*.npy")
     profile_files = sorted(glob.glob(pattern))
 
-    # Fall back to legacy single profile if no named profiles exist
-    if not profile_files and os.path.isfile(profile_path):
-        profile_files = [profile_path]
-
     if not profile_files:
-        logger.warning(f"No Eagle voice profiles in {profile_dir} -- speaker verification disabled")
-        return None, []
+        logger.warning(f"No speaker profiles in {SPEAKER_PROFILE_DIR} -- speaker verification disabled")
+        return {}, []
 
-    profiles = []
+    embeddings = {}
     speaker_names = []
     for pf in profile_files:
         basename = os.path.basename(pf)
-        # Extract name: eagle_profile_ryan.bin → "ryan"
-        if basename.startswith("eagle_profile_") and basename.endswith(".bin"):
-            name = basename[len("eagle_profile_"):-len(".bin")]
-        else:
-            name = "unknown"
-        with open(pf, "rb") as f:
-            profile_bytes = f.read()
-        profiles.append(pveagle.EagleProfile.from_bytes(profile_bytes))
+        name = basename[len("speaker_profile_"):-len(".npy")]
+        emb = np.load(pf)
+        embeddings[name] = emb
         speaker_names.append(name)
 
-    recognizer = pveagle.create_recognizer(access_key=access_key, speaker_profiles=profiles)
-    logger.info(f"Eagle loaded {len(profiles)} speaker(s): {speaker_names} (frame_length: {recognizer.frame_length})")
-    return recognizer, speaker_names
+    logger.info(f"Loaded {len(speaker_names)} speaker profile(s): {speaker_names}")
+    return embeddings, speaker_names
 
 
-def verify_speaker(eagle_recognizer, speaker_names: list, frames: list,
-                   threshold: float = EAGLE_SCORE_THRESHOLD) -> tuple:
-    """Run Eagle speaker verification on recorded audio frames.
+def verify_speaker(enrolled_embeddings: dict, speaker_names: list, frames: list,
+                   threshold: float = SPEAKER_SCORE_THRESHOLD) -> tuple:
+    """Run ECAPA-TDNN speaker verification on recorded audio frames.
 
     Returns (passed: bool, best_score: float, speaker_name: str).
-    Eagle returns per-speaker scores for each frame; we average per speaker
-    and pick the best match.
+    Extracts an embedding from the audio and compares via cosine similarity.
     """
-    if eagle_recognizer is None:
+    if not enrolled_embeddings or not speaker_names:
         return True, 1.0, ""
 
-    eagle_frame_len = eagle_recognizer.frame_length
     all_pcm = np.concatenate(frames)
-    num_speakers = len(speaker_names) if speaker_names else 1
 
-    # Collect per-speaker scores across all frames
-    all_scores = [[] for _ in range(num_speakers)]
-
-    eagle_recognizer.reset()
-    offset = 0
-    while offset + eagle_frame_len <= len(all_pcm):
-        chunk = all_pcm[offset:offset + eagle_frame_len]
-        frame_scores = eagle_recognizer.process(chunk)  # list of floats, one per speaker
-        for i, s in enumerate(frame_scores):
-            all_scores[i].append(s)
-        offset += eagle_frame_len
-
-    if not any(all_scores):
-        logger.warning("Eagle: no scores produced (audio too short for verification)")
+    if len(all_pcm) < SAMPLE_RATE:  # less than 1 second
+        logger.warning("Speaker verification: audio too short (<1s)")
         return True, 0.0, ""
 
-    # Average score per speaker, find best match
-    avg_scores = []
-    for i, scores in enumerate(all_scores):
-        avg = sum(scores) / len(scores) if scores else 0.0
-        avg_scores.append(avg)
+    # Add parent src dir to path for speaker_verify import
+    src_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    if src_dir not in sys.path:
+        sys.path.insert(0, src_dir)
 
-    best_idx = max(range(len(avg_scores)), key=lambda i: avg_scores[i])
-    best_score = avg_scores[best_idx]
-    best_name = speaker_names[best_idx] if best_idx < len(speaker_names) else "unknown"
+    from speaker_verify import extract_embedding
+
+    test_embedding = extract_embedding(all_pcm)
+
+    best_score = -1.0
+    best_name = "unknown"
+    score_log = []
+
+    for name in speaker_names:
+        enrolled = enrolled_embeddings[name]
+        dot = np.dot(test_embedding, enrolled)
+        norm_a = np.linalg.norm(test_embedding)
+        norm_b = np.linalg.norm(enrolled)
+        score = dot / (norm_a * norm_b) if norm_a > 0 and norm_b > 0 else 0.0
+        score_log.append(f"{name}={score:.3f}")
+        if score > best_score:
+            best_score = float(score)
+            best_name = name
 
     passed = best_score >= threshold
-    logger.debug(f"Eagle scores: {dict(zip(speaker_names, [f'{s:.3f}' for s in avg_scores]))}")
+    logger.debug(f"Speaker scores: {', '.join(score_log)}")
     return passed, best_score, best_name
 
 
@@ -200,15 +186,14 @@ def _post_enroll_progress(kukuibot_url, name, percentage, status, feedback="", e
 
 
 def run_enrollment(stream, pa, access_key, speaker_name, duration, kukuibot_url):
-    """Run Eagle voice enrollment using the local mic.
+    """Run voice enrollment using the local mic (ECAPA-TDNN embeddings).
 
-    Pauses the existing Vosk stream, opens a new stream for enrollment,
+    Pauses the existing Vosk stream, records audio, extracts embedding,
     and restarts the Vosk stream when done.
 
     Returns (success: bool, profile_path: str).
     """
     import pyaudio
-    import pveagle
 
     # Sanitize speaker name
     safe_name = speaker_name.strip().lower().replace(" ", "_")
@@ -217,8 +202,8 @@ def run_enrollment(stream, pa, access_key, speaker_name, duration, kukuibot_url)
         _post_enroll_progress(kukuibot_url, speaker_name, 0, "failed", error="Invalid speaker name")
         return False, ""
 
-    profile_path = os.path.join(EAGLE_PROFILE_DIR, f"eagle_profile_{safe_name}.bin")
-    os.makedirs(EAGLE_PROFILE_DIR, exist_ok=True)
+    profile_path = os.path.join(SPEAKER_PROFILE_DIR, f"speaker_profile_{safe_name}.npy")
+    os.makedirs(SPEAKER_PROFILE_DIR, exist_ok=True)
 
     # Pause the Vosk input stream to release the mic
     try:
@@ -228,80 +213,74 @@ def run_enrollment(stream, pa, access_key, speaker_name, duration, kukuibot_url)
         logger.warning(f"Failed to pause Vosk stream: {e}")
 
     enroll_stream = None
-    profiler = None
     success = False
+    frame_length = 4000  # 250ms chunks at 16kHz
 
     try:
-        profiler = pveagle.create_profiler(access_key=access_key)
-        sample_rate = profiler.sample_rate
-        frame_length = profiler.min_enroll_samples
-
         enroll_stream = pa.open(
-            format=pyaudio.paInt16, channels=1, rate=sample_rate,
+            format=pyaudio.paInt16, channels=1, rate=SAMPLE_RATE,
             input=True, frames_per_buffer=frame_length,
         )
 
         _post_enroll_progress(kukuibot_url, speaker_name, 0, "enrolling")
-        logger.info(f"Enrollment started for '{speaker_name}' (duration={duration}s, rate={sample_rate}, frame={frame_length})")
+        logger.info(f"Enrollment started for '{speaker_name}' (duration={duration}s)")
 
-        total_frames = int(duration * sample_rate / frame_length)
-        enroll_percentage = 0.0
-        last_progress_pct = -5  # force first report
-        last_progress_time = time.time()
+        total_frames = int(duration * SAMPLE_RATE / frame_length)
+        all_audio = []
 
         for i in range(total_frames):
             pcm = np.frombuffer(
                 enroll_stream.read(frame_length, exception_on_overflow=False),
                 dtype=np.int16,
             )
-            enroll_percentage, feedback = profiler.enroll(pcm)
+            all_audio.append(pcm)
 
-            # Report progress every 5% or every 5 seconds
+            # Report progress
+            elapsed = (i + 1) * frame_length / SAMPLE_RATE
+            pct = min(100, (elapsed / duration) * 100)
             now = time.time()
-            if enroll_percentage - last_progress_pct >= 5 or now - last_progress_time >= 5:
-                feedback_str = feedback.name if feedback.name != "AUDIO_OK" else ""
-                _post_enroll_progress(
-                    kukuibot_url, speaker_name, enroll_percentage,
-                    "enrolling", feedback=feedback_str,
-                )
-                last_progress_pct = enroll_percentage
-                last_progress_time = now
-                logger.info(f"Enrollment: {enroll_percentage:.0f}% ({(i+1)*frame_length/sample_rate:.1f}s)")
+            if i % 20 == 0:  # every ~5 seconds
+                _post_enroll_progress(kukuibot_url, speaker_name, pct, "enrolling")
+                logger.info(f"Enrollment: {pct:.0f}% ({elapsed:.1f}s)")
 
-            if enroll_percentage >= 100.0:
-                break
+        # Build WAV bytes from recorded audio
+        all_pcm = np.concatenate(all_audio)
+        wav_buf = io.BytesIO()
+        wf = wave.open(wav_buf, "wb")
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(SAMPLE_RATE)
+        wf.writeframes(all_pcm.tobytes())
+        wf.close()
+        wav_bytes = wav_buf.getvalue()
 
-        if enroll_percentage < 100.0:
-            msg = f"Enrollment only {enroll_percentage:.0f}% complete (need 100%). Try speaking louder/closer."
+        duration_actual = len(all_pcm) / SAMPLE_RATE
+        if duration_actual < 5:
+            msg = f"Audio too short ({duration_actual:.1f}s). Need at least 5 seconds."
             logger.warning(msg)
-            _post_enroll_progress(kukuibot_url, speaker_name, enroll_percentage, "failed", error=msg)
-            profiler.delete()
-            profiler = None
+            _post_enroll_progress(kukuibot_url, speaker_name, 0, "failed", error=msg)
             return False, ""
 
-        # Export and save profile
-        profile = profiler.export()
-        profiler.delete()
-        profiler = None
+        # Extract embedding and save
+        src_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+        if src_dir not in sys.path:
+            sys.path.insert(0, src_dir)
+        from speaker_verify import enroll_speaker
 
-        profile_bytes = profile.to_bytes()
-        with open(profile_path, "wb") as f:
-            f.write(profile_bytes)
-
-        logger.info(f"Voice profile saved: {profile_path} ({len(profile_bytes)} bytes)")
-        _post_enroll_progress(kukuibot_url, speaker_name, 100, "complete")
-        success = True
+        result = enroll_speaker(speaker_name, wav_bytes)
+        if result.get("ok"):
+            logger.info(f"Voice profile saved: {result['profile_path']} ({result['duration']} audio)")
+            _post_enroll_progress(kukuibot_url, speaker_name, 100, "complete")
+            success = True
+            profile_path = result["profile_path"]
+        else:
+            logger.warning(f"Enrollment failed: {result.get('error')}")
+            _post_enroll_progress(kukuibot_url, speaker_name, 0, "failed", error=result.get("error", "unknown"))
 
     except Exception as e:
         logger.error(f"Enrollment failed: {e}")
         _post_enroll_progress(kukuibot_url, speaker_name, 0, "failed", error=str(e))
-        if profiler:
-            try:
-                profiler.delete()
-            except Exception:
-                pass
     finally:
-        # Close the enrollment stream
         if enroll_stream:
             try:
                 enroll_stream.stop_stream()
@@ -309,7 +288,6 @@ def run_enrollment(stream, pa, access_key, speaker_name, duration, kukuibot_url)
             except Exception:
                 pass
 
-        # Resume the Vosk stream
         try:
             stream.start_stream()
             logger.info("Vosk stream resumed after enrollment")
@@ -317,8 +295,6 @@ def run_enrollment(stream, pa, access_key, speaker_name, duration, kukuibot_url)
             logger.warning(f"Failed to resume Vosk stream: {e}, reopening mic...")
             try:
                 new_pa, new_stream = open_mic()
-                # Caller will need the new stream — but since we modify in-place,
-                # we rely on the existing stream object. Log the issue.
                 logger.warning("Mic reopened — stream object may need refresh on next loop")
             except Exception as e2:
                 logger.error(f"Failed to reopen mic: {e2}")
@@ -672,8 +648,8 @@ def fetch_listener_config(kukuibot_url: str) -> dict:
         with urlrequest.urlopen(req, timeout=5, context=_ssl_ctx) as resp:
             data = json.loads(resp.read().decode())
             triggers_str = data.get("listener_wake_triggers", "jarvis,lights,light,shades,shade,blinds")
-            eagle_enabled_raw = data.get("listener_eagle_enabled", True)
-            eagle_enabled = eagle_enabled_raw not in (False, "0", "false", 0)
+            spk_enabled_raw = data.get("listener_eagle_enabled", True)
+            spk_enabled = spk_enabled_raw not in (False, "0", "false", 0)
             return {
                 "mode": data.get("listener_mode", "local"),
                 "device": data.get("listener_device", ""),
@@ -682,8 +658,8 @@ def fetch_listener_config(kukuibot_url: str) -> dict:
                 "silence_duration": _safe_float(data.get("listener_silence_duration"), SILENCE_DURATION),
                 "max_record": _safe_float(data.get("listener_max_record"), MAX_RECORD_SECS),
                 "min_record": _safe_float(data.get("listener_min_record"), MIN_RECORD_SECS),
-                "eagle_enabled": eagle_enabled,
-                "eagle_threshold": _safe_float(data.get("listener_eagle_threshold"), EAGLE_SCORE_THRESHOLD),
+                "eagle_enabled": spk_enabled,
+                "eagle_threshold": _safe_float(data.get("listener_eagle_threshold"), SPEAKER_SCORE_THRESHOLD),
                 "triggers": _parse_triggers(triggers_str),
                 "triggers_str": triggers_str,
                 "jarvis_url": data.get("listener_jarvis_url", ""),
@@ -805,13 +781,10 @@ def main():
     parser.add_argument("--room", default="Office", help="Room name sent in wake event")
     parser.add_argument("--username", default="", help="Username sent in wake event")
     parser.add_argument("--model", default=None, help="[DEPRECATED] ignored")
-    parser.add_argument("--access-key",
-                        default=os.getenv("PICOVOICE_ACCESS_KEY", "c7cXxfOZp42ls99y7tlBYNfwnIHS9yt9J/nyZAq5xaRz9PSzLm/JtQ=="),
-                        help="Picovoice access key for Eagle speaker verification")
-    parser.add_argument("--eagle-profile", default=EAGLE_PROFILE_PATH,
-                        help="Path to Eagle speaker profile for voice verification")
-    parser.add_argument("--eagle-threshold", type=float, default=EAGLE_SCORE_THRESHOLD,
-                        help="Eagle speaker verification threshold (0.0-1.0)")
+    parser.add_argument("--access-key", default="", help="[DEPRECATED] No longer needed (was Picovoice key)")
+    parser.add_argument("--eagle-profile", default="", help="[DEPRECATED] Profiles now auto-detected from ~/.jarvis/data/")
+    parser.add_argument("--eagle-threshold", type=float, default=SPEAKER_SCORE_THRESHOLD,
+                        help="Speaker verification threshold (0.0-1.0, cosine similarity)")
     parser.add_argument("--vosk-model", default=VOSK_MODEL_PATH,
                         help="Path to Vosk model directory")
     parser.add_argument("--kukuibot-url", default=None,
@@ -861,11 +834,10 @@ def main():
     vosk_rec = build_vosk_recognizer(args.vosk_model)
     logger.info(f"Vosk STT loaded: model={args.vosk_model}")
 
-    # Initialize Eagle speaker verification (optional, multi-speaker)
-    eagle_recognizer, eagle_speaker_names = load_eagle_recognizer(args.access_key, args.eagle_profile)
-    # Eagle threshold: prefer config, fall back to CLI arg
-    eagle_threshold = initial_cfg.get("eagle_threshold", args.eagle_threshold)
-    eagle_enabled = initial_cfg.get("eagle_enabled", True) if eagle_recognizer else False
+    # Initialize ECAPA-TDNN speaker verification (optional, multi-speaker)
+    speaker_embeddings, speaker_names = load_speaker_verifier()
+    speaker_threshold = initial_cfg.get("eagle_threshold", args.eagle_threshold)
+    speaker_enabled = initial_cfg.get("eagle_enabled", True) if speaker_embeddings else False
 
     pa, stream = open_mic(device, VOSK_CHUNK_SAMPLES)
     logger.info(f"Microphone open (rate={SAMPLE_RATE}, chunk={VOSK_CHUNK_SAMPLES}, device={device or 'system default'})")
@@ -888,19 +860,19 @@ def main():
         "silence_duration": silence_dur,
         "max_record": max_record,
         "min_record": min_record,
-        "eagle_enabled": eagle_enabled,
-        "eagle_threshold": eagle_threshold,
+        "eagle_enabled": speaker_enabled,
+        "eagle_threshold": speaker_threshold,
         "triggers": initial_cfg.get("triggers", DIRECT_TRIGGERS),
         "jarvis_direct_url": jarvis_direct_url,
     }
     start_config_refresh_thread(kukuibot_url, config_state)
     triggers_list = list(config_state.get("triggers", {}).keys())
-    eagle_status = f"eagle={'ON' if eagle_recognizer and eagle_enabled else 'OFF'} (threshold={eagle_threshold})"
-    logger.info(f"Listening for 'Jarvis' via Vosk STT -- room={args.room}, mode={config_state['mode']}, {eagle_status}, device={device or 'system default'}, url={kukuibot_url}")
+    spk_status = f"speaker_verify={'ON' if speaker_embeddings and speaker_enabled else 'OFF'} (threshold={speaker_threshold})"
+    logger.info(f"Listening for 'Jarvis' via Vosk STT -- room={args.room}, mode={config_state['mode']}, {spk_status}, device={device or 'system default'}, url={kukuibot_url}")
     logger.info(f"Triggers: jarvis + {triggers_list}")
     logger.info(f"Tuning: cooldown={cooldown}s, silence={silence_thresh}RMS/{silence_dur}s, record={min_record}-{max_record}s")
 
-    # Audio ring buffer for Eagle verification (keeps last N seconds)
+    # Audio ring buffer for speaker verification (keeps last N seconds)
     pre_buffer_chunks = int(PRE_BUFFER_SECS * SAMPLE_RATE / VOSK_CHUNK_SAMPLES)
     audio_ring = deque(maxlen=pre_buffer_chunks)
 
@@ -918,9 +890,9 @@ def main():
             )
 
             if success:
-                # Reload Eagle with new profile
-                eagle_recognizer, eagle_speaker_names = load_eagle_recognizer(args.access_key, args.eagle_profile)
-                logger.info(f"Eagle reloaded with {len(eagle_speaker_names)} speaker(s): {eagle_speaker_names}")
+                # Reload speaker profiles
+                speaker_embeddings, speaker_names = load_speaker_verifier()
+                logger.info(f"Speaker profiles reloaded: {len(speaker_names)} speaker(s): {speaker_names}")
 
             # Notify server to clear the config flag
             try:
@@ -980,15 +952,15 @@ def main():
 
                 # Speaker verification on the audio ring buffer
                 pre_frames = list(audio_ring)
-                cur_eagle_enabled = config_state.get("eagle_enabled", eagle_enabled)
-                cur_eagle_threshold = config_state.get("eagle_threshold", eagle_threshold)
-                if eagle_recognizer and cur_eagle_enabled:
-                    passed, avg_score, speaker_name = verify_speaker(eagle_recognizer, eagle_speaker_names, pre_frames, cur_eagle_threshold)
+                cur_spk_enabled = config_state.get("eagle_enabled", speaker_enabled)
+                cur_spk_threshold = config_state.get("eagle_threshold", speaker_threshold)
+                if speaker_embeddings and cur_spk_enabled:
+                    passed, avg_score, spk_name = verify_speaker(speaker_embeddings, speaker_names, pre_frames, cur_spk_threshold)
                     if not passed:
-                        logger.info(f"Speaker verification FAILED (score {avg_score:.3f} < {cur_eagle_threshold}) -- ignoring")
+                        logger.info(f"Speaker verification FAILED (score {avg_score:.3f} < {cur_spk_threshold}) -- ignoring")
                         last_wake_time = time.time()
                         continue
-                    logger.info(f"Speaker verified: {speaker_name} (score {avg_score:.3f})")
+                    logger.info(f"Speaker verified: {spk_name} (score {avg_score:.3f})")
 
                 if command:
                     # Vosk heard a command — re-transcribe the audio buffer via Qwen3-ASR for accuracy
@@ -1082,14 +1054,14 @@ def main():
                 last_wake_time = time.time()
             else:
                 # --- Local mode ---
-                if eagle_recognizer:
+                if speaker_embeddings and speaker_enabled:
                     pre_frames = list(audio_ring)
-                    passed, avg_score, speaker_name = verify_speaker(eagle_recognizer, eagle_speaker_names, pre_frames, eagle_threshold)
+                    passed, avg_score, spk_name = verify_speaker(speaker_embeddings, speaker_names, pre_frames, speaker_threshold)
                     if not passed:
-                        logger.info(f"Speaker verification FAILED (score {avg_score:.3f} < {eagle_threshold}) -- ignoring")
+                        logger.info(f"Speaker verification FAILED (score {avg_score:.3f} < {speaker_threshold}) -- ignoring")
                         last_wake_time = time.time()
                         continue
-                    logger.info(f"Speaker verified: {speaker_name} (score {avg_score:.3f})")
+                    logger.info(f"Speaker verified: {spk_name} (score {avg_score:.3f})")
 
                 threading.Thread(target=play_chime, daemon=True).start()
 
@@ -1157,8 +1129,6 @@ def main():
     stream.stop_stream()
     stream.close()
     pa.terminate()
-    if eagle_recognizer:
-        eagle_recognizer.delete()
     return 0
 
 

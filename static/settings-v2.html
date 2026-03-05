@@ -1314,7 +1314,7 @@
         </div>
 
         <div id="listener-remote-panel" style="margin-top:12px;padding:10px;background:var(--surface2);border-radius:8px;display:none;">
-          <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Vosk STT trigger detection → Eagle speaker verification → Qwen3-ASR transcription → Jarvis chat → Sonos TTS response.</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Vosk STT trigger detection → ECAPA-TDNN speaker verification → Qwen3-ASR transcription → Jarvis chat → Sonos TTS response.</div>
           <div style="display:flex;flex-direction:column;gap:8px;">
             <div>
               <label style="font-size:12px;color:var(--muted);">KukuiBot Server Address</label>
@@ -1374,11 +1374,11 @@
         </div>
       </div>
 
-      <!-- Voice Authentication (Eagle) -->
+      <!-- Voice Authentication -->
       <div class="card">
-        <h2>Voice Authentication (Eagle)</h2>
+        <h2>Voice Authentication</h2>
         <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">
-          Picovoice Eagle speaker verification ensures only your voice can trigger commands.
+          ECAPA-TDNN speaker verification ensures only your voice can trigger commands. No API key required.
         </div>
 
         <div class="setting-row">
@@ -1404,13 +1404,24 @@
 
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
             <input type="text" id="enroll-speaker-name" placeholder="Speaker name (e.g. Ryan)" style="width:180px;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:12px;">
-            <button class="btn" onclick="startEnrollment()">Enroll Voice</button>
+            <button class="btn" id="enroll-record-btn" onclick="toggleEnrollRecording()">Record Voice</button>
+            <button class="btn" onclick="document.getElementById('enroll-wav-file').click()">Upload WAV</button>
+            <input type="file" id="enroll-wav-file" accept=".wav,.m4a,.mp3,.ogg,.webm" style="display:none" onchange="enrollFromFile(this)">
             <button class="btn" onclick="saveEagleConfig()">Save Auth Config</button>
             <span id="eagle-status" style="font-size:11px;color:var(--muted);"></span>
           </div>
 
           <div id="enroll-progress" style="display:none;padding:10px;background:var(--surface2);border-radius:8px;font-size:11px;">
-            <div style="margin-bottom:6px;color:var(--accent);font-weight:500;">Enrolling voice...</div>
+            <div id="enroll-progress-label" style="margin-bottom:6px;color:var(--accent);font-weight:500;">Enrolling voice...</div>
+            <div id="enroll-meter" style="display:none;margin-bottom:8px;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <div id="enroll-level" style="width:12px;height:12px;border-radius:50%;background:var(--red);transition:background 0.15s;"></div>
+                <div style="flex:1;height:6px;background:var(--surface);border-radius:3px;overflow:hidden;">
+                  <div id="enroll-timer-bar" style="height:100%;width:0%;background:var(--accent);transition:width 0.5s linear;border-radius:3px;"></div>
+                </div>
+                <span id="enroll-timer-text" style="font-size:11px;color:var(--muted);font-family:'SF Mono',Menlo,monospace;min-width:32px;">0s</span>
+              </div>
+            </div>
             <pre id="enroll-log" style="margin:0;max-height:200px;overflow-y:auto;font-size:10px;color:var(--muted);white-space:pre-wrap;"></pre>
           </div>
         </div>
@@ -1445,7 +1456,7 @@
         </div>
         <div style="font-size:11px;color:var(--muted);margin-top:10px;border-top:1px solid var(--border);padding-top:8px;">
           <strong style="color:var(--text);">Engine:</strong>
-          Vosk streaming STT (16kHz) + Picovoice Eagle speaker verification
+          Vosk streaming STT (16kHz) + ECAPA-TDNN speaker verification
           &middot; Config refresh every ~30s
         </div>
       </div>
@@ -2123,7 +2134,7 @@ async function loadEagleStatus() {
       }
       statusEl.innerHTML = html;
     } else if (d.has_legacy_profile) {
-      statusEl.innerHTML = '<span style="color:var(--yellow);">Legacy profile found</span> — re-enroll with a name below';
+      statusEl.innerHTML = '<span style="color:var(--yellow);">Legacy Eagle profiles found</span> — re-enroll below using the new ECAPA-TDNN system (no API key needed)';
     } else {
       statusEl.innerHTML = '<span style="color:var(--yellow);">No voice profiles</span> — enroll below';
     }
@@ -2161,59 +2172,431 @@ async function saveEagleConfig() {
   setTimeout(() => { st.textContent = ''; }, 3000);
 }
 
-async function startEnrollment() {
-  const progressEl = document.getElementById('enroll-progress');
-  const logEl = document.getElementById('enroll-log');
-  const st = document.getElementById('eagle-status');
-  const nameInput = document.getElementById('enroll-speaker-name');
-  const speakerName = (nameInput.value || '').trim();
-  if (!speakerName) {
-    toast('Enter a speaker name first');
-    nameInput.focus();
+// --- Browser-based voice enrollment ---
+let _enrollRecorder = null;
+let _enrollChunks = [];
+let _enrollTimerInterval = null;
+let _enrollStartTime = 0;
+let _enrollAnalyser = null;
+let _enrollAudioCtxLive = null;
+let _enrollModal = null;
+let _enrollMimeType = '';
+const ENROLL_DURATION = 45; // seconds
+
+const _ENROLL_SENTENCES = [
+  "Jarvis, what's the weather like today?",
+  "Hey Jarvis, turn off the living room lights.",
+  "Jarvis, set a timer for ten minutes.",
+  "Can you play some music in the kitchen, Jarvis?",
+  "Jarvis, what's on my calendar for tomorrow?",
+  "Hey Jarvis, lock the front door please.",
+  "Jarvis, dim the bedroom lights to fifty percent.",
+  "What time is it, Jarvis?",
+  "Jarvis, add milk to my shopping list.",
+  "Hey Jarvis, what's the temperature outside?",
+  "Jarvis, turn on the fan in the office.",
+  "Read me today's news headlines, Jarvis.",
+];
+
+function _enrollUI() {
+  return {
+    progress: document.getElementById('enroll-progress'),
+    log: document.getElementById('enroll-log'),
+    label: document.getElementById('enroll-progress-label'),
+    meter: document.getElementById('enroll-meter'),
+    level: document.getElementById('enroll-level'),
+    timerBar: document.getElementById('enroll-timer-bar'),
+    timerText: document.getElementById('enroll-timer-text'),
+    st: document.getElementById('eagle-status'),
+    btn: document.getElementById('enroll-record-btn'),
+    nameInput: document.getElementById('enroll-speaker-name'),
+  };
+}
+
+function _createEnrollModal(speakerName) {
+  // Remove existing modal if any
+  if (_enrollModal) _enrollModal.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'enroll-modal-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);';
+
+  const modal = document.createElement('div');
+  modal.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:16px;width:90%;max-width:520px;max-height:90vh;overflow-y:auto;padding:28px 24px 20px;box-shadow:0 20px 60px rgba(0,0,0,0.5);';
+
+  // Header
+  const header = document.createElement('div');
+  header.style.cssText = 'display:flex;align-items:center;gap:12px;margin-bottom:20px;';
+  header.innerHTML = `
+    <div style="width:40px;height:40px;border-radius:50%;background:rgba(255,71,87,0.15);display:flex;align-items:center;justify-content:center;">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--red)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+        <line x1="12" y1="19" x2="12" y2="23"/>
+        <line x1="8" y1="23" x2="16" y2="23"/>
+      </svg>
+    </div>
+    <div>
+      <div style="font-size:16px;font-weight:600;color:var(--text);">Voice Enrollment</div>
+      <div style="font-size:12px;color:var(--muted);">Recording for <strong style="color:var(--accent);">${speakerName}</strong></div>
+    </div>
+  `;
+
+  // Volume meter
+  const meterSection = document.createElement('div');
+  meterSection.style.cssText = 'margin-bottom:16px;';
+  meterSection.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+      <div id="enroll-modal-dot" style="width:10px;height:10px;border-radius:50%;background:var(--red);flex-shrink:0;"></div>
+      <div style="flex:1;height:8px;background:var(--surface2);border-radius:4px;overflow:hidden;position:relative;">
+        <div id="enroll-modal-vol" style="height:100%;width:0%;background:linear-gradient(90deg,var(--green),var(--yellow),var(--red));border-radius:4px;transition:width 80ms ease;"></div>
+      </div>
+      <span id="enroll-modal-db" style="font-size:11px;color:var(--muted);font-family:'SF Mono',Menlo,monospace;min-width:38px;text-align:right;">--dB</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <div style="flex:1;height:4px;background:var(--surface2);border-radius:2px;overflow:hidden;">
+        <div id="enroll-modal-timer-bar" style="height:100%;width:0%;background:var(--accent);transition:width 0.5s linear;border-radius:2px;"></div>
+      </div>
+      <span id="enroll-modal-timer" style="font-size:12px;color:var(--muted);font-family:'SF Mono',Menlo,monospace;min-width:52px;text-align:right;">0 / ${ENROLL_DURATION}s</span>
+    </div>
+  `;
+
+  // Sentences
+  const sentenceSection = document.createElement('div');
+  sentenceSection.style.cssText = 'margin-bottom:20px;';
+  sentenceSection.innerHTML = `
+    <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;font-weight:600;">Read these aloud naturally:</div>
+    <div id="enroll-modal-sentences" style="display:flex;flex-direction:column;gap:4px;max-height:240px;overflow-y:auto;padding-right:4px;"></div>
+  `;
+
+  // Tips
+  const tips = document.createElement('div');
+  tips.style.cssText = 'font-size:11px;color:var(--muted);background:var(--surface2);border-radius:8px;padding:10px 12px;margin-bottom:20px;line-height:1.5;';
+  tips.innerHTML = `
+    <strong style="color:var(--text);">Tips:</strong> Speak at your normal pace and volume. Vary your tone naturally &mdash; the more variety, the better the voice profile. You don't need to finish all sentences.
+  `;
+
+  // Stop button
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;justify-content:center;';
+  btnRow.innerHTML = `<button id="enroll-modal-stop" style="padding:10px 32px;border-radius:10px;border:none;background:var(--red);color:#fff;font-size:14px;font-weight:600;cursor:pointer;transition:opacity 0.15s;">Stop Recording</button>`;
+
+  modal.appendChild(header);
+  modal.appendChild(meterSection);
+  modal.appendChild(sentenceSection);
+  modal.appendChild(tips);
+  modal.appendChild(btnRow);
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+
+  // Populate sentences with numbered styling
+  const container = overlay.querySelector('#enroll-modal-sentences');
+  _ENROLL_SENTENCES.forEach((s, i) => {
+    const row = document.createElement('div');
+    row.className = 'enroll-sentence-row';
+    row.dataset.idx = i;
+    row.style.cssText = 'display:flex;align-items:flex-start;gap:8px;padding:6px 10px;border-radius:6px;transition:background 0.3s,opacity 0.3s;';
+    row.innerHTML = `
+      <span style="font-size:11px;color:var(--muted);font-family:'SF Mono',Menlo,monospace;min-width:18px;padding-top:1px;">${i + 1}.</span>
+      <span style="font-size:13px;color:var(--text);line-height:1.4;">${s}</span>
+    `;
+    container.appendChild(row);
+  });
+
+  // Stop button handler
+  overlay.querySelector('#enroll-modal-stop').onclick = () => _stopEnrollRecording();
+
+  // Prevent background scroll
+  document.body.style.overflow = 'hidden';
+
+  _enrollModal = overlay;
+  return overlay;
+}
+
+function _closeEnrollModal() {
+  if (_enrollModal) {
+    _enrollModal.remove();
+    _enrollModal = null;
+  }
+  document.body.style.overflow = '';
+  // Clean up audio analyser
+  if (_enrollAudioCtxLive) {
+    try { _enrollAudioCtxLive.close(); } catch(e) {}
+    _enrollAudioCtxLive = null;
+    _enrollAnalyser = null;
+  }
+}
+
+function _highlightSentence(elapsed) {
+  if (!_enrollModal) return;
+  // Roughly cycle through sentences based on time (~3.5s per sentence)
+  const idx = Math.min(Math.floor(elapsed / 3.5), _ENROLL_SENTENCES.length - 1);
+  const rows = _enrollModal.querySelectorAll('.enroll-sentence-row');
+  rows.forEach((row, i) => {
+    if (i < idx) {
+      row.style.opacity = '0.4';
+      row.style.background = 'transparent';
+    } else if (i === idx) {
+      row.style.opacity = '1';
+      row.style.background = 'rgba(94,181,247,0.08)';
+      // Auto-scroll to keep active sentence visible
+      row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } else {
+      row.style.opacity = '0.7';
+      row.style.background = 'transparent';
+    }
+  });
+}
+
+async function toggleEnrollRecording() {
+  if (_enrollRecorder && _enrollRecorder.state === 'recording') {
+    _stopEnrollRecording();
     return;
   }
-  progressEl.style.display = 'block';
-  logEl.textContent = 'Enrollment signal sent for ' + speakerName + '.\nWaiting for wake-listener to pick up request (up to 30s)...\nSpeak near the wake-listener mic for ~40 seconds.\n';
-  st.textContent = 'Enrolling...'; st.style.color = 'var(--accent)';
+  const ui = _enrollUI();
+  const speakerName = (ui.nameInput.value || '').trim();
+  if (!speakerName) { toast('Enter a speaker name first'); ui.nameInput.focus(); return; }
 
   try {
-    const r = await fetch(API + '/api/listener/eagle/enroll', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ name: speakerName, duration: 40 }),
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1, echoCancellation: false, noiseSuppression: false } });
+    _enrollChunks = [];
+    const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/aac', 'audio/ogg;codecs=opus'].find(m => MediaRecorder.isTypeSupported(m)) || '';
+    _enrollRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    _enrollMimeType = _enrollRecorder.mimeType || mimeType || 'audio/webm';
+    _enrollRecorder.ondataavailable = e => { if (e.data.size > 0) _enrollChunks.push(e.data); };
+    _enrollRecorder.onstop = () => {
+      stream.getTracks().forEach(t => t.stop());
+      _closeEnrollModal();
+      _finishEnrollRecording(speakerName);
+    };
+
+    // Set up audio analyser for volume meter
+    _enrollAudioCtxLive = new (window.AudioContext || window.webkitAudioContext)();
+    const source = _enrollAudioCtxLive.createMediaStreamSource(stream);
+    _enrollAnalyser = _enrollAudioCtxLive.createAnalyser();
+    _enrollAnalyser.fftSize = 256;
+    _enrollAnalyser.smoothingTimeConstant = 0.5;
+    source.connect(_enrollAnalyser);
+
+    // Show the modal
+    _createEnrollModal(speakerName);
+
+    // Start recording
+    _enrollRecorder.start(1000);
+    _enrollStartTime = Date.now();
+
+    // Update status text in the settings card
+    ui.st.textContent = 'Recording...'; ui.st.style.color = 'var(--red)';
+    ui.btn.textContent = 'Stop Recording';
+    ui.btn.style.background = 'var(--red)';
+    ui.btn.style.color = '#fff';
+
+    // Animation loop for volume + timer
+    const dataArray = new Uint8Array(_enrollAnalyser.frequencyBinCount);
+    let pulse = false;
+    _enrollTimerInterval = setInterval(() => {
+      const elapsed = (Date.now() - _enrollStartTime) / 1000;
+      const pct = Math.min(100, (elapsed / ENROLL_DURATION) * 100);
+
+      // Update modal elements
+      const timerBar = document.getElementById('enroll-modal-timer-bar');
+      const timerText = document.getElementById('enroll-modal-timer');
+      const volBar = document.getElementById('enroll-modal-vol');
+      const dbText = document.getElementById('enroll-modal-db');
+      const dot = document.getElementById('enroll-modal-dot');
+
+      if (timerBar) timerBar.style.width = pct + '%';
+      if (timerText) timerText.textContent = Math.floor(elapsed) + ' / ' + ENROLL_DURATION + 's';
+
+      // Volume from analyser
+      if (_enrollAnalyser) {
+        _enrollAnalyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+        const avg = sum / dataArray.length;
+        const volPct = Math.min(100, (avg / 128) * 100);
+        const db = avg > 0 ? Math.round(20 * Math.log10(avg / 255)) : -60;
+        if (volBar) volBar.style.width = volPct + '%';
+        if (dbText) dbText.textContent = db + 'dB';
+      }
+
+      // Pulse dot
+      pulse = !pulse;
+      if (dot) dot.style.background = pulse ? 'var(--red)' : 'rgba(255,71,87,0.3)';
+
+      // Highlight current sentence
+      _highlightSentence(elapsed);
+
+      // Auto-stop
+      if (elapsed >= ENROLL_DURATION) _stopEnrollRecording();
+    }, 100);
+
+  } catch (e) {
+    toast('Microphone access denied: ' + e.message);
+    ui.st.textContent = 'Mic denied'; ui.st.style.color = 'var(--red)';
+    setTimeout(() => { ui.st.textContent = ''; }, 3000);
+  }
+}
+
+function _stopEnrollRecording() {
+  if (_enrollTimerInterval) { clearInterval(_enrollTimerInterval); _enrollTimerInterval = null; }
+  if (_enrollRecorder && _enrollRecorder.state === 'recording') _enrollRecorder.stop();
+  const ui = _enrollUI();
+  ui.btn.textContent = 'Record Voice';
+  ui.btn.style.background = '';
+  ui.btn.style.color = '';
+}
+
+async function _finishEnrollRecording(speakerName) {
+  const ui = _enrollUI();
+  ui.progress.style.display = 'block';
+  ui.label.textContent = 'Processing recording...';
+  ui.label.style.color = 'var(--accent)';
+  ui.st.textContent = 'Processing...'; ui.st.style.color = 'var(--accent)';
+
+  try {
+    const recordedBlob = new Blob(_enrollChunks, { type: _enrollMimeType });
+    const elapsed = (Date.now() - _enrollStartTime) / 1000;
+    ui.log.textContent = 'Recorded ~' + Math.floor(elapsed) + 's of audio (' + _enrollMimeType + ').\nConverting to WAV...\n';
+
+    // Decode audio to PCM using Web Audio API
+    const arrayBuffer = await recordedBlob.arrayBuffer();
+    let audioBuffer;
+    try {
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+      audioCtx.close();
+    } catch (decodeErr) {
+      // decodeAudioData failed — upload raw blob and let server handle conversion
+      ui.log.textContent += 'Browser decode failed (' + decodeErr.message + ').\nUploading raw audio for server-side conversion...\n';
+      const ext = _enrollMimeType.includes('mp4') ? '.m4a' : _enrollMimeType.includes('ogg') ? '.ogg' : '.webm';
+      const form = new FormData();
+      form.append('file', recordedBlob, speakerName.toLowerCase().replace(/\s+/g,'_') + '_enroll' + ext);
+      const r = await fetch(API + '/api/listener/eagle/enroll-file?name=' + encodeURIComponent(speakerName), {
+        method: 'POST', body: form,
+      });
+      const d = await r.json();
+      if (d.ok) {
+        ui.log.textContent = 'Voice profile saved for ' + speakerName + '\nEnrollment complete (' + d.duration + ' of audio processed)';
+        ui.label.textContent = 'Enrollment complete';
+        ui.label.style.color = 'var(--green)';
+        ui.st.textContent = 'Enrollment complete'; ui.st.style.color = 'var(--green)';
+        loadEagleStatus();
+      } else {
+        ui.log.textContent = 'ERROR: ' + (d.error || 'unknown');
+        ui.label.textContent = 'Enrollment failed';
+        ui.label.style.color = 'var(--red)';
+        ui.st.textContent = 'Failed'; ui.st.style.color = 'var(--red)';
+      }
+      setTimeout(() => { ui.st.textContent = ''; }, 5000);
+      return;
+    }
+
+    // Get mono PCM (first channel)
+    const pcmFloat = audioBuffer.getChannelData(0);
+    const pcm16 = new Int16Array(pcmFloat.length);
+    for (let i = 0; i < pcmFloat.length; i++) {
+      const s = Math.max(-1, Math.min(1, pcmFloat[i]));
+      pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    }
+
+    // Build WAV file
+    const wavBuffer = new ArrayBuffer(44 + pcm16.length * 2);
+    const view = new DataView(wavBuffer);
+    const sr = audioBuffer.sampleRate;
+    _writeStr(view, 0, 'RIFF');
+    view.setUint32(4, 36 + pcm16.length * 2, true);
+    _writeStr(view, 8, 'WAVE');
+    _writeStr(view, 12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sr, true);
+    view.setUint32(28, sr * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    _writeStr(view, 36, 'data');
+    view.setUint32(40, pcm16.length * 2, true);
+    const wavPcm = new Int16Array(wavBuffer, 44);
+    wavPcm.set(pcm16);
+
+    const wavBlob = new Blob([wavBuffer], { type: 'audio/wav' });
+    const duration = (pcm16.length / sr).toFixed(1);
+    ui.log.textContent = 'Recorded ' + duration + 's of audio.\nUploading for enrollment...\n';
+
+    const form = new FormData();
+    form.append('file', wavBlob, speakerName.toLowerCase().replace(/\s+/g,'_') + '_enroll.wav');
+    const r = await fetch(API + '/api/listener/eagle/enroll-file?name=' + encodeURIComponent(speakerName), {
+      method: 'POST', body: form,
     });
     const d = await r.json();
-    if (!d.ok) { logEl.textContent += 'Error: ' + (d.error || 'unknown'); st.textContent = 'Failed'; st.style.color = 'var(--red)'; return; }
-    logEl.textContent += 'Enrollment request accepted (' + d.method + ')\n';
-
-    // Poll log every 2 seconds — allow up to 100s (30s config delay + 40s enrollment + 30s buffer)
-    let polls = 0;
-    const interval = setInterval(async () => {
-      polls++;
-      try {
-        const lr = await fetch(API + '/api/listener/eagle/enroll/log');
-        const ld = await lr.json();
-        if (ld.log) logEl.textContent = ld.log;
-        logEl.scrollTop = logEl.scrollHeight;
-        // Warn if no listener response after 40 seconds
-        if (polls === 20 && (!ld.log || ld.log.includes('Waiting for wake-listener'))) {
-          logEl.textContent += '\nNo wake-listener response yet. Make sure the listener is running and can reach this server.';
-        }
-        // Check for completion markers
-        if (ld.log && (ld.log.includes('profile saved') || ld.log.includes('Profile saved') || ld.log.includes('Voice profile saved') || ld.log.includes('ERROR') || ld.log.includes('Enrollment complete') || ld.log.includes('only'))) {
-          clearInterval(interval);
-          st.textContent = ld.log.includes('ERROR') ? 'Enrollment failed' : 'Enrollment complete';
-          st.style.color = ld.log.includes('ERROR') ? 'var(--red)' : 'var(--green)';
-          loadEagleStatus();
-          setTimeout(() => { st.textContent = ''; }, 5000);
-        }
-      } catch {}
-      if (polls > 50) { clearInterval(interval); st.textContent = ''; }
-    }, 2000);
-  } catch {
-    logEl.textContent += 'Failed to start enrollment\n';
-    st.textContent = 'Failed'; st.style.color = 'var(--red)';
-    setTimeout(() => { st.textContent = ''; }, 3000);
+    if (d.ok) {
+      ui.log.textContent = 'Voice profile saved for ' + speakerName + '\nEnrollment complete (' + d.duration + ' of audio processed)';
+      ui.label.textContent = 'Enrollment complete';
+      ui.label.style.color = 'var(--green)';
+      ui.st.textContent = 'Enrollment complete'; ui.st.style.color = 'var(--green)';
+      loadEagleStatus();
+    } else {
+      ui.log.textContent = 'ERROR: ' + (d.error || 'unknown');
+      ui.label.textContent = 'Enrollment failed';
+      ui.label.style.color = 'var(--red)';
+      ui.st.textContent = 'Failed'; ui.st.style.color = 'var(--red)';
+    }
+  } catch (e) {
+    ui.log.textContent = 'Processing failed: ' + e.message;
+    ui.label.textContent = 'Enrollment failed';
+    ui.label.style.color = 'var(--red)';
+    ui.st.textContent = 'Failed'; ui.st.style.color = 'var(--red)';
   }
+  setTimeout(() => { ui.st.textContent = ''; }, 5000);
+}
+
+function _writeStr(view, offset, str) {
+  for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+}
+
+async function enrollFromFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const ui = _enrollUI();
+  const speakerName = (ui.nameInput.value || '').trim();
+  if (!speakerName) {
+    toast('Enter a speaker name first');
+    ui.nameInput.focus();
+    input.value = '';
+    return;
+  }
+  ui.progress.style.display = 'block';
+  ui.meter.style.display = 'none';
+  ui.label.textContent = 'Uploading ' + file.name + '...';
+  ui.label.style.color = 'var(--accent)';
+  ui.log.textContent = '';
+  ui.st.textContent = 'Enrolling...'; ui.st.style.color = 'var(--accent)';
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    const r = await fetch(API + '/api/listener/eagle/enroll-file?name=' + encodeURIComponent(speakerName), {
+      method: 'POST', body: form,
+    });
+    const d = await r.json();
+    if (d.ok) {
+      ui.log.textContent = 'Voice profile saved for ' + speakerName + '\nEnrollment complete (' + d.duration + ' of audio processed)';
+      ui.label.textContent = 'Enrollment complete';
+      ui.label.style.color = 'var(--green)';
+      ui.st.textContent = 'Enrollment complete'; ui.st.style.color = 'var(--green)';
+      loadEagleStatus();
+    } else {
+      ui.log.textContent = 'ERROR: ' + (d.error || 'unknown');
+      ui.label.textContent = 'Enrollment failed';
+      ui.label.style.color = 'var(--red)';
+      ui.st.textContent = 'Failed'; ui.st.style.color = 'var(--red)';
+    }
+  } catch (e) {
+    ui.log.textContent = 'Upload failed: ' + e.message;
+    ui.st.textContent = 'Failed'; ui.st.style.color = 'var(--red)';
+  }
+  input.value = '';
+  setTimeout(() => { ui.st.textContent = ''; }, 5000);
 }
 
 async function refreshMicList() {
