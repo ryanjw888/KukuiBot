@@ -3280,10 +3280,11 @@ async def api_listener_restart(req: Request):
             env["PICOVOICE_ACCESS_KEY"] = picovoice_key
 
         try:
+            log_fh = open("/tmp/kukuibot-wake-listener.log", "a")
             proc = subprocess.Popen(
                 cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=log_fh,
+                stderr=subprocess.STDOUT,
                 start_new_session=True,
                 env=env,
             )

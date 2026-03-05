@@ -496,6 +496,8 @@ def fetch_listener_config(kukuibot_url: str) -> dict:
                 "triggers": _parse_triggers(triggers_str),
                 "triggers_str": triggers_str,
                 "jarvis_url": data.get("listener_jarvis_url", ""),
+                "room": data.get("listener_room", ""),
+                "username": data.get("listener_username", ""),
             }
     except Exception as e:
         logger.warning(f"Config fetch failed: {e}")
@@ -633,6 +635,14 @@ def main():
     if not device and initial_cfg.get("device"):
         device = initial_cfg["device"]
         logger.info(f"Using mic from config: device={device}")
+
+    # Override room/username from server config when CLI args are at defaults
+    if args.room == "Office" and initial_cfg.get("room"):
+        args.room = initial_cfg["room"]
+        logger.info(f"Using room from config: {args.room}")
+    if not args.username and initial_cfg.get("username"):
+        args.username = initial_cfg["username"]
+        logger.info(f"Using username from config: {args.username}")
 
     # Resolve direct Jarvis backend URL (bypass proxy for local connections)
     jarvis_direct_url = ""
