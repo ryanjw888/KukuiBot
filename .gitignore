@@ -52,6 +52,7 @@ memory/
 !LICENSE.md
 !SECURITY.md
 !docs/*.md
+docs/NetworkAudit.md
 !agent/*.md
 !workers/*.md
 !models/*.md
