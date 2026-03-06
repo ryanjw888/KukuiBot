@@ -798,6 +798,8 @@ class PersistentClaudeProcess:
         self._current_tool: Optional[str] = None
         self._turn_iterations: int = 0    # Count of assistant events in current turn
         self._turn_user_events: int = 0    # Count of user events in current turn (tool_result round-trips → API calls - 1)
+        self._last_per_call_input_tokens: int = 0  # Exact per-call input from stream_event message_start
+        self.cli_context_window: int = 0  # Dynamic context window from CLI modelUsage
         self._last_stdout_activity: float = time.time()  # Updated on ANY stdout event (including non-broadcast assistant events)
         self.resume_status: str = "unknown"
         # _wake_message: Stores the notification text that triggered a proactive wake.
@@ -1263,11 +1265,24 @@ class PersistentClaudeProcess:
                             blocks = [b.get("type") for b in event.get("message", {}).get("content", [])]
                             extra = f" blocks={blocks}"
                         logger.info(f"Event: {event_type}{extra}")
+                    elif event_type == "stream_event":
+                        inner_evt = event.get("event", {})
+                        inner_type = inner_evt.get("type", "?")
+                        # Extract per-call input_tokens from message_start events
+                        if inner_type == "message_start":
+                            msg_usage = inner_evt.get("message", {}).get("usage", {})
+                            if msg_usage:
+                                pc_uncached = msg_usage.get("input_tokens", 0)
+                                pc_cache_read = msg_usage.get("cache_read_input_tokens", 0)
+                                pc_cache_create = msg_usage.get("cache_creation_input_tokens", 0)
+                                pc_total = pc_uncached + pc_cache_read + pc_cache_create
+                                if pc_total > 0:
+                                    self._last_per_call_input_tokens = pc_total
+                                    logger.info(f"stream_event message_start: per-call input={pc_total:,} (uncached={pc_uncached:,} cache_read={pc_cache_read:,} cache_create={pc_cache_create:,})")
+                        if logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(f"Event: stream_event inner={inner_type}")
                     elif logger.isEnabledFor(logging.DEBUG):
-                        extra = ""
-                        if event_type == "stream_event":
-                            extra = f" inner={event.get('event', {}).get('type', '?')}"
-                        logger.debug(f"Event: {event_type}{extra}")
+                        logger.debug(f"Event: {event_type}")
 
                     # Update session ID and token usage from result events
                     if event_type == "result":
@@ -1292,8 +1307,20 @@ class PersistentClaudeProcess:
                         cache_read = usage.get("cache_read_input_tokens", 0)
                         cache_create = usage.get("cache_creation_input_tokens", 0)
                         total_input = uncached + cache_read + cache_create
-                        # Divide cumulative total by API call count to estimate current context.
-                        ctx_input = total_input // api_calls
+                        # Use exact per-call input from stream_event message_start if available,
+                        # otherwise fall back to division heuristic.
+                        old_ctx = total_input // api_calls  # Legacy division estimate
+                        if self._last_per_call_input_tokens > 0:
+                            ctx_input = self._last_per_call_input_tokens
+                            logger.info(f"Context from stream_event message_start: {ctx_input:,}")
+                        else:
+                            ctx_input = old_ctx
+                            logger.info(f"Context from division fallback: {ctx_input:,} (no message_start data)")
+                        # Phase 3: Dual-logging for validation — compare old vs new
+                        new_ctx = self._last_per_call_input_tokens if self._last_per_call_input_tokens > 0 else old_ctx
+                        diff = new_ctx - old_ctx
+                        diff_pct = round(diff / max(old_ctx, 1) * 100)
+                        logger.info(f"Context comparison: old_division={old_ctx:,} new_stream={new_ctx:,} diff={diff:,} ({'+' if diff >= 0 else ''}{diff_pct}%)")
                         billed_input = total_input
                         self.total_input_tokens += billed_input
                         self.total_output_tokens += usage.get("output_tokens", 0)
@@ -1301,8 +1328,16 @@ class PersistentClaudeProcess:
                             self.last_input_tokens = ctx_input
                             if ctx_input > self.peak_input_tokens:
                                 self.peak_input_tokens = ctx_input
+                        # Extract dynamic context window from CLI modelUsage (if available)
+                        model_usage = event.get("modelUsage", {})
+                        for _mu_model, _mu_info in model_usage.items():
+                            cw = _mu_info.get("contextWindow", 0)
+                            if cw > 0 and cw != self.cli_context_window:
+                                self.cli_context_window = cw
+                                logger.info(f"CLI reports contextWindow={cw:,} for {_mu_model}")
                         self._turn_iterations = 0  # Reset for next turn
                         self._turn_user_events = 0
+                        self._last_per_call_input_tokens = 0  # Reset for next turn
                         # Persist session state with token counts (survives service restart)
                         _save_session_state({
                             "session_id": self.session_id,
@@ -1615,6 +1650,7 @@ class PersistentClaudeProcess:
             self._last_response_done = False
             self._turn_iterations = 0
             self._turn_user_events = 0
+            self._last_per_call_input_tokens = 0
             self._response_events = []
             self._current_tool = None
 
@@ -1736,6 +1772,7 @@ class PersistentClaudeProcess:
             "compaction": compaction_info,
             "active_docs": sorted(self._active_docs),
             "last_activity": self.last_activity,
+            "cli_context_window": self.cli_context_window,
         }
 
         if not self.proc or self.proc.returncode is not None:

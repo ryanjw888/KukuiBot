@@ -644,28 +644,76 @@ async def _classify_spam(from_addr: str, subject: str, body: str,
     """Classify an email as spam/phishing or legitimate using AI.
 
     Returns {"is_spam": bool, "confidence": float, "reason": str}.
-    Auto-classifies as spam if injection is detected in the content.
+    Flags injection-blocked content for review (without marking as spam).
     Defaults to legitimate on parse errors or ambiguity.
     """
-    # Pre-check: if injection guard already replaced content, treat as spam
-    if "[CONTENT BLOCKED]" in subject or "[CONTENT BLOCKED]" in body:
-        return {"is_spam": True, "confidence": 0.95,
-                "reason": "injection/manipulation detected in email content"}
+    # Pre-check: trusted transactional sender domains (configurable via settings)
+    _trusted_raw = _get_config("email_drafter.trusted_sender_domains", "")
+    # Default well-known transactional domains if none configured
+    _default_trusted = {
+        "apple.com", "email.apple.com", "orders.apple.com",
+        "amazon.com", "amazonses.com",
+        "paypal.com", "paypal.co.uk",
+        "google.com", "accounts.google.com",
+        "stripe.com", "shopify.com",
+        "squareup.com", "venmo.com",
+    }
+    trusted_domains = _default_trusted
+    if _trusted_raw.strip():
+        trusted_domains = {d.strip().lower() for d in _trusted_raw.split(",") if d.strip()}
+        trusted_domains |= _default_trusted  # always include defaults
 
-    truncated_body = body[:MAX_BODY_CHARS] if body else ""
+    sender_domain = from_addr.split("@")[-1].lower() if "@" in from_addr else ""
+    # Check exact domain and parent domain (e.g. orders.apple.com → apple.com)
+    sender_parts = sender_domain.split(".")
+    domains_to_check = {sender_domain}
+    if len(sender_parts) > 2:
+        domains_to_check.add(".".join(sender_parts[-2:]))  # parent domain
+
+    if domains_to_check & trusted_domains:
+        return {"is_spam": False, "confidence": 0.0,
+                "reason": f"trusted transactional sender ({sender_domain})"}
+
+    # Pre-check: if injection guard replaced content, flag for review but don't auto-spam.
+    # Injection blocking and spam are different concerns — a legitimate email with
+    # HTML that triggers the injection guard is not necessarily spam.
+    if "[CONTENT BLOCKED]" in subject or "[CONTENT BLOCKED]" in body:
+        logger.info(f"Spam classifier: injection guard blocked content in {message_id or 'unknown'}, skipping classification")
+        return {"is_spam": False, "confidence": 0.0,
+                "reason": "content blocked by injection guard (not classified as spam)"}
+
+    # Smart truncation: strip residual HTML noise, collapse whitespace, then truncate
+    if body:
+        import re
+        _clean = re.sub(r'<[^>]+>', ' ', body)  # strip any surviving HTML tags
+        _clean = re.sub(r'[ \t]+', ' ', _clean)  # collapse horizontal whitespace
+        _clean = re.sub(r'\n{3,}', '\n\n', _clean)  # collapse excessive newlines
+        truncated_body = _clean.strip()[:MAX_BODY_CHARS]
+    else:
+        truncated_body = ""
 
     system_text = (
         "You are an email spam and phishing classifier. Analyze the email and respond "
         "with ONLY a JSON object, no other text. Format: "
         '{"classification": "spam"|"phishing"|"legitimate", "confidence": 0.0-1.0, "reason": "brief explanation"}\n\n'
-        "Classification criteria:\n"
-        "PHISHING signals: urgency tactics, credential/password/payment requests, suspicious links, "
-        "sender impersonation, mismatched display name vs address, threats of account closure.\n"
-        "SPAM signals: unsolicited commercial offers, mass-marketing language, excessive promotions, "
-        "too-good-to-be-true offers, unknown sender with sales pitch.\n"
-        "LEGITIMATE signals: expected correspondence, personal context, known sender patterns, "
-        "professional tone from real organizations, replies to previous threads.\n\n"
-        "When uncertain, ALWAYS classify as legitimate. False negatives are safer than false positives."
+        "Classification criteria (check in this order):\n\n"
+        "LEGITIMATE signals (check FIRST — if any are present, classify as legitimate):\n"
+        "- Transactional emails: receipts, order confirmations, shipping notifications, "
+        "subscription renewals, payment confirmations, account activity alerts\n"
+        "- From recognizable commercial domains with matching transactional subject lines\n"
+        "- Expected correspondence, personal context, known sender patterns\n"
+        "- Professional tone from real organizations, replies to previous threads\n\n"
+        "IMPORTANT: Do NOT use your knowledge of product catalogs, pricing, or availability "
+        "to judge whether a purchase is real. A receipt for any product at any price is evidence "
+        "of a transaction, not evidence of fraud. Product lines change frequently.\n\n"
+        "PHISHING signals: urgency tactics demanding immediate action, requests for credentials "
+        "or passwords, requests to click links to 'verify your account', sender domain that "
+        "does not match the claimed organization, threats of account closure or legal action.\n"
+        "SPAM signals: unsolicited mass-marketing from unknown senders, get-rich-quick schemes, "
+        "miracle cures, lottery/prize notifications, advance-fee fraud, unknown sender with "
+        "pure sales pitch and no prior relationship.\n\n"
+        "When uncertain, ALWAYS classify as legitimate with low confidence. "
+        "False negatives (missing spam) are far safer than false positives (blocking real email)."
     )
 
     prompt = (

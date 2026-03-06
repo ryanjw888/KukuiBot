@@ -2768,6 +2768,12 @@ async def api_claude_events(req: Request):
                     ctx_tokens = proc.last_input_tokens
                     if ctx_tokens > 0:
                         _, _ctx_win, _ = _profile_limits(session_id)
+                        # Prefer CLI-reported context window if available and reasonable
+                        if hasattr(proc, 'cli_context_window') and proc.cli_context_window > 0:
+                            _old_win = _ctx_win
+                            _ctx_win = max(proc.cli_context_window, _ctx_win)  # Use larger of CLI or configured
+                            if _ctx_win != _old_win:
+                                logger.debug(f"Context window: CLI={proc.cli_context_window:,} configured={_old_win:,} using={_ctx_win:,}")
                         ctx_pct = round(ctx_tokens / _ctx_win, 4)
                         yield f"data: {json.dumps({'type': 'context', 'tokens': ctx_tokens, 'max': _ctx_win, 'pct': ctx_pct, 'source': 'api'})}\n\n"
                     _result_text = event.get("result", "") or _accumulated_text
