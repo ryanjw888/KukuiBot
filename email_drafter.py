@@ -1045,7 +1045,8 @@ async def _ai_call(prompt: str, system_text: str = "", timeout: int = 120,
                             if evt.get("type") in ("text", "chunk"):
                                 collected_text.append(evt.get("text", ""))
                             if evt.get("type") == "error":
-                                raise RuntimeError(f"AI error: {evt.get('text', 'unknown')}")
+                                err_detail = evt.get("message") or evt.get("error") or evt.get("text") or "unknown"
+                                raise RuntimeError(f"AI error: {err_detail}")
                             if evt.get("type") == "done":
                                 break
                         except json.JSONDecodeError:
