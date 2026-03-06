@@ -403,7 +403,20 @@ SUB_AGENT_TOOLS = [t for t in TOOL_DEFINITIONS if t["name"] not in _DELEGATION_T
 
 
 # --- Codebase Outline Tool ---
-_OUTLINE_SKIP_DIRS = {".git", ".venv", "__pycache__", "node_modules", ".tox", ".mypy_cache", ".pytest_cache"}
+_OUTLINE_SKIP_DIRS = {
+    ".git", ".venv", "__pycache__", "node_modules", ".tox",
+    ".mypy_cache", ".pytest_cache",
+    # Data/artifact dirs agents don't need
+    "logs", "OLD", "certs", "librispeech",
+}
+_OUTLINE_SKIP_EXTS = {
+    ".flac", ".wav", ".mp3", ".mp4", ".avi", ".mov", ".mkv",
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".svg",
+    ".zip", ".tar", ".gz", ".bz2", ".7z", ".rar",
+    ".bin", ".npy", ".npz", ".pkl", ".pickle", ".pt", ".gguf",
+    ".db", ".sqlite", ".sqlite3",
+    ".log", ".DS_Store",
+}
 _OUTLINE_MAX_FILES = 200
 
 
@@ -422,27 +435,34 @@ def _codebase_outline(mode: str, path: str, name: str = None) -> str:
 
 
 def _outline_tree(dir_path: str) -> str:
-    """Walk directory, list files with Python symbol counts."""
+    """Walk directory, list files with Python symbol counts.
+
+    Python files are always included (uncapped). Non-Python files are capped
+    to avoid data/binary files overwhelming the output. Files with extensions
+    in _OUTLINE_SKIP_EXTS are excluded entirely.
+    """
     dir_p = Path(dir_path)
     if not dir_p.is_dir():
         return f"ERROR: '{dir_path}' is not a directory."
 
-    entries = []  # (relative_path, is_python, info_str)
-    py_count = 0
-    total_count = 0
+    py_entries = []       # (relative_path_str, True, info_str)
+    other_entries = []    # (relative_path_str, False, info_str)
+    total_files_seen = 0  # count of ALL files walked (including skipped exts)
 
     for root, dirs, files in os.walk(dir_p):
-        # Skip hidden/cache dirs in-place
+        # Skip hidden/cache/data dirs in-place
         dirs[:] = [d for d in sorted(dirs) if d not in _OUTLINE_SKIP_DIRS and not d.startswith(".")]
         for fname in sorted(files):
-            if total_count >= _OUTLINE_MAX_FILES:
-                break
             fpath = Path(root) / fname
-            rel = fpath.relative_to(dir_p)
-            total_count += 1
+            rel = str(fpath.relative_to(dir_p))
+            total_files_seen += 1
+
+            # Skip binary/data file extensions
+            ext = Path(fname).suffix.lower()
+            if ext in _OUTLINE_SKIP_EXTS or fname == ".DS_Store":
+                continue
 
             if fname.endswith(".py"):
-                py_count += 1
                 try:
                     source = fpath.read_text(errors="replace")
                     tree = ast.parse(source, filename=str(fpath))
@@ -454,7 +474,7 @@ def _outline_tree(dir_path: str) -> str:
                     info = "(parse error)"
                 except Exception as e:
                     info = f"(error: {type(e).__name__})"
-                entries.append((str(rel), True, info))
+                py_entries.append((rel, True, info))
             else:
                 try:
                     size = fpath.stat().st_size
@@ -464,33 +484,34 @@ def _outline_tree(dir_path: str) -> str:
                         size_str = f"{size} bytes"
                 except OSError:
                     size_str = "? bytes"
-                entries.append((str(rel), False, f"(non-python, {size_str})"))
-        if total_count >= _OUTLINE_MAX_FILES:
-            break
+                other_entries.append((rel, False, f"(non-python, {size_str})"))
 
-    if not entries:
+    if not py_entries and not other_entries:
         return f"No files found in {dir_path}"
 
-    # Calculate remaining
-    remaining = 0
-    if total_count >= _OUTLINE_MAX_FILES:
-        # Count remaining files
-        for root, dirs, files in os.walk(dir_p):
-            dirs[:] = [d for d in dirs if d not in _OUTLINE_SKIP_DIRS and not d.startswith(".")]
-            remaining += len(files)
-        remaining = max(0, remaining - _OUTLINE_MAX_FILES)
+    # Cap non-Python files: leave room for Python, but show at least 50
+    other_cap = max(50, _OUTLINE_MAX_FILES - len(py_entries))
+    other_capped = other_entries[:other_cap]
+    other_omitted = len(other_entries) - len(other_capped)
+
+    # Merge and sort by path to preserve directory context
+    all_entries = py_entries + other_capped
+    all_entries.sort(key=lambda e: e[0])
+
+    shown_count = len(all_entries)
 
     # Format output
-    max_path_len = max(len(e[0]) for e in entries)
-    lines = [f"{dir_p.name}/ ({py_count} Python files, {total_count} total files)\n"]
-    for rel_path, is_py, info in entries:
-        if is_py:
-            lines.append(f"  {rel_path:<{max_path_len}}  — {info}")
-        else:
-            lines.append(f"  {rel_path:<{max_path_len}}  — {info}")
+    max_path_len = max(len(e[0]) for e in all_entries)
+    if total_files_seen > shown_count:
+        header = f"{dir_p.name}/ ({len(py_entries)} Python files, {shown_count} shown of ~{total_files_seen} total)\n"
+    else:
+        header = f"{dir_p.name}/ ({len(py_entries)} Python files, {shown_count} total files)\n"
+    lines = [header]
+    for rel_path, is_py, info in all_entries:
+        lines.append(f"  {rel_path:<{max_path_len}}  — {info}")
 
-    if remaining > 0:
-        lines.append(f"\n[{remaining} more files omitted]")
+    if other_omitted > 0:
+        lines.append(f"\n[{other_omitted} more non-Python files omitted]")
 
     return "\n".join(lines)
 
