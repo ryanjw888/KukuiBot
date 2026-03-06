@@ -38,30 +38,6 @@ from config import KUKUIBOT_HOME
 
 logger = logging.getLogger("kukuibot.gmail")
 
-# --- One-time cache migration: sequence numbers → IMAP UIDs ---
-_CACHE_UID_MIGRATION_KEY = "gmail.cache_uid_migration_done"
-
-def _migrate_cache_to_uid():
-    """Clear email cache once after switching from sequence numbers to UIDs.
-
-    Old cache entries have IMAP sequence numbers stored as 'uid' values,
-    which are volatile and would mismatch with the real UIDs now being used.
-    """
-    try:
-        if _get_config(_CACHE_UID_MIGRATION_KEY, "") == "1":
-            return  # Already migrated
-        import email_cache
-        email_cache.clear_cache()
-        _set_config(_CACHE_UID_MIGRATION_KEY, "1")
-        logger.info("gmail: email cache cleared (one-time UID migration)")
-    except Exception as e:
-        logger.warning(f"gmail: cache UID migration failed (non-fatal): {e}")
-
-try:
-    _migrate_cache_to_uid()
-except Exception:
-    pass  # Non-fatal — cache will be repopulated naturally
-
 # --- Constants ---
 IMAP_HOST = "imap.gmail.com"
 IMAP_PORT = 993
@@ -84,6 +60,29 @@ def _get_config(key: str, default: str = "") -> str:
 def _set_config(key: str, value: str):
     from auth import set_config
     set_config(key, value)
+
+
+# --- One-time cache migration: sequence numbers → IMAP UIDs ---
+_CACHE_UID_MIGRATION_KEY = "gmail.cache_uid_migration_done"
+
+def _migrate_cache_to_uid():
+    """Clear email cache once after switching from sequence numbers to UIDs."""
+    try:
+        if _get_config(_CACHE_UID_MIGRATION_KEY, "") == "1":
+            return
+        import email_cache
+        email_cache.clear_cache()
+        _set_config(_CACHE_UID_MIGRATION_KEY, "1")
+        logger.info("gmail: email cache cleared (one-time UID migration)")
+    except Exception as e:
+        logger.warning(f"gmail: cache UID migration failed (non-fatal): {e}")
+
+try:
+    _migrate_cache_to_uid()
+except Exception:
+    pass
+
+# ---
 
 
 def get_permissions() -> dict[str, bool]:
