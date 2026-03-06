@@ -112,6 +112,7 @@ Drift metrics are exposed via `/api/token-debug` and logged to `~/.kukuibot/logs
 - Self-compact via connected AI provider
 - Memory search via TF-IDF
 - Disconnect resilience: event sequencing, resume endpoint, runtime restart detection
+- Wake-listener mic resilience: falls back to the first available input device if default/default-selected macOS mic open fails after reboot or device churn
 - Multi-provider auth: OpenAI OAuth PKCE, Claude Code CLI/API key, Anthropic API key, OpenRouter API key
 - **HTTPS native** — uvicorn serves TLS directly (mkcert certs)
 - Root CA download endpoint (`/api/cert`) for device onboarding

@@ -22,6 +22,7 @@ Open **https://localhost:7000** — the setup wizard walks you through everythin
 - **Browser automation tools**: browser_open, browser_navigate, browser_click, browser_type, browser_extract, browser_snapshot, browser_close
 - **Core tools**: bash, read_file, write_file, edit_file, spawn_agent (+ background, memory, web search/fetch)
 - **Voice input** via Web Speech API (Safari's on-device Siri STT)
+- **Wake listener resilience**: local wake-listener can fall back to the first available input device if macOS default mic routing breaks after reboot
 - **Security**: elevation prompts, path guards, root mode with TTL
 - **Context management**: auto-compaction, memory search, token accuracy tracking
 - **Multi-tab**: run multiple workers side-by-side across providers

@@ -327,24 +327,64 @@ def run_enrollment(stream, pa, access_key, speaker_name, duration, kukuibot_url)
 def open_mic(device=None, chunk_samples=VOSK_CHUNK_SAMPLES):
     import pyaudio
     pa = pyaudio.PyAudio()
+
+    def _input_devices():
+        devices = []
+        for i in range(pa.get_device_count()):
+            info = pa.get_device_info_by_index(i)
+            if int(info.get("maxInputChannels", 0)) > 0:
+                devices.append({"index": i, "name": info.get("name", "")})
+        return devices
+
+    input_devices = _input_devices()
     device_index = None
-    if device is not None:
+    requested_label = str(device or "").strip()
+
+    if requested_label:
         try:
-            device_index = int(device)
+            device_index = int(requested_label)
         except ValueError:
-            for i in range(pa.get_device_count()):
-                info = pa.get_device_info_by_index(i)
-                if str(device).lower() in info.get("name", "").lower() and int(info.get("maxInputChannels", 0)) > 0:
-                    device_index = i
+            for dev in input_devices:
+                if requested_label.lower() in dev["name"].lower():
+                    device_index = dev["index"]
                     break
             if device_index is None:
-                raise RuntimeError(f"No input device matched '{device}'")
-    stream = pa.open(
-        format=pyaudio.paInt16, channels=1, rate=SAMPLE_RATE,
-        input=True, input_device_index=device_index,
-        frames_per_buffer=chunk_samples,
-    )
-    return pa, stream
+                raise RuntimeError(f"No input device matched '{requested_label}'")
+
+    def _open(idx):
+        return pa.open(
+            format=pyaudio.paInt16, channels=1, rate=SAMPLE_RATE,
+            input=True, input_device_index=idx,
+            frames_per_buffer=chunk_samples,
+        )
+
+    try:
+        stream = _open(device_index)
+        return pa, stream
+    except Exception as e:
+        if device_index is None:
+            logger.warning(f"Default input device failed ({e}); trying explicit input-device fallback")
+        else:
+            logger.warning(f"Requested input device '{requested_label}' failed ({e}); trying other input devices")
+
+        fallback = next((d for d in input_devices if d["index"] != device_index), None)
+        if not fallback:
+            try:
+                pa.terminate()
+            except Exception:
+                pass
+            raise
+
+        logger.warning(f"Falling back to input device #{fallback['index']}: {fallback['name']}")
+        try:
+            stream = _open(fallback["index"])
+            return pa, stream
+        except Exception:
+            try:
+                pa.terminate()
+            except Exception:
+                pass
+            raise
 
 
 def read_chunk(stream, chunk_samples=VOSK_CHUNK_SAMPLES) -> np.ndarray:
