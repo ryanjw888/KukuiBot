@@ -2121,6 +2121,17 @@ async function loadEagleStatus() {
     const r = await fetch(API + '/api/listener/eagle/status');
     const d = await r.json();
     const statusEl = document.getElementById('eagle-profile-status');
+    if (d.model_available === false) {
+      statusEl.innerHTML = '<span style="color:var(--red);">Speaker verification unavailable</span>'
+        + '<div style="color:var(--muted);font-size:11px;margin-top:4px;">' + (d.model_status || 'ML dependencies not installed') + '</div>';
+      const recordBtn = document.getElementById('enroll-record-btn');
+      const nameInput = document.getElementById('enroll-speaker-name');
+      if (recordBtn) { recordBtn.disabled = true; recordBtn.style.opacity = '0.4'; recordBtn.title = d.model_status || 'Dependencies missing'; }
+      if (nameInput) { nameInput.disabled = true; nameInput.style.opacity = '0.4'; }
+      const uploadBtn = nameInput ? nameInput.nextElementSibling : null;
+      if (uploadBtn && uploadBtn.textContent.includes('Upload')) { uploadBtn.disabled = true; uploadBtn.style.opacity = '0.4'; }
+      return;
+    }
     if (d.speakers && d.speakers.length > 0) {
       let html = '<div style="color:var(--green);margin-bottom:6px;">Enrolled speakers:</div>';
       d.speakers.forEach(s => {

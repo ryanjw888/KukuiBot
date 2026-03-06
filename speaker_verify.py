@@ -27,11 +27,52 @@ _embedding_model = None
 _mean_var_norm_emb = None
 _torch = None
 
+# Dependency availability check (runs at import time)
+_missing_deps = []
+for _mod_name in ("torch", "torchaudio"):
+    try:
+        __import__(_mod_name)
+    except ImportError:
+        _missing_deps.append(_mod_name)
+
+# speechbrain requires torchaudio compat patch before import
+if "torchaudio" not in _missing_deps:
+    try:
+        import torchaudio as _ta_check
+        if not hasattr(_ta_check, "list_audio_backends"):
+            _ta_check.list_audio_backends = lambda: ["default"]
+        __import__("speechbrain")
+    except ImportError:
+        _missing_deps.append("speechbrain")
+    except Exception:
+        # speechbrain may fail for non-import reasons; treat as unavailable
+        _missing_deps.append("speechbrain")
+else:
+    # Can't check speechbrain without torchaudio
+    _missing_deps.append("speechbrain")
+
+_model_files_exist = all(
+    os.path.isfile(os.path.join(MODEL_DIR, f))
+    for f in ("embedding_model.ckpt", "mean_var_norm_emb.ckpt", "hyperparams.yaml")
+)
+
+AVAILABLE = (not _missing_deps) and _model_files_exist
+
+if _missing_deps:
+    STATUS_MESSAGE = f"Missing Python packages: {', '.join(_missing_deps)}. Install with: pip install speechbrain torch torchaudio"
+elif not _model_files_exist:
+    STATUS_MESSAGE = f"ECAPA-TDNN model files not found in {MODEL_DIR}. Download the model first."
+else:
+    STATUS_MESSAGE = "ECAPA-TDNN speaker verification ready"
+
 
 def _ensure_model():
     """Lazy-load the ECAPA-TDNN model on first use."""
     global _model_loaded, _compute_features, _mean_var_norm
     global _embedding_model, _mean_var_norm_emb, _torch
+
+    if not AVAILABLE:
+        raise RuntimeError(f"Speaker verification unavailable: {STATUS_MESSAGE}")
 
     if _model_loaded:
         return
@@ -137,6 +178,9 @@ def enroll_speaker(name: str, wav_bytes: bytes) -> dict:
 
     Returns dict with ok, name, profile_path, duration keys.
     """
+    if not AVAILABLE:
+        return {"ok": False, "error": STATUS_MESSAGE}
+
     safe_name = name.strip().lower().replace(" ", "_")
     if not safe_name or "/" in safe_name or ".." in safe_name:
         return {"ok": False, "error": "Invalid speaker name"}

@@ -3300,7 +3300,18 @@ async def api_listener_restart(req: Request):
 @app.get("/api/listener/eagle/status")
 async def api_eagle_status():
     """Check speaker verification profile status — lists all enrolled speakers."""
-    from speaker_verify import get_enrolled_speakers
+    from speaker_verify import AVAILABLE, STATUS_MESSAGE, get_enrolled_speakers
+
+    if not AVAILABLE:
+        return {
+            "enrolled": False,
+            "speakers": [],
+            "has_legacy_profile": False,
+            "eagle_enabled": _runtime_config.get("listener_eagle_enabled", True),
+            "eagle_threshold": _runtime_config.get("listener_eagle_threshold", "0.35"),
+            "model_available": False,
+            "model_status": STATUS_MESSAGE,
+        }
 
     speakers = get_enrolled_speakers()
 
@@ -3317,6 +3328,8 @@ async def api_eagle_status():
         "has_legacy_profile": has_legacy,
         "eagle_enabled": _runtime_config.get("listener_eagle_enabled", True),
         "eagle_threshold": _runtime_config.get("listener_eagle_threshold", "0.35"),
+        "model_available": True,
+        "model_status": STATUS_MESSAGE,
     }
 
 
@@ -3397,6 +3410,9 @@ async def api_eagle_enroll_file(req: Request, file: UploadFile):
         return JSONResponse({"ok": False, "error": "Invalid speaker name"}, status_code=400)
 
     def _do_enroll():
+        from speaker_verify import AVAILABLE, STATUS_MESSAGE
+        if not AVAILABLE:
+            return {"ok": False, "error": STATUS_MESSAGE}
         import io
         import wave
 

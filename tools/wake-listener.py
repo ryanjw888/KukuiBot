@@ -139,7 +139,14 @@ def verify_speaker(enrolled_embeddings: dict, speaker_names: list, frames: list,
     if src_dir not in sys.path:
         sys.path.insert(0, src_dir)
 
-    from speaker_verify import extract_embedding
+    try:
+        from speaker_verify import extract_embedding, AVAILABLE
+        if not AVAILABLE:
+            logger.warning("Speaker verification skipped: model not available")
+            return True, 0.0, ""
+    except ImportError:
+        logger.warning("Speaker verification skipped: speaker_verify module not importable")
+        return True, 0.0, ""
 
     test_embedding = extract_embedding(all_pcm)
 
@@ -265,7 +272,18 @@ def run_enrollment(stream, pa, access_key, speaker_name, duration, kukuibot_url)
         src_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
         if src_dir not in sys.path:
             sys.path.insert(0, src_dir)
-        from speaker_verify import enroll_speaker
+        try:
+            from speaker_verify import enroll_speaker, AVAILABLE
+            if not AVAILABLE:
+                msg = "Speaker verification model not available — install torch, torchaudio, speechbrain first"
+                logger.warning(msg)
+                _post_enroll_progress(kukuibot_url, speaker_name, 0, "failed", error=msg)
+                return False, ""
+        except ImportError as e:
+            msg = f"speaker_verify not importable: {e}"
+            logger.error(msg)
+            _post_enroll_progress(kukuibot_url, speaker_name, 0, "failed", error=msg)
+            return False, ""
 
         result = enroll_speaker(speaker_name, wav_bytes)
         if result.get("ok"):
