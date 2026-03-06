@@ -38,6 +38,22 @@ These are the tools available to the KukuiBot agent out of the box:
 - Inherits current reasoning_effort setting
 - Use for: multi-file refactors, deep audits, long research, migration plans
 
+### codebase_outline
+- Explore Python codebase structure and retrieve specific symbols without reading entire files
+- Uses stdlib `ast` — zero external dependencies
+- Three modes:
+
+| Mode | Input | Output | Use Case |
+|---|---|---|---|
+| `tree` | directory path | File tree with per-file symbol counts and line counts | "What's in this codebase?" |
+| `outline` | file path | All functions, classes, methods with line numbers, signatures, docstrings | "What's in this file?" (without reading it) |
+| `symbol` | file path + `name` | Full source code of just that symbol | "Give me just this function" |
+
+- **Parameters:** `mode` (required: tree/outline/symbol), `path` (required), `name` (symbol mode only — use `ClassName.method` for methods)
+- **Security:** Same `check_path_access` as `read_file` — workspace-first, elevation for out-of-bound paths
+- **Python files only** — non-Python files appear in `tree` mode with size but no symbol parsing
+- **Tip:** Use `tree` → `outline` → `symbol` to drill into a codebase in 3 calls instead of 5-10 `read_file` calls
+
 ## Sub-Agent + Reasoning Policy ⭐
 
 **When to spawn a sub-agent**

@@ -942,11 +942,14 @@ def _enforce_send_permissions(to: str, perms: dict, owner_emails: set[str]):
     """
     to_lower = to.strip().lower()
 
-    if not (perms.get("send_owner_only") or perms.get("send_within_org") or perms.get("send_anyone")):
+    if not (perms.get("send_owner_only") or perms.get("send_within_org") or perms.get("send_anyone") or perms.get("manual_send")):
         raise PermissionError("No send permission enabled")
 
     if perms.get("send_anyone"):
         return  # No restrictions
+
+    if perms.get("manual_send"):
+        return  # User manually sending a draft — no recipient restrictions
 
     # Check domain whitelist — if recipient's domain is whitelisted, allow
     whitelist = get_send_whitelist_domains()

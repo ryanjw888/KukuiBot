@@ -1845,18 +1845,11 @@ def send_draft(uid: str) -> dict:
 
     Works on both AI-generated and manual drafts.
     """
-    from gmail_bridge import check_permission, _get_config as gmail_config
+    from gmail_bridge import (check_permission, _get_config as gmail_config,
+                              _enforce_send_permissions, get_permissions, _get_owner_emails)
     import smtplib
 
     check_permission("read_inbox")
-
-    # Need at least one send permission
-    from gmail_bridge import get_permissions
-    perms = get_permissions()
-    has_send_perm = (perms.get("send_owner_only") or perms.get("send_within_org")
-                     or perms.get("send_anyone") or perms.get("manual_send"))
-    if not has_send_perm:
-        raise PermissionError("No send permission enabled — enable one in Settings > Gmail")
 
     email_addr = gmail_config("gmail.email", "")
     app_password = gmail_config("gmail.app_password", "")
@@ -1883,23 +1876,11 @@ def send_draft(uid: str) -> dict:
         if not to_addr:
             raise ValueError("Draft has no recipient")
 
-        # Enforce send permissions
+        # Enforce send permissions (shared logic with gmail_bridge)
         to_lower = email.utils.parseaddr(to_addr)[1].lower()
-        from gmail_bridge import _get_owner_emails
+        perms = get_permissions()
         owner_emails = _get_owner_emails()
-
-        if perms.get("send_anyone"):
-            pass
-        elif perms.get("manual_send"):
-            pass  # User manually sending a draft — no recipient restrictions
-        elif perms.get("send_within_org"):
-            owner_domain = email_addr.split('@')[-1] if '@' in email_addr else None
-            to_domain = to_lower.split('@')[-1] if '@' in to_lower else None
-            if not owner_domain or not to_domain or to_domain != owner_domain:
-                raise PermissionError(f"Can only send within @{owner_domain}")
-        elif perms.get("send_owner_only"):
-            if to_lower not in owner_emails:
-                raise PermissionError(f"Can only send to owner emails: {', '.join(sorted(owner_emails))}")
+        _enforce_send_permissions(to_lower, perms, owner_emails)
 
         # Send via SMTP
         with smtplib.SMTP("smtp.gmail.com", 587) as server:

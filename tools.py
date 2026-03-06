@@ -4,6 +4,7 @@ Handles bash, read_file, write_file, edit_file, spawn_agent, bash_background, ba
 memory_search, memory_read, web tools, and browser automation tools.
 """
 
+import ast
 import html
 import ipaddress
 import json
@@ -120,6 +121,26 @@ TOOL_DEFINITIONS = [
         },
     
         "allowed_callers": ["direct"],
+    },
+    {
+        "type": "function",
+        "name": "codebase_outline",
+        "description": (
+            "Explore Python codebase structure and retrieve specific symbols without reading entire files. "
+            "Three modes: tree (directory overview with symbol counts), outline (file-level function/class listing "
+            "with line numbers), symbol (extract a single function or class by name)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "mode": {"type": "string", "enum": ["tree", "outline", "symbol"], "description": "tree=directory overview, outline=file symbols, symbol=extract one symbol"},
+                "path": {"type": "string", "description": "Directory path (tree mode) or file path (outline/symbol mode)"},
+                "name": {"type": "string", "description": "(symbol mode only) Function or class name. Use 'ClassName.method' for methods."},
+            },
+            "required": ["mode", "path"],
+            "additionalProperties": False,
+        },
+        "allowed_callers": ["direct", "code_execution_20260120"],
     },
     {
         "type": "function",
@@ -379,6 +400,307 @@ TOOL_DEFINITIONS = [
 # Sub-agent tools: same but without spawn_agent and delegation tools (prevent recursion)
 _DELEGATION_TOOLS = {"delegate_task", "check_task", "list_tasks", "spawn_agent"}
 SUB_AGENT_TOOLS = [t for t in TOOL_DEFINITIONS if t["name"] not in _DELEGATION_TOOLS]
+
+
+# --- Codebase Outline Tool ---
+_OUTLINE_SKIP_DIRS = {".git", ".venv", "__pycache__", "node_modules", ".tox", ".mypy_cache", ".pytest_cache"}
+_OUTLINE_MAX_FILES = 200
+
+
+def _codebase_outline(mode: str, path: str, name: str = None) -> str:
+    """Explore Python codebase structure using stdlib ast."""
+    if mode == "tree":
+        return _outline_tree(path)
+    elif mode == "outline":
+        return _outline_file(path)
+    elif mode == "symbol":
+        if not name:
+            return "ERROR: 'name' parameter is required for symbol mode."
+        return _outline_symbol(path, name)
+    else:
+        return f"ERROR: Unknown mode '{mode}'. Use tree, outline, or symbol."
+
+
+def _outline_tree(dir_path: str) -> str:
+    """Walk directory, list files with Python symbol counts."""
+    dir_p = Path(dir_path)
+    if not dir_p.is_dir():
+        return f"ERROR: '{dir_path}' is not a directory."
+
+    entries = []  # (relative_path, is_python, info_str)
+    py_count = 0
+    total_count = 0
+
+    for root, dirs, files in os.walk(dir_p):
+        # Skip hidden/cache dirs in-place
+        dirs[:] = [d for d in sorted(dirs) if d not in _OUTLINE_SKIP_DIRS and not d.startswith(".")]
+        for fname in sorted(files):
+            if total_count >= _OUTLINE_MAX_FILES:
+                break
+            fpath = Path(root) / fname
+            rel = fpath.relative_to(dir_p)
+            total_count += 1
+
+            if fname.endswith(".py"):
+                py_count += 1
+                try:
+                    source = fpath.read_text(errors="replace")
+                    tree = ast.parse(source, filename=str(fpath))
+                    funcs = sum(1 for n in ast.iter_child_nodes(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
+                    classes = sum(1 for n in ast.iter_child_nodes(tree) if isinstance(n, ast.ClassDef))
+                    lines = source.count("\n") + 1
+                    info = f"{funcs} function{'s' if funcs != 1 else ''}, {classes} class{'es' if classes != 1 else ''} ({lines} lines)"
+                except SyntaxError:
+                    info = "(parse error)"
+                except Exception as e:
+                    info = f"(error: {type(e).__name__})"
+                entries.append((str(rel), True, info))
+            else:
+                try:
+                    size = fpath.stat().st_size
+                    if size >= 1024:
+                        size_str = f"{size / 1024:.1f} KB"
+                    else:
+                        size_str = f"{size} bytes"
+                except OSError:
+                    size_str = "? bytes"
+                entries.append((str(rel), False, f"(non-python, {size_str})"))
+        if total_count >= _OUTLINE_MAX_FILES:
+            break
+
+    if not entries:
+        return f"No files found in {dir_path}"
+
+    # Calculate remaining
+    remaining = 0
+    if total_count >= _OUTLINE_MAX_FILES:
+        # Count remaining files
+        for root, dirs, files in os.walk(dir_p):
+            dirs[:] = [d for d in dirs if d not in _OUTLINE_SKIP_DIRS and not d.startswith(".")]
+            remaining += len(files)
+        remaining = max(0, remaining - _OUTLINE_MAX_FILES)
+
+    # Format output
+    max_path_len = max(len(e[0]) for e in entries)
+    lines = [f"{dir_p.name}/ ({py_count} Python files, {total_count} total files)\n"]
+    for rel_path, is_py, info in entries:
+        if is_py:
+            lines.append(f"  {rel_path:<{max_path_len}}  — {info}")
+        else:
+            lines.append(f"  {rel_path:<{max_path_len}}  — {info}")
+
+    if remaining > 0:
+        lines.append(f"\n[{remaining} more files omitted]")
+
+    return "\n".join(lines)
+
+
+def _outline_file(file_path: str) -> str:
+    """Parse a Python file and list all top-level symbols with line numbers."""
+    fp = Path(file_path)
+    if not fp.is_file():
+        return f"ERROR: '{file_path}' is not a file."
+    if not fp.name.endswith(".py"):
+        return f"ERROR: '{file_path}' is not a Python file."
+
+    try:
+        source = fp.read_text(errors="replace")
+    except Exception as e:
+        return f"ERROR reading {file_path}: {e}"
+
+    try:
+        tree = ast.parse(source, filename=str(fp))
+    except SyntaxError as e:
+        return f"ERROR: Syntax error in {file_path}: {e}"
+
+    total_lines = source.count("\n") + 1
+    top_funcs = sum(1 for n in ast.iter_child_nodes(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
+    top_classes = sum(1 for n in ast.iter_child_nodes(tree) if isinstance(n, ast.ClassDef))
+
+    lines = [f"{fp.name} ({top_funcs} functions, {top_classes} classes, {total_lines} lines)\n"]
+
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            prefix = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+            sig = _format_signature(node)
+            decorators = _format_decorators(node)
+            for dec in decorators:
+                lines.append(f"  {node.decorator_list[0].lineno:>5}  {dec}")
+            lines.append(f"  {node.lineno:>5}  {prefix} {node.name}({sig})")
+            doc = _get_docstring_first_line(node)
+            if doc:
+                lines.append(f"         — {doc}")
+
+        elif isinstance(node, ast.ClassDef):
+            decorators = _format_decorators(node)
+            bases = ", ".join(_format_expr(b) for b in node.bases) if node.bases else ""
+            for dec in decorators:
+                lines.append(f"  {node.decorator_list[0].lineno:>5}  {dec}")
+            lines.append(f"  {node.lineno:>5}  class {node.name}" + (f"({bases})" if bases else ""))
+            doc = _get_docstring_first_line(node)
+            if doc:
+                lines.append(f"         — {doc}")
+            # List methods
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    mprefix = "async def" if isinstance(child, ast.AsyncFunctionDef) else "def"
+                    msig = _format_signature(child)
+                    lines.append(f"  {child.lineno:>5}    {mprefix} {child.name}({msig})")
+                    mdoc = _get_docstring_first_line(child)
+                    if mdoc:
+                        lines.append(f"           — {mdoc}")
+
+    return "\n".join(lines)
+
+
+def _outline_symbol(file_path: str, name: str) -> str:
+    """Extract a single symbol's source code from a Python file."""
+    fp = Path(file_path)
+    if not fp.is_file():
+        return f"ERROR: '{file_path}' is not a file."
+
+    try:
+        source = fp.read_text(errors="replace")
+    except Exception as e:
+        return f"ERROR reading {file_path}: {e}"
+
+    try:
+        tree = ast.parse(source, filename=str(fp))
+    except SyntaxError as e:
+        return f"ERROR: Syntax error in {file_path}: {e}"
+
+    source_lines = source.splitlines()
+
+    # Support dotted names like ClassName.method_name
+    parts = name.split(".", 1)
+
+    target_node = None
+    if len(parts) == 2:
+        class_name, method_name = parts
+        for node in ast.iter_child_nodes(tree):
+            if isinstance(node, ast.ClassDef) and node.name == class_name:
+                for child in ast.iter_child_nodes(node):
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and child.name == method_name:
+                        target_node = child
+                        break
+                break
+    else:
+        for node in ast.iter_child_nodes(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == name:
+                target_node = node
+                break
+
+    if target_node is None:
+        # List available symbols
+        available = []
+        for node in ast.iter_child_nodes(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                available.append(node.name)
+            elif isinstance(node, ast.ClassDef):
+                available.append(node.name)
+                for child in ast.iter_child_nodes(node):
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        available.append(f"{node.name}.{child.name}")
+        suggestion = ", ".join(available[:20])
+        return f"Symbol '{name}' not found in {file_path}. Available symbols: [{suggestion}]"
+
+    # Get line range — include decorators
+    start_line = target_node.lineno
+    if hasattr(target_node, "decorator_list") and target_node.decorator_list:
+        start_line = target_node.decorator_list[0].lineno
+
+    end_line = getattr(target_node, "end_lineno", None)
+    if end_line is None:
+        # Fallback: scan until next top-level node or EOF
+        end_line = len(source_lines)
+        parent = tree if len(parts) == 1 else None
+        if parent:
+            found = False
+            for node in ast.iter_child_nodes(parent):
+                if found and hasattr(node, "lineno"):
+                    end_line = node.lineno - 1
+                    break
+                if node is target_node:
+                    found = True
+
+    extracted = source_lines[start_line - 1:end_line]
+    header = f"# {fp.name}:{start_line}-{end_line} ({name})"
+    return header + "\n" + "\n".join(extracted)
+
+
+def _format_signature(node) -> str:
+    """Format function argument signature."""
+    args = node.args
+    parts = []
+    # Positional args
+    defaults_offset = len(args.args) - len(args.defaults)
+    for i, arg in enumerate(args.args):
+        s = arg.arg
+        if arg.annotation:
+            s += f": {_format_expr(arg.annotation)}"
+        di = i - defaults_offset
+        if di >= 0 and di < len(args.defaults):
+            s += f" = ..."
+        parts.append(s)
+    if args.vararg:
+        s = f"*{args.vararg.arg}"
+        if args.vararg.annotation:
+            s += f": {_format_expr(args.vararg.annotation)}"
+        parts.append(s)
+    for i, arg in enumerate(args.kwonlyargs):
+        s = arg.arg
+        if arg.annotation:
+            s += f": {_format_expr(arg.annotation)}"
+        if i < len(args.kw_defaults) and args.kw_defaults[i] is not None:
+            s += f" = ..."
+        parts.append(s)
+    if args.kwarg:
+        s = f"**{args.kwarg.arg}"
+        if args.kwarg.annotation:
+            s += f": {_format_expr(args.kwarg.annotation)}"
+        parts.append(s)
+    return ", ".join(parts)
+
+
+def _format_expr(node) -> str:
+    """Best-effort formatting of an AST expression node."""
+    if isinstance(node, ast.Name):
+        return node.id
+    elif isinstance(node, ast.Constant):
+        return repr(node.value)
+    elif isinstance(node, ast.Attribute):
+        return f"{_format_expr(node.value)}.{node.attr}"
+    elif isinstance(node, ast.Subscript):
+        return f"{_format_expr(node.value)}[{_format_expr(node.slice)}]"
+    elif isinstance(node, ast.Tuple):
+        return ", ".join(_format_expr(e) for e in node.elts)
+    elif isinstance(node, ast.List):
+        return "[" + ", ".join(_format_expr(e) for e in node.elts) + "]"
+    elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        return f"{_format_expr(node.left)} | {_format_expr(node.right)}"
+    return ast.dump(node)
+
+
+def _format_decorators(node) -> list[str]:
+    """Return formatted decorator lines like @decorator."""
+    results = []
+    for dec in getattr(node, "decorator_list", []):
+        results.append(f"@{_format_expr(dec)}")
+    return results
+
+
+def _get_docstring_first_line(node) -> str:
+    """Get the first line of a docstring, truncated to 80 chars."""
+    try:
+        doc = ast.get_docstring(node)
+        if doc:
+            first = doc.split("\n")[0].strip()
+            if len(first) > 80:
+                first = first[:77] + "..."
+            return f'"{first}"'
+    except Exception:
+        pass
+    return ""
 
 
 # --- Background Process Management ---
@@ -1204,6 +1526,17 @@ def _execute_inner(name: str, input_data: dict, elevation_id: str = None, sessio
         elif name == "browser_close":
             payload = _browser_close(session_id)
             return json.dumps(payload, indent=2)
+
+        elif name == "codebase_outline":
+            mode = input_data.get("mode", "")
+            outline_path = _resolve_path(input_data.get("path", ""))
+            blocked = check_path_access(outline_path, for_write=False, elevated=elevated, session_id=session_id)
+            if blocked:
+                rid = request_elevation("codebase_outline", input_data, blocked, session_id)
+                return f"ELEVATION_REQUIRED:{rid}:{blocked}"
+            sym_name = input_data.get("name")
+            result = _codebase_outline(mode, outline_path, sym_name)
+            return result[:MAX_OUTPUT_CHARS]
 
         elif name == "delegate_task":
             from delegation import delegate_task
