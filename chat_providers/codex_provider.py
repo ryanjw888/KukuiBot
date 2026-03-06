@@ -15,7 +15,6 @@ import uuid
 
 from auth import (
     extract_account_id,
-    get_config,
     get_token,
     import_from_legacy,
     load_history,
@@ -61,7 +60,7 @@ def _do_request(token, account_id, headers, instructions, items, tools, tool_cho
     runtime_config = _get_runtime_config()
     effort = runtime_config["reasoning_effort"]
     body = {
-        "model": MODEL,
+        "model": model_name or MODEL,
         "store": False,
         "stream": True,
         "instructions": instructions,
@@ -111,7 +110,7 @@ async def process_chat_codex(
 ):
     """Codex/OpenAI provider (Responses API) — background coroutine, survives disconnect."""
     items = []
-    usage_info = {}
+    usage_info = {}  # populated in response.completed handler
     try:
         token = get_token()
         if not token:
@@ -161,9 +160,6 @@ async def process_chat_codex(
 
         items = repair_tool_items(items)
 
-        usage_info = {}
-        tool_call_count = 0
-        _force_tool_next = False
         web_search_used = False
         web_search_links: list[str] = []
         explicit_web_patterns = [
@@ -174,7 +170,6 @@ async def process_chat_codex(
         lower_msg = user_message.lower()
         looks_like_question = "?" in user_message or bool(re.match(r"^(what|when|where|who|why|how|is|are|can|could|should|do|does|did)\b", lower_msg.strip()))
         explicit_web = any(re.search(p, lower_msg) for p in explicit_web_patterns)
-        web_allowed = True
         should_force_web = looks_like_question or explicit_web
         web_force_used = False
 
@@ -185,12 +180,9 @@ async def process_chat_codex(
                 current_call_id = current_call_name = None
                 current_call_args = ""
 
-                tc = "required" if _force_tool_next else "auto"
-                _force_tool_next = False
+                tc = "auto"
                 if should_force_web and not web_force_used and not web_search_used and round_num == 0:
                     tc = "required"
-
-                if should_force_web and not web_force_used and not web_search_used and round_num == 0:
                     items.append({
                         "role": "user",
                         "content": "Use web_search_ddg now for this request before finalizing. Then answer and include sources links."
@@ -212,6 +204,9 @@ async def process_chat_codex(
                         if new_token:
                             token = new_token
                             account_id = extract_account_id(token)
+                            if not account_id:
+                                await _emit_event(session_id, queue, {"type": "error", "message": "Token refreshed but account ID missing. Re-authenticate in Settings."}, run_id=run_id)
+                                break
                             headers = _build_headers(token, account_id)
                             logger.info(f"[{session_id}] Token refreshed — retrying request")
                             response = await asyncio.get_event_loop().run_in_executor(
@@ -228,7 +223,7 @@ async def process_chat_codex(
                         await _emit_event(session_id, queue, {"type": "error", "message": "Rate limited — try again shortly."}, run_id=run_id)
                         break
                     else:
-                        await _emit_event(session_id, queue, {"type": "error", "message": f"API error {response.status_code}: {error_text[:200]}"}, run_id=run_id)
+                        await _emit_event(session_id, queue, {"type": "error", "message": f"API error {response.status_code}. Check server logs for details."}, run_id=run_id)
                         break
 
                 for evt in _parse_sse(response):
@@ -289,9 +284,8 @@ async def process_chat_codex(
                             "model": model_name,
                         }
                         last_api_usage[session_id] = usage_info
-                        est_now = _estimate_total_context(items)
                         eff_now, eff_src = _effective_context_tokens(items, usage_info)
-                        _log_token_drift(session_id, usage_info, est_input, est_now, eff_now, eff_src)
+                        _log_token_drift(session_id, usage_info, est_input, est_input, eff_now, eff_src)
 
                     elif evt_type == "error":
                         msg = evt.get("message", "") or str(evt)
@@ -329,7 +323,6 @@ async def process_chat_codex(
                                 )
                                 items.append({"role": "assistant", "content": full_text})
                                 items.append({"role": "user", "content": reminder})
-                                _force_tool_next = False
                                 continue
 
                         items.append({"role": "assistant", "content": full_text})
@@ -337,20 +330,19 @@ async def process_chat_codex(
 
                 # Execute tools
                 for tc_item in tool_calls:
-                    tool_call_count += 1
                     try:
                         parsed_args = json.loads(tc_item["arguments"]) if isinstance(tc_item["arguments"], str) else tc_item["arguments"]
-                    except (json.JSONDecodeError, TypeError):
-                        parsed_args = {}
+                    except (json.JSONDecodeError, TypeError) as parse_err:
+                        logger.warning(f"[{session_id}] Malformed tool arguments for {tc_item.get('name', '?')}: {parse_err}")
+                        items.append({"type": "function_call", "call_id": tc_item["call_id"], "name": tc_item["name"], "arguments": tc_item.get("arguments", "")})
+                        items.append({"type": "function_call_output", "call_id": tc_item["call_id"], "output": f"ERROR: Could not parse tool arguments: {parse_err}"})
+                        continue
 
                     items.append({"type": "function_call", "call_id": tc_item["call_id"], "name": tc_item["name"], "arguments": tc_item["arguments"] if isinstance(tc_item["arguments"], str) else json.dumps(tc_item["arguments"])})
                     await _emit_event(session_id, queue, {"type": "tool_use", "name": tc_item["name"], "input": json.dumps(parsed_args)[:200]}, run_id=run_id)
                     _track_tool_file(session_id, tc_item["name"], parsed_args)
 
-                    if tc_item["name"] == "web_search_ddg" and not web_allowed:
-                        result = "ERROR: web_search_ddg not allowed for this request unless user explicitly asks for web search/sources."
-                    else:
-                        result = await asyncio.get_event_loop().run_in_executor(None, execute_tool, tc_item["name"], parsed_args, None, session_id)
+                    result = await asyncio.get_event_loop().run_in_executor(None, execute_tool, tc_item["name"], parsed_args, None, session_id)
 
                     if tc_item["name"] == "web_search_ddg" and not str(result).startswith("ERROR:"):
                         web_search_used = True
@@ -379,10 +371,7 @@ async def process_chat_codex(
 
                         if approved:
                             await _emit_event(session_id, queue, {"type": "elevation_approved", "request_id": elev_id}, run_id=run_id)
-                            if tc_item["name"] == "web_search_ddg" and not web_allowed:
-                                result = "ERROR: web_search_ddg not allowed for this request unless user explicitly asks for web search/sources."
-                            else:
-                                result = await asyncio.get_event_loop().run_in_executor(None, execute_tool, tc_item["name"], parsed_args, elev_id, session_id)
+                            result = await asyncio.get_event_loop().run_in_executor(None, execute_tool, tc_item["name"], parsed_args, elev_id, session_id)
                             if tc_item["name"] == "web_search_ddg" and not str(result).startswith("ERROR:"):
                                 web_search_used = True
                                 web_force_used = True
@@ -391,8 +380,12 @@ async def process_chat_codex(
                             await _emit_event(session_id, queue, {"type": "elevation_denied", "request_id": elev_id}, run_id=run_id)
                             result = f"Action denied: {reason}"
 
-                    await _emit_event(session_id, queue, {"type": "tool_result", "name": tc_item["name"], "output": str(result)[:500]}, run_id=run_id)
-                    items.append({"type": "function_call_output", "call_id": tc_item["call_id"], "output": str(result)})
+                    result_str = str(result)
+                    await _emit_event(session_id, queue, {"type": "tool_result", "name": tc_item["name"], "output": result_str[:500]}, run_id=run_id)
+                    # Cap tool output at 50KB to prevent unbounded history growth
+                    if len(result_str) > 51200:
+                        result_str = result_str[:51200] + f"\n\n[OUTPUT TRUNCATED — {len(result_str):,} chars total, showing first 50KB]"
+                    items.append({"type": "function_call_output", "call_id": tc_item["call_id"], "output": result_str})
 
                 await _emit_event(session_id, queue, {"type": "tool_use", "name": "_thinking", "input": "Processing results..."}, run_id=run_id)
 
@@ -424,10 +417,9 @@ async def process_chat_codex(
                     await _emit_event(session_id, queue, {"type": "error", "message": f"Connection to OpenAI lost — try again."}, run_id=run_id)
                 else:
                     logger.error(f"Stream error: {e}", exc_info=True)
-                    await _emit_event(session_id, queue, {"type": "error", "message": str(e) or type(e).__name__}, run_id=run_id)
+                    await _emit_event(session_id, queue, {"type": "error", "message": f"Internal error ({type(e).__name__}). Check server logs for details."}, run_id=run_id)
                 break
 
-        items = repair_tool_items(items)
         save_history(session_id, items, last_api_usage=usage_info)
 
         final_text = ""
@@ -453,7 +445,7 @@ async def process_chat_codex(
         return
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
-        await _emit_event(session_id, queue, {"type": "error", "message": str(e) or type(e).__name__}, run_id=run_id)
+        await _emit_event(session_id, queue, {"type": "error", "message": f"Unexpected error ({type(e).__name__}). Check server logs for details."}, run_id=run_id)
     finally:
         task = active_tasks.get(session_id, {})
         task["status"] = "done"
