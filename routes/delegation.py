@@ -273,6 +273,30 @@ async def api_delegate_dismiss(req: Request):
                     bg.cancel()
                     logger.info(f"Delegation dismiss: cancelled active task for session {target_session}")
                 task_state["status"] = "cancelled"
+            # Kill Claude subprocess to stop token burn immediately
+            try:
+                from claude_bridge import get_claude_pool
+                from server_helpers import model_key_from_session
+                mk = model_key_from_session(target_session)
+                if mk in ("claude_opus", "claude_sonnet"):
+                    pool = get_claude_pool()
+                    if pool:
+                        proc = pool.get(target_session)
+                        if proc:
+                            await proc.restart()
+                            logger.info(f"Delegation dismiss: restarted Claude subprocess for {target_session}")
+            except Exception as e:
+                logger.warning(f"Delegation dismiss: failed to restart subprocess for {target_session}: {e}")
+            # Emit cancel event and close queue so SSE terminates
+            queue = task_state.get("queue") if isinstance(task_state, dict) else None
+            if queue is not None:
+                try:
+                    cancel_evt = {"type": "done", "text": "\u26a0\ufe0f Cancelled by dismiss.", "model": "system", "cancelled": True}
+                    from routes.chat import _emit_event
+                    await _emit_event(target_session, queue, cancel_evt)
+                    await queue.put(None)
+                except Exception:
+                    pass
         logger.info(f"Delegation dismiss: {task_id}")
         return {"ok": True, "task_id": task_id}
     except Exception as e:
