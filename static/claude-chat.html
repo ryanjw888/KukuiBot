@@ -119,6 +119,15 @@
       background: rgba(108,113,196,0.1); border: 1px solid rgba(108,113,196,0.2);
       border-bottom-left-radius: 6px; color: var(--purple); font-size: 13px;
     }
+    .msg-row.steer { justify-content: flex-end; }
+    .msg-row.steer .msg-wrap { align-items: flex-end; }
+    .msg-row.steer .msg-bubble {
+      background: var(--bubble-user); border-bottom-right-radius: 6px; white-space: pre-wrap;
+      border-left: 3px solid #f59e0b; opacity: 0.85; padding-left: 12px;
+    }
+    .msg-row.steer .msg-label::after {
+      content: ' · Steering'; color: #f59e0b; font-weight: 600;
+    }
     .msg-time { font-size: 10px; color: var(--muted); margin-top: 4px; display: flex; align-items: center; gap: 5px; }
     .unread-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
 
@@ -500,6 +509,9 @@ const CHARS_PER_TOKEN = 4;
 // State
 let messages = [];
 let loading = false;
+let _shiftHeld = false;
+document.addEventListener('keydown', e => { if (e.key === 'Shift') _shiftHeld = true; });
+document.addEventListener('keyup', e => { if (e.key === 'Shift') _shiftHeld = false; });
 let streamingText = '';
 let workLog = [];
 let toolCallCount = 0;
@@ -673,9 +685,9 @@ function render() {
 
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
-    const cls = msg.role === 'user' ? 'user' : msg.role === 'system' ? 'system' : 'assistant';
-    const label = msg.role === 'user' ? 'You' : msg.role === 'system' ? 'System' : streamLabel;
-    const content = msg.role === 'user' ? linkify(esc(msg.text)) : md(msg.text);
+    const cls = msg.role === 'steer' ? 'steer' : msg.role === 'user' ? 'user' : msg.role === 'system' ? 'system' : 'assistant';
+    const label = msg.role === 'steer' ? 'You' : msg.role === 'user' ? 'You' : msg.role === 'system' ? 'System' : streamLabel;
+    const content = (msg.role === 'user' || msg.role === 'steer') ? linkify(esc(msg.text)) : md(msg.text);
     const isUnread = msg.role === 'assistant' && i > lastSeenIdx;
     const dot = isUnread ? `<span class="unread-dot"></span>` : '';
     const timeStr = msg.duration ? `${fmtTime(msg.ts)} · ${(msg.duration/1000).toFixed(1)}s` : fmtTime(msg.ts);
@@ -743,7 +755,7 @@ function updateChrome() {
   // Action button state
   const btn = $('send-btn');
   btn.classList.toggle('loading', loading && !_sttListening);
-  if (loading) btn.title = 'Cut in (abort current)';
+  if (loading) btn.title = 'Steer (Shift+Enter to abort)';
   else updateActionBtn();
 }
 
@@ -1036,11 +1048,27 @@ async function sendMessage() {
   if (!text) return;
 
   if (loading && abortController) {
-    const waitDone = _activeResolve
-      ? new Promise(r => { const prev = _activeResolve; _activeResolve = () => { prev && prev(); r(); }; })
-      : Promise.resolve();
-    abortController.abort();
-    await waitDone;
+    if (_shiftHeld) {
+      // Shift+Enter = hard abort (existing behavior)
+      const waitDone = _activeResolve
+        ? new Promise(r => { const prev = _activeResolve; _activeResolve = () => { prev && prev(); r(); }; })
+        : Promise.resolve();
+      abortController.abort();
+      await waitDone;
+    } else {
+      // Non-destructive steer — inject via PreToolUse hook
+      input.value = ''; autoResize(input);
+      messages.push({ role: 'steer', text, ts: Date.now() });
+      persist(); render();
+      try {
+        await fetch(`${API}/steer`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text }),
+        });
+      } catch (e) { console.warn('Steer failed:', e); }
+      return;
+    }
   }
 
   // Slash commands

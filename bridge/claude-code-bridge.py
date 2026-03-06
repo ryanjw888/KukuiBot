@@ -66,6 +66,7 @@ DEFAULT_PORT = 9085
 _model = DEFAULT_MODEL  # Set from --model arg at startup
 _worker_identity = "developer"  # Set from --worker arg at startup
 _kukuibot_session_id = ""  # KukuiBot tab session ID (set from --session arg if provided)
+_server_port = DEFAULT_PORT  # Actual port this instance runs on (set from --port arg at startup)
 
 # Session tracking — file paths are port-specific (set in __main__)
 _SESSIONS_FILE = WORKSPACE / ".bridge_sessions.json"
@@ -384,6 +385,10 @@ class PersistentClaudeProcess:
         self._stderr_task: Optional[asyncio.Task] = None
         self._wake_message: Optional[str] = None  # Set after resume; polled by /status
 
+        # Steering queue — mid-turn user messages injected via PreToolUse hook
+        self._steering_messages: list[str] = []
+        self._steering_lock = asyncio.Lock()
+
         # Compaction state
         self._compaction_state = _load_compaction_state()
         self._compacting = False  # True while compaction is in progress
@@ -592,6 +597,21 @@ class PersistentClaudeProcess:
         cmd = list(base_cmd)
         if resume_session:
             cmd.extend(["--resume", resume_session])
+
+        # Inject PreToolUse hook pointing to this bridge's steer endpoint
+        hook_settings = json.dumps({
+            "hooks": {
+                "PreToolUse": [{
+                    "matcher": "*",
+                    "hooks": [{
+                        "type": "http",
+                        "url": f"http://127.0.0.1:{_server_port}/steer/hook",
+                        "timeout": 5
+                    }]
+                }]
+            }
+        })
+        cmd.extend(["--settings", hook_settings])
 
         try:
             # Build subprocess env: use local CLI auth (Max subscription).
@@ -1751,6 +1771,39 @@ async def run_server(port: int = DEFAULT_PORT):
                 workers.append({"key": key, "name": name, "active": key == _worker_identity})
         return web.json_response({"workers": workers, "active": _worker_identity})
 
+    # --- Steering endpoints (mid-turn user guidance via PreToolUse hook) ---
+    async def steer_endpoint(request):
+        """POST /steer — Queue a steering message for injection at next tool boundary."""
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
+        msg = body.get("message", "").strip()
+        if not msg:
+            return web.json_response({"ok": False, "error": "empty message"}, status=400)
+        async with _persistent_claude._steering_lock:
+            _persistent_claude._steering_messages.append(msg)
+            pos = len(_persistent_claude._steering_messages)
+        logger.info(f"Steering message queued (position {pos}): {msg[:80]}")
+        return web.json_response({"ok": True, "queued": True, "position": pos})
+
+    async def steer_hook_endpoint(request):
+        """GET /steer/hook — Claude CLI PreToolUse hook callback. Returns additionalContext if steering messages are queued."""
+        async with _persistent_claude._steering_lock:
+            if not _persistent_claude._steering_messages:
+                return web.Response(status=200)
+            combined = "\n".join(
+                f"[STEERING from user]: {m}" for m in _persistent_claude._steering_messages
+            )
+            _persistent_claude._steering_messages.clear()
+        logger.info(f"Steering hook fired — injecting {len(combined)} chars")
+        return web.json_response({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "additionalContext": combined
+            }
+        })
+
     app = web.Application()
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
@@ -1768,6 +1821,8 @@ async def run_server(port: int = DEFAULT_PORT):
     app.router.add_post("/root-enable", root_enable_endpoint)
     app.router.add_post("/root-revoke", root_revoke_endpoint)
     app.router.add_get("/workers", workers_endpoint)
+    app.router.add_post("/steer", steer_endpoint)
+    app.router.add_get("/steer/hook", steer_hook_endpoint)
     app.router.add_options("/chat", options_handler)
 
     runner = web.AppRunner(app)
@@ -1861,10 +1916,11 @@ if __name__ == "__main__":
     parser.add_argument("--test", type=str, help="Quick test query")
     args = parser.parse_args()
 
-    # Set model, worker, and session globals
+    # Set model, worker, port, and session globals
     globals()['_model'] = args.model
     globals()['_worker_identity'] = args.worker
     globals()['_kukuibot_session_id'] = args.session
+    globals()['_server_port'] = args.port
 
     # Set per-instance app directory (for ROADMAP.md etc.)
     globals()['_app_dir'] = Path(args.app_dir) if args.app_dir else WORKSPACE
