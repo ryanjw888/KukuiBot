@@ -141,7 +141,7 @@ SSL_CERT = Path(__file__).parent / "certs" / "kukuibot.pem"
 SSL_KEY = Path(__file__).parent / "certs" / "kukuibot-key.pem"
 
 # --- Model ---
-MODEL = "gpt-5.3-codex"
+MODEL = "gpt-5.4"
 SPARK_MODEL = "spark"
 KUKUIBOT_API_URL = "https://chatgpt.com/backend-api/codex/responses"
 KUKUIBOT_USER_AGENT = f"kukuibot ({platform.system()} {platform.release()}; {platform.machine()})"
