@@ -38,6 +38,30 @@ from config import KUKUIBOT_HOME
 
 logger = logging.getLogger("kukuibot.gmail")
 
+# --- One-time cache migration: sequence numbers → IMAP UIDs ---
+_CACHE_UID_MIGRATION_KEY = "gmail.cache_uid_migration_done"
+
+def _migrate_cache_to_uid():
+    """Clear email cache once after switching from sequence numbers to UIDs.
+
+    Old cache entries have IMAP sequence numbers stored as 'uid' values,
+    which are volatile and would mismatch with the real UIDs now being used.
+    """
+    try:
+        if _get_config(_CACHE_UID_MIGRATION_KEY, "") == "1":
+            return  # Already migrated
+        import email_cache
+        email_cache.clear_cache()
+        _set_config(_CACHE_UID_MIGRATION_KEY, "1")
+        logger.info("gmail: email cache cleared (one-time UID migration)")
+    except Exception as e:
+        logger.warning(f"gmail: cache UID migration failed (non-fatal): {e}")
+
+try:
+    _migrate_cache_to_uid()
+except Exception:
+    pass  # Non-fatal — cache will be repopulated naturally
+
 # --- Constants ---
 IMAP_HOST = "imap.gmail.com"
 IMAP_PORT = 993
@@ -603,12 +627,12 @@ def list_messages(folder: str = "INBOX", max_results: int = 20, search: str = ""
         if status != "OK":
             raise RuntimeError(f"Could not open folder: {imap_folder}")
 
-        # Search — convert user query to IMAP criteria
+        # Search — convert user query to IMAP criteria (UID SEARCH returns stable UIDs)
         criteria = _build_imap_search(search)
         if isinstance(criteria, tuple):
-            status, data = imap.search(None, *criteria)
+            status, data = imap.uid('SEARCH', *criteria)
         else:
-            status, data = imap.search(None, criteria)
+            status, data = imap.uid('SEARCH', criteria)
         if status != "OK":
             return []
 
@@ -627,12 +651,12 @@ def list_messages(folder: str = "INBOX", max_results: int = 20, search: str = ""
 
         from injection_guard import scan_and_filter
 
-        # Batch fetch: headers + flags only (one BODY section = reliable imaplib parsing)
+        # Batch fetch: headers + flags + UID (one BODY section = reliable imaplib parsing)
         # BODY.PEEK does NOT set \Seen flag (critical for inbox listing)
         # Snippets come from cache or are left empty — avoids imaplib multi-section bugs
         msg_set = b",".join(msg_nums)
-        fetch_spec = "(BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT DATE MESSAGE-ID)] FLAGS)"
-        status, batch_data = imap.fetch(msg_set, fetch_spec)
+        fetch_spec = "(UID BODY.PEEK[HEADER.FIELDS (FROM TO SUBJECT DATE MESSAGE-ID)] FLAGS)"
+        status, batch_data = imap.uid('FETCH', msg_set, fetch_spec)
         if status != "OK":
             return []
 
@@ -701,26 +725,26 @@ def list_messages(folder: str = "INBOX", max_results: int = 20, search: str = ""
 
 
 def _parse_batch_fetch(batch_data: list, msg_nums: list[bytes]) -> dict:
-    """Parse the flat batch response from imap.fetch() into per-message dicts.
+    """Parse the flat batch response from imap.uid('FETCH') into per-message dicts.
 
-    Returns: {msg_num_str: {"headers": bytes, "flags_str": bytes}}
+    Returns: {uid_str: {"headers": bytes, "flags_str": bytes}}
 
-    With a single BODY section fetch (HEADER.FIELDS + FLAGS), each message
-    produces one tuple: (b'NUM (FLAGS (...) BODY[HEADER.FIELDS ...] {size}', b'data')
+    With UID FETCH, each message produces one tuple:
+      (b'SEQ (UID 12345 FLAGS (...) BODY[HEADER.FIELDS ...] {size}', b'header data')
     followed by b')'.
 
-    The descriptor contains the message sequence number, FLAGS, and the BODY spec.
-    We track the "current message number" to handle continuation tuples that
-    don't start with a message number (e.g. multi-section responses).
+    We extract the UID from the descriptor (not the leading sequence number)
+    and use it as the key in the result dict.
     """
+    import re as _re
     result = {}
-    valid_nums = {num.decode() for num in msg_nums}
+    valid_uids = {num.decode() for num in msg_nums}
 
-    # Pre-initialize entries for all requested message numbers
-    for num_str in valid_nums:
-        result[num_str] = {"headers": b"", "flags_str": b""}
+    # Pre-initialize entries for all requested UIDs
+    for uid_str in valid_uids:
+        result[uid_str] = {"headers": b"", "flags_str": b""}
 
-    current_msg = None  # track current message for continuation tuples
+    current_uid = None  # track current UID for continuation tuples
 
     for item in batch_data:
         if not isinstance(item, tuple) or len(item) < 2:
@@ -728,28 +752,26 @@ def _parse_batch_fetch(batch_data: list, msg_nums: list[bytes]) -> dict:
         descriptor = item[0]
         payload = item[1]
 
-        # Extract message number from start of descriptor
         desc_str = descriptor.decode("ascii", errors="replace")
-        parts = desc_str.split(None, 1)
-        if not parts:
-            continue
+        desc_upper = desc_str.upper()
 
-        # Check if first token is a message number (digits only)
-        first_token = parts[0]
-        if first_token.isdigit() and first_token in valid_nums:
-            current_msg = first_token
-        elif current_msg is None:
+        # Extract UID from descriptor — pattern: "UID 12345"
+        uid_match = _re.search(r'\bUID\s+(\d+)', desc_upper)
+        if uid_match:
+            uid_val = uid_match.group(1)
+            if uid_val in valid_uids:
+                current_uid = uid_val
+        elif current_uid is None:
             continue  # can't associate this tuple with a message
 
-        msg_num = current_msg
-        desc_upper = desc_str.upper()
+        msg_uid = current_uid
 
         # Store the full descriptor for FLAGS parsing (contains FLAGS inline)
         if "FLAGS" in desc_upper:
-            result[msg_num]["flags_str"] = descriptor
+            result[msg_uid]["flags_str"] = descriptor
 
-        if "HEADER.FIELDS" in desc_upper or (first_token.isdigit() and b"BODY[" in descriptor):
-            result[msg_num]["headers"] = payload
+        if "HEADER.FIELDS" in desc_upper or b"BODY[" in descriptor:
+            result[msg_uid]["headers"] = payload
 
     return result
 
@@ -771,7 +793,7 @@ def get_message(folder: str, uid: str) -> dict:
         if status != "OK":
             raise RuntimeError(f"Could not open folder: {imap_folder}")
 
-        status, msg_data = imap.fetch(uid.encode(), "(RFC822)")
+        status, msg_data = imap.uid('FETCH', uid.encode(), "(RFC822)")
         if status != "OK" or not msg_data or not msg_data[0]:
             raise RuntimeError(f"Message {uid} not found in {folder}")
 
@@ -867,7 +889,7 @@ def get_attachment(folder: str, uid: str, filename: str) -> tuple[bytes, str, st
         if status != "OK":
             raise RuntimeError(f"Could not open folder: {imap_folder}")
 
-        status, msg_data = imap.fetch(uid.encode(), "(RFC822)")
+        status, msg_data = imap.uid('FETCH', uid.encode(), "(RFC822)")
         if status != "OK" or not msg_data or not msg_data[0]:
             raise RuntimeError(f"Message {uid} not found in {folder}")
 
@@ -1149,12 +1171,12 @@ def trash_message(folder: str, uid: str) -> dict:
         if status != "OK":
             raise RuntimeError(f"Could not open folder: {imap_folder}")
 
-        # Copy to trash, then mark as deleted
-        status, _ = imap.copy(uid.encode(), '"[Gmail]/Trash"')
+        # Copy to trash, then mark as deleted (using UID commands for stability)
+        status, _ = imap.uid('COPY', uid.encode(), '"[Gmail]/Trash"')
         if status != "OK":
             raise RuntimeError(f"Failed to move message {uid} to trash")
 
-        imap.store(uid.encode(), "+FLAGS", "\\Deleted")
+        imap.uid('STORE', uid.encode(), "+FLAGS", "\\Deleted")
         imap.expunge()
 
         logger.info(f"Gmail message trashed: {uid} from {folder}")
@@ -1195,7 +1217,7 @@ def redirect_email(folder: str, uid: str, to: str, subject_override: str | None 
         if status != "OK":
             raise RuntimeError(f"Could not open folder: {imap_folder}")
 
-        status, msg_data = imap.fetch(uid.encode(), "(RFC822)")
+        status, msg_data = imap.uid('FETCH', uid.encode(), "(RFC822)")
         if status != "OK" or not msg_data or not msg_data[0]:
             raise RuntimeError(f"Message {uid} not found in {folder}")
 
@@ -1251,7 +1273,7 @@ def set_message_flags(folder: str, uid: str, flags: dict) -> dict:
 
     Args:
         folder: IMAP folder name
-        uid: Message sequence number
+        uid: Message IMAP UID
         flags: Dict of flags to set, e.g. {"seen": True} or {"seen": False}
 
     Returns: {"ok": True, "uid": uid}
@@ -1269,15 +1291,15 @@ def set_message_flags(folder: str, uid: str, flags: dict) -> dict:
 
         if "seen" in flags:
             if flags["seen"]:
-                imap.store(uid.encode(), "+FLAGS", "\\Seen")
+                imap.uid('STORE', uid.encode(), "+FLAGS", "\\Seen")
             else:
-                imap.store(uid.encode(), "-FLAGS", "\\Seen")
+                imap.uid('STORE', uid.encode(), "-FLAGS", "\\Seen")
 
         if "flagged" in flags:
             if flags["flagged"]:
-                imap.store(uid.encode(), "+FLAGS", "\\Flagged")
+                imap.uid('STORE', uid.encode(), "+FLAGS", "\\Flagged")
             else:
-                imap.store(uid.encode(), "-FLAGS", "\\Flagged")
+                imap.uid('STORE', uid.encode(), "-FLAGS", "\\Flagged")
 
         logger.info(f"Gmail flags updated: uid={uid} folder={folder} flags={flags}")
         return {"ok": True, "uid": uid}
