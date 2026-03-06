@@ -3423,7 +3423,9 @@ async def api_eagle_enroll_file(req: Request, file: UploadFile):
             wave.open(io.BytesIO(raw), "rb").close()
             wav_bytes = raw
         except Exception:
-            import subprocess, tempfile
+            import subprocess, tempfile, shutil
+            if not shutil.which("ffmpeg"):
+                return {"ok": False, "error": "Audio format not supported by browser. Please upload a WAV file, or install ffmpeg on the server for automatic conversion."}
             try:
                 with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp_in:
                     tmp_in.write(raw)

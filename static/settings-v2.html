@@ -2371,7 +2371,11 @@ async function toggleEnrollRecording() {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1, echoCancellation: false, noiseSuppression: false } });
     _enrollChunks = [];
-    const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/aac', 'audio/ogg;codecs=opus'].find(m => MediaRecorder.isTypeSupported(m)) || '';
+    const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+    const mimePrefs = isSafari
+      ? ['audio/mp4', 'audio/aac', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus']
+      : ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/aac', 'audio/ogg;codecs=opus'];
+    const mimeType = mimePrefs.find(m => MediaRecorder.isTypeSupported(m)) || '';
     _enrollRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
     _enrollMimeType = _enrollRecorder.mimeType || mimeType || 'audio/webm';
     _enrollRecorder.ondataavailable = e => { if (e.data.size > 0) _enrollChunks.push(e.data); };
@@ -2471,7 +2475,16 @@ async function _finishEnrollRecording(speakerName) {
     ui.log.textContent = 'Recorded ~' + Math.floor(elapsed) + 's of audio (' + _enrollMimeType + ').\nConverting to WAV...\n';
 
     // Decode audio to PCM using Web Audio API
-    const arrayBuffer = await recordedBlob.arrayBuffer();
+    const arrayBuffer = await new Promise((resolve, reject) => {
+      if (recordedBlob.arrayBuffer) {
+        recordedBlob.arrayBuffer().then(resolve).catch(reject);
+      } else {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsArrayBuffer(recordedBlob);
+      }
+    });
     let audioBuffer;
     try {
       // Safari doesn't support sampleRate in AudioContext constructor — omit it and resample manually

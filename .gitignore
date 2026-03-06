@@ -66,3 +66,14 @@ emails/
 messages/
 *.eml
 *.msg
+
+# Model weights (downloaded separately per machine)
+models/**/*.ckpt
+models/**/*.bin
+models/**/*.pt
+models/**/*.pth
+models/**/*.safetensors
+models/**/*.onnx
+models/**/*.yaml
+models/**/*.txt
+\!models/README.md
