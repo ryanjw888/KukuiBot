@@ -2463,7 +2463,8 @@ async function _finishEnrollRecording(speakerName) {
     const arrayBuffer = await recordedBlob.arrayBuffer();
     let audioBuffer;
     try {
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      // Safari doesn't support sampleRate in AudioContext constructor — omit it and resample manually
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
       audioCtx.close();
     } catch (decodeErr) {
