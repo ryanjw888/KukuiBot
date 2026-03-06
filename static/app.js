@@ -4075,8 +4075,38 @@ function cancelGeneration(e) {
   if (tab.streamAbortController) {
     try { tab.streamAbortController.abort(); } catch {}
   }
-  // Tell the server to cancel
-  fetch(API + '/api/chat/cancel?session_id=' + encodeURIComponent(sid), { method: 'POST' }).catch(() => {});
+  // Tell the server to cancel (and restart Claude subprocess if applicable)
+  fetch(API + '/api/chat/cancel?session_id=' + encodeURIComponent(sid), { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      // For Claude sessions: reconnect SSE so the browser picks up the fresh subprocess
+      if (data && data.restarted && _isClaudeModel(tab.modelKey)) {
+        disconnectClaudeEventsForTab(tab);
+        setTimeout(() => connectClaudeEventsForTab(tab), 500);
+      }
+    })
+    .catch(() => {});
+
+  // Immediately clear all loading/streaming state
+  tab.wasLoading = false;
+  tab.loadingSinceMs = 0;
+  tab.streamingText = '';
+  tab.activeToolLabel = null;
+  tab.activeToolDetail = null;
+  tab.thinkingText = '';
+
+  // Add visual feedback message
+  const isClaudeTab = _isClaudeModel(tab.modelKey);
+  tab.messages.push({
+    role: 'system', ts: Date.now(),
+    text: isClaudeTab
+      ? '⚠️ Generation stopped. Process restarting — context will reload on next message.'
+      : '⚠️ Generation stopped.',
+    _card: { icon: '⏹️', title: 'Stopped', stats: [], files: [], _showBody: true }
+  });
+
+  persistTabs();
+  requestRender({ preserveScroll: true });
 }
 
 function onInputChange(el) {

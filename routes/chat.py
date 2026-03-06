@@ -226,4 +226,28 @@ async def api_chat_cancel(session_id: str = "default"):
         except Exception:
             pass
 
-    return {"ok": True, "status": "cancelled", "run_id": run_id}
+    # For Claude sessions: kill and restart the subprocess so it stops
+    # thinking immediately and reloads context on next message
+    restarted = False
+    try:
+        from claude_bridge import get_claude_pool
+        from server_helpers import model_key_from_session
+        mk = model_key_from_session(session_id)
+        if mk in ("claude_opus", "claude_sonnet"):
+            pool = get_claude_pool()
+            if pool:
+                proc = pool.get(session_id)
+                if proc:
+                    import logging
+                    logging.getLogger("kukuibot.chat").info(
+                        f"Cancel: restarting Claude subprocess for {session_id}"
+                    )
+                    await proc.restart()
+                    restarted = True
+    except Exception as e:
+        import logging
+        logging.getLogger("kukuibot.chat").warning(
+            f"Cancel: failed to restart Claude subprocess for {session_id}: {e}"
+        )
+
+    return {"ok": True, "status": "cancelled", "run_id": run_id, "restarted": restarted}

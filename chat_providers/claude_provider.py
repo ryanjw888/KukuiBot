@@ -4,6 +4,7 @@ claude_provider.py — Claude Code persistent subprocess chat provider.
 Extracted from server.py Phase 10a.
 """
 
+import asyncio
 import logging
 import time
 
@@ -287,6 +288,9 @@ async def process_chat_claude(
                     "loaded_files": event.get("loaded_files", []),
                 }, run_id=run_id)
 
+    except asyncio.CancelledError:
+        logger.info(f"Chat cancelled for {session_id}")
+        return
     except Exception as e:
         _stream_exception = e
         logger.error(f"Claude persistent stream error: {e}", exc_info=True)

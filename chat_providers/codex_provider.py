@@ -448,6 +448,9 @@ async def process_chat_codex(
         active_tasks[session_id] = _pre_task
         await _emit_event(session_id, queue, {"type": "done", "text": final_text, "model": f"{MODEL} (KukuiBot)", "usage": usage_info}, run_id=run_id)
 
+    except asyncio.CancelledError:
+        logger.info(f"Chat cancelled for {session_id}")
+        return
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
         await _emit_event(session_id, queue, {"type": "error", "message": str(e) or type(e).__name__}, run_id=run_id)
