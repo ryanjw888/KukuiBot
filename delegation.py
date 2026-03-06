@@ -388,6 +388,9 @@ def _verify_delivery_via_log(session_id: str, task_token: str, max_wait: int = 5
 def _decorate_prompt(task_id: str, prompt: str) -> tuple[str, str]:
     token = f"TASK_TOKEN:{task_id}"
     tagged = (
+        f"[DELEGATED TASK — EXECUTE IMMEDIATELY]\n"
+        f"This is a delegated task. Do NOT respond with 'Context loaded.' or any acknowledgment. "
+        f"Execute the task below using your tools and return substantive results.\n\n"
         f"[TASK_ID:{task_id}]\n"
         f"[TASK_TOKEN:{token}]\n"
         f"IMPORTANT: Do NOT restart the KukuiBot server. Do NOT call /api/restart, os._exit(), sys.exit(), or any restart/kill command. "

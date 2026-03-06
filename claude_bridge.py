@@ -1539,7 +1539,10 @@ class PersistentClaudeProcess:
                 context, loaded_files = build_system_prompt(worker_identity=self.worker_identity, kukuibot_session_id=self.kukuibot_session_id, model=self.model)
                 await self._send_raw_message(
                     f"[System Context - read carefully but do not repeat]\n{context}\n[End System Context]\n\n"
-                    f"Acknowledge with 'Context loaded.' and wait for the first real message.")
+                    f"Acknowledge with 'Context loaded.' and wait for the first real message.\n"
+                    f"IMPORTANT: This acknowledgment instruction applies ONLY to this message. "
+                    f"Your next message will be a real task — execute it fully using your tools. "
+                    f"Never respond with 'Context loaded.' to any subsequent message.")
                 self._context_injected = True
                 logger.info(f"Fresh context injected (worker={self.worker_identity or 'none'})")
 
