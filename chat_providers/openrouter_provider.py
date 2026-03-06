@@ -50,6 +50,35 @@ def _openrouter_model(session_id: str) -> str:
     model = (get_config(f"openrouter.session_model.{session_id}", "") or "").strip()
     if model:
         return model
+    # Reverse-map: extract model_key from session_id and resolve to a model ID
+    model_key = model_key_from_session(session_id)
+    if model_key.startswith("openrouter_"):
+        slug = model_key[len("openrouter_"):]  # e.g. "moonshotai_kimi_k2_5"
+        # Normalize: replace / - . with _ for comparison
+        def _norm(s: str) -> str:
+            return s.replace("/", "_").replace("-", "_").replace(".", "_")
+        # Load model registry (builtins + user overrides)
+        try:
+            import server as _srv
+            registry = _srv._or_load_models()
+        except (ImportError, AttributeError):
+            registry = {}
+        # Also merge any user-added models from DB
+        if not registry:
+            try:
+                raw = get_config("openrouter.models", "")
+                if raw:
+                    registry = json.loads(raw) if raw else {}
+            except Exception:
+                registry = {}
+        # Check registry for a model_id whose normalized form matches the slug
+        for model_id in registry:
+            if _norm(model_id) == slug:
+                return model_id
+        # No registry match — try simple slug→model_id conversion (first _ → /)
+        if "_" in slug:
+            candidate = slug.replace("_", "/", 1)  # moonshotai/kimi_k2_5
+            return candidate
     return (get_config("openrouter.default_model", "") or "google/gemini-2.5-flash").strip()
 
 
