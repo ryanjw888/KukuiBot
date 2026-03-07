@@ -1270,7 +1270,12 @@ def _create_threaded_draft(from_email: str, original_from: str, subject: str,
 
     msg = MIMEText(html_content, "html")
     msg["From"] = from_email
-    msg["To"] = original_from
+    # Parse to get clean single recipient — handles multi-address strings safely
+    _parsed = email.utils.getaddresses([original_from])
+    if _parsed and _parsed[0][1]:
+        msg["To"] = email.utils.formataddr(_parsed[0])
+    else:
+        msg["To"] = original_from
     msg["Subject"] = re_subject
     msg[X_DRAFTER_HEADER] = X_DRAFTER_VALUE
     if message_id:
@@ -1381,7 +1386,8 @@ async def check_and_draft(dry_run: bool = False) -> dict:
                     continue
 
                 acted_count += 1
-                original_from = msg.get("From", "")
+                # Use Reply-To if present (standard email reply behavior), else From
+                original_from = msg.get("Reply-To") or msg.get("From", "")
                 from_addr_parsed = email.utils.parseaddr(original_from)[1].lower()
                 subject = _parse_header(msg.get("Subject", "(no subject)"))
                 body = _extract_body(msg)
@@ -1877,23 +1883,28 @@ def send_draft(uid: str) -> dict:
         if not to_addr:
             raise ValueError("Draft has no recipient")
 
-        # Enforce send permissions (shared logic with gmail_bridge)
-        to_lower = email.utils.parseaddr(to_addr)[1].lower()
+        # Parse all recipients (handles multi-address To headers)
+        recipients = [addr.lower() for _, addr in email.utils.getaddresses([to_addr]) if addr]
+        if not recipients:
+            raise ValueError("Draft has no valid recipient address")
+
+        # Enforce send permissions on each recipient
         perms = get_permissions()
         owner_emails = _get_owner_emails()
-        _enforce_send_permissions(to_lower, perms, owner_emails)
+        for rcpt in recipients:
+            _enforce_send_permissions(rcpt, perms, owner_emails)
 
         # Send via SMTP
         with smtplib.SMTP("smtp.gmail.com", 587) as server:
             server.starttls()
             server.login(email_addr, app_password)
-            server.sendmail(email_addr, [to_lower], raw)
+            server.sendmail(email_addr, recipients, raw)
 
         # Trash the draft
         imap.uid('store', uid.encode(), "+FLAGS", "\\Deleted")
         imap.expunge()
 
-        logger.info(f"Draft sent: to={to_lower} subject={subject[:50]}")
+        logger.info(f"Draft sent: to={recipients} subject={subject[:50]}")
         return {"ok": True, "to": to_addr, "subject": subject}
 
     finally:
