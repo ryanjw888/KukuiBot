@@ -2338,6 +2338,7 @@ function render(opts = {}) {
       <div id="project-list"></div>
       <div class="project-dropdown-footer">
         <button onclick="refreshProjectList()">Refresh</button>
+        <button onclick="window.open('/settings-v2.html#projects','_blank')">⚙ Manage</button>
       </div>
     </div>
   `;
