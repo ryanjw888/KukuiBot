@@ -20,9 +20,9 @@ from html.parser import HTMLParser
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-DEFAULT_EPUB = "/Users/jarvis/.kukuibot/A-Parade-of-Horribles-Generic-2026-02-09.epub"
+DEFAULT_EPUB = "/Users/jarvis/.kukuibot/audiobook/A-Parade-of-Horribles-Generic-2026-02-09.epub"
 DEFAULT_CHAPTER = 1
-OUTPUT_DIR = "/Users/jarvis/.kukuibot/audiobook_output"
+OUTPUT_DIR = "/Users/jarvis/.kukuibot/audiobook"
 
 # ---------------------------------------------------------------------------
 # HTML → structured blocks

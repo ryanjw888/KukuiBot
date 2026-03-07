@@ -45,11 +45,11 @@ VOICE_MAP = {
         "default": {"stability": 0.6, "similarity_boost": 0.8, "style": 0.4, "speed": 1.0},
     },
     "system": {
-        "voice_id": "IFaEf5ukSzTEzAVkO19G",               # DCC System Voice clone
+        "voice_id": "63X8paHUeG1zCfhrkloc",               # New AI voice clone
         "default": {"stability": 0.7, "similarity_boost": 0.9, "style": 0.2, "speed": 0.95},
     },
     "samantha": {
-        "voice_id": "aGweQObIgjy3bHHgH78w",               # DCC Samantha clone
+        "voice_id": "xTv86awUs9qX4HxeRH2n",               # New Samantha voice clone
         "default": {"stability": 0.3, "similarity_boost": 0.8, "style": 0.8, "speed": 1.0},
     },
     "hedy the gremlin": {
