@@ -30,36 +30,36 @@ DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parents[3] / "audiobook_output"
 # Voice mapping: speaker -> (voice_id, default voice_settings)
 VOICE_MAP = {
     "carl": {
-        "voice_id": "iP95p4xoKVk53GoZ",
+        "voice_id": "iP95p4xoKVk53GoZ742B",
         "narration": {"stability": 0.5, "similarity_boost": 0.75, "style": 0.3, "speed": 1.0},
         "spoken":    {"stability": 0.4, "similarity_boost": 0.75, "style": 0.6, "speed": 1.0},
     },
     "donut": {
-        "voice_id": "FGY2WhTYpPnrIDTd",
+        "voice_id": "FGY2WhTYpPnrIDTdsKH5",
         "default": {"stability": 0.35, "similarity_boost": 0.8, "style": 0.8, "speed": 1.0},
     },
     "mordecai": {
-        "voice_id": "cjVigY5qzO86Huf0",
+        "voice_id": "cjVigY5qzO86Huf0OWal",
         "default": {"stability": 0.6, "similarity_boost": 0.8, "style": 0.4, "speed": 1.0},
     },
     "system": {
-        "voice_id": "onwK4e9ZLuTAKqWW",
+        "voice_id": "onwK4e9ZLuTAKqWW03F9",
         "default": {"stability": 0.7, "similarity_boost": 0.9, "style": 0.2, "speed": 0.95},
     },
     "hedy the gremlin": {
-        "voice_id": "N2lVS1w4EtoT3dr4",
+        "voice_id": "N2lVS1w4EtoT3dr4eOWO",
         "default": {"stability": 0.4, "similarity_boost": 0.75, "style": 0.7, "speed": 1.0},
     },
     "waldrip chris": {
-        "voice_id": "N2lVS1w4EtoT3dr4",
+        "voice_id": "N2lVS1w4EtoT3dr4eOWO",
         "default": {"stability": 0.35, "similarity_boost": 0.75, "style": 0.8, "speed": 1.0},
     },
     "justice light": {
-        "voice_id": "JBFqnCBsd6RMkjVD",
+        "voice_id": "JBFqnCBsd6RMkjVDRZzb",
         "default": {"stability": 0.5, "similarity_boost": 0.75, "style": 0.5, "speed": 1.0},
     },
     "rosetta": {
-        "voice_id": "EXAVITQu4vr4xnSD",
+        "voice_id": "EXAVITQu4vr4xnSDxMaL",
         "default": {"stability": 0.5, "similarity_boost": 0.75, "style": 0.5, "speed": 1.0},
     },
 }
@@ -180,50 +180,84 @@ def call_tts(voice_id, text, voice_settings, retries=3):
 
 
 def concatenate_segments(segments_data, segment_dir, output_path):
-    """Concatenate individual segment MP3s with appropriate silence gaps."""
-    from pydub import AudioSegment
+    """Concatenate individual segment MP3s with appropriate silence gaps using ffmpeg."""
+    import subprocess
+    import tempfile
+    import struct
+    import wave
 
-    silence_500 = AudioSegment.silent(duration=500)   # same speaker
-    silence_1000 = AudioSegment.silent(duration=1000)  # speaker change
-    silence_1500 = AudioSegment.silent(duration=1500)  # system/description blocks
-
-    combined = AudioSegment.empty()
-    prev_speaker = None
     special_types = {"system_message", "description_box"}
 
-    for seg in segments_data:
-        seg_file = segment_dir / f"chapter_001_seg_{seg['id']:03d}.mp3"
-        if not seg_file.exists():
-            print(f"  WARNING: Missing segment file {seg_file.name}, skipping")
-            continue
+    def make_silence_mp3(duration_ms, tmp_dir):
+        """Generate a silent MP3 of given duration using ffmpeg."""
+        silence_path = os.path.join(tmp_dir, f"silence_{duration_ms}ms.mp3")
+        if not os.path.exists(silence_path):
+            subprocess.run([
+                "ffmpeg", "-y", "-f", "lavfi",
+                "-i", f"anullsrc=r=44100:cl=stereo",
+                "-t", str(duration_ms / 1000.0),
+                "-b:a", "128k", "-q:a", "2",
+                silence_path
+            ], capture_output=True, check=True)
+        return silence_path
 
-        audio = AudioSegment.from_mp3(str(seg_file))
-        current_speaker = seg["speaker"]
-        current_type = seg["type"]
+    # Build the concat list with silence gaps
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        silence_500 = make_silence_mp3(500, tmp_dir)
+        silence_1000 = make_silence_mp3(1000, tmp_dir)
+        silence_1500 = make_silence_mp3(1500, tmp_dir)
 
-        if len(combined) == 0:
-            # First segment - add leading silence for system/description
-            if current_type in special_types:
-                combined += silence_1500
-            combined += audio
-        else:
-            # Determine silence gap
-            if current_type in special_types or (prev_speaker and segments_data[segments_data.index(seg) - 1]["type"] in special_types):
-                combined += silence_1500
-            elif current_speaker != prev_speaker:
-                combined += silence_1000
-            else:
-                combined += silence_500
-            combined += audio
+        concat_list = []
+        prev_speaker = None
+        prev_type = None
 
-        prev_speaker = current_speaker
+        for seg in segments_data:
+            seg_file = segment_dir / f"chapter_001_seg_{seg['id']:03d}.mp3"
+            if not seg_file.exists():
+                print(f"  WARNING: Missing segment file {seg_file.name}, skipping")
+                continue
 
-    # Trailing silence
-    if segments_data and segments_data[-1]["type"] in special_types:
-        combined += silence_1500
+            current_speaker = seg["speaker"]
+            current_type = seg["type"]
 
-    combined.export(str(output_path), format="mp3", bitrate="128k")
-    duration_s = len(combined) / 1000.0
+            # Add silence gap before this segment
+            if concat_list:  # not the first segment
+                if current_type in special_types or prev_type in special_types:
+                    concat_list.append(silence_1500)
+                elif current_speaker != prev_speaker:
+                    concat_list.append(silence_1000)
+                else:
+                    concat_list.append(silence_500)
+
+            concat_list.append(str(seg_file))
+            prev_speaker = current_speaker
+            prev_type = current_type
+
+        # Write ffmpeg concat file
+        concat_file = os.path.join(tmp_dir, "concat.txt")
+        with open(concat_file, "w") as f:
+            for path in concat_list:
+                # ffmpeg concat demuxer requires escaped single quotes in paths
+                safe = path.replace("'", "'\\''")
+                f.write(f"file '{safe}'\n")
+
+        # Run ffmpeg concat
+        result = subprocess.run([
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+            "-i", concat_file,
+            "-c:a", "libmp3lame", "-b:a", "128k",
+            str(output_path)
+        ], capture_output=True, text=True)
+
+        if result.returncode != 0:
+            raise RuntimeError(f"ffmpeg concat failed: {result.stderr[-500:]}")
+
+    # Get duration from ffprobe
+    probe = subprocess.run([
+        "ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+        "-of", "csv=p=0", str(output_path)
+    ], capture_output=True, text=True)
+    duration_s = float(probe.stdout.strip()) if probe.stdout.strip() else 0.0
     return duration_s
 
 
