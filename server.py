@@ -5379,7 +5379,7 @@ async def _token_refresh_monitor():
     falling back to DB-stored claude_code.oauth_refresh_token.
     """
     from claude_bridge import refresh_cli_oauth_token, _read_creds, _write_creds
-    logger.info("Token refresh monitor started (interval=300s, threshold=900s)")
+    logger.info("Token refresh monitor started (interval=300s, threshold=3600s)")
     while True:
         try:
             await asyncio.sleep(300)  # Check every 5 minutes
@@ -5400,7 +5400,7 @@ async def _token_refresh_monitor():
                 continue  # No expiry info anywhere
 
             remaining = expires_s - time.time()
-            if remaining > 900:  # More than 15 min left — nothing to do
+            if remaining > 3600:  # More than 1 hour left — nothing to do
                 continue
 
             logger.info(f"OAuth token expiring in {remaining:.0f}s — triggering proactive refresh")
@@ -5424,6 +5424,17 @@ async def _token_refresh_monitor():
                 if new_exp_ms:
                     set_config("claude_code.oauth_expires_at", str(int(new_exp_ms / 1000)))
                 logger.info("Proactive token refresh succeeded — DB synced")
+                # Recycle running subprocesses so they pick up the fresh token
+                pool = get_claude_pool()
+                if pool:
+                    recycled = 0
+                    for sid, proc in list(pool._processes.items()):
+                        if proc.proc and proc.proc.returncode is None:
+                            logger.info(f"Token refresh: recycling subprocess {sid}")
+                            await proc.recycle_for_fresh_token()
+                            recycled += 1
+                    if recycled:
+                        logger.info(f"Token refresh: recycled {recycled} subprocess(es)")
                 continue
             # First attempt failed — retry after 30s
             logger.warning("Proactive token refresh attempt 1 failed — retrying in 30s")
@@ -5437,6 +5448,17 @@ async def _token_refresh_monitor():
                 if new_exp_ms:
                     set_config("claude_code.oauth_expires_at", str(int(new_exp_ms / 1000)))
                 logger.info("Proactive token refresh succeeded on retry — DB synced")
+                # Recycle running subprocesses so they pick up the fresh token
+                pool = get_claude_pool()
+                if pool:
+                    recycled = 0
+                    for sid, proc in list(pool._processes.items()):
+                        if proc.proc and proc.proc.returncode is None:
+                            logger.info(f"Token refresh: recycling subprocess {sid}")
+                            await proc.recycle_for_fresh_token()
+                            recycled += 1
+                    if recycled:
+                        logger.info(f"Token refresh: recycled {recycled} subprocess(es)")
             else:
                 logger.error("Proactive token refresh failed after 2 attempts — token may expire soon")
         except asyncio.CancelledError:

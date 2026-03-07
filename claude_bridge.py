@@ -927,6 +927,7 @@ class PersistentClaudeProcess:
         self._auth_recovery_attempts: int = 0
         self._auth_recovery_window_start: float = 0.0
         self._auth_error_recovering: bool = False
+        self._force_fresh_after_auth: bool = False
 
         self._compaction_state = _load_compaction_state(slot_id)
         self._compacting = False
@@ -1160,7 +1161,32 @@ class PersistentClaudeProcess:
                 self._session_loaded = True
 
             logger.info(f"Starting persistent Claude process (slot={self.slot_id}, session_id={self.session_id or 'none'})...")
-            await self._spawn()
+            force_fresh = self._force_fresh_after_auth
+            self._force_fresh_after_auth = False
+            await self._spawn(force_fresh=force_fresh)
+
+    async def recycle_for_fresh_token(self):
+        """Kill current subprocess so next message spawns with fresh auth credentials.
+
+        Called by the proactive token refresh monitor after successfully refreshing
+        the OAuth token. Resets all auth-recovery state so the next spawn is clean.
+        """
+        self._context_injected = False
+        self._auth_recovery_attempts = 0
+        self._auth_recovery_window_start = 0.0
+        self._last_auth_error = None
+        self._auth_error_recovering = False
+        self._force_fresh_after_auth = True
+        if self.proc and self.proc.returncode is None:
+            try:
+                self.proc.kill()
+            except Exception:
+                pass
+            try:
+                await asyncio.wait_for(self.proc.wait(), timeout=3.0)
+            except (asyncio.TimeoutError, Exception):
+                pass
+        self.proc = None
 
     async def _spawn(self, force_fresh: bool = False):
         """Spawn the claude process with stream-json I/O.
@@ -1170,6 +1196,19 @@ class PersistentClaudeProcess:
         conversation. Falls back to fresh start (with context re-injection) if
         resume fails, times out, or session is stale.
         """
+        # Pre-spawn: if token is near expiry, refresh before launching
+        try:
+            _, _, exp_ms = _read_creds()
+            if exp_ms and (exp_ms / 1000) < time.time() + 300:  # Less than 5 min left
+                logger.info(f"Pre-spawn token refresh: token expires in {(exp_ms/1000 - time.time()):.0f}s (slot={self.slot_id})")
+                ok, _ = await refresh_cli_oauth_token()
+                if ok:
+                    logger.info(f"Pre-spawn token refresh succeeded (slot={self.slot_id})")
+                else:
+                    logger.warning(f"Pre-spawn token refresh failed (slot={self.slot_id})")
+        except Exception as e:
+            logger.warning(f"Pre-spawn token check failed: {e}")
+
         # Build env with explicit auth strategy handling.
         env = {**os.environ, "NO_COLOR": "1"}
         # Explicit output token limits — without these, the CLI defaults to
@@ -1524,6 +1563,10 @@ class PersistentClaudeProcess:
                             logger.info(f"Auth recovery succeeded — process will restart with fresh token on next message (slot={self.slot_id})")
                             self._context_injected = False
                             self._last_auth_error = None
+                            self._auth_error_recovering = False
+                            self._auth_recovery_attempts = 0
+                            self._auth_recovery_window_start = 0.0
+                            self._force_fresh_after_auth = True
                             recovered = True
                     except Exception as e:
                         logger.warning(f"Auth recovery failed: {e}")
