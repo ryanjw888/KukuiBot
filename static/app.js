@@ -2234,6 +2234,11 @@ function render(opts = {}) {
         `}
         <div id="mobile-worker-menu-host">${showMobileWorkerMenu ? renderMobileWorkerMenu() : ''}</div>
         ${showSettings ? `<div class="mobile-settings-nav">
+          <div class="mobile-mode-strip">
+            <button class="mobile-mode-btn${appMode === 'chat' ? ' active' : ''}" onclick="showSettings=false;setAppMode('chat')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> AI</button>
+            <button class="mobile-mode-btn${appMode === 'editor' ? ' active' : ''}" onclick="showSettings=false;setAppMode('editor')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg> Files</button>
+            <button class="mobile-mode-btn${appMode === 'email' ? ' active' : ''}" onclick="showSettings=false;setAppMode('email')" style="position:relative"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>${_emailDraftCount > 0 ? `<span class="email-draft-badge">${_emailDraftCount}</span>` : ''} Email</button>
+          </div>
           <div class="sidebar-submenu-wrap">
             <button class="sidebar-nav-item" onclick="event.stopPropagation();this.nextElementSibling.classList.toggle('show')"><span class="sidebar-nav-icon">🎨</span>Theme ▸</button>
             <div class="sidebar-submenu">
@@ -5225,6 +5230,11 @@ function _toggleEditorSettingsDOM() {
       const nav = document.createElement('div');
       nav.className = 'mobile-settings-nav';
       nav.innerHTML = `
+        <div class="mobile-mode-strip">
+          <button class="mobile-mode-btn${appMode === 'chat' ? ' active' : ''}" onclick="showSettings=false;setAppMode('chat')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> AI</button>
+          <button class="mobile-mode-btn${appMode === 'editor' ? ' active' : ''}" onclick="showSettings=false;setAppMode('editor')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg> Files</button>
+          <button class="mobile-mode-btn${appMode === 'email' ? ' active' : ''}" onclick="showSettings=false;setAppMode('email')" style="position:relative"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>${_emailDraftCount > 0 ? '<span class="email-draft-badge">' + _emailDraftCount + '</span>' : ''} Email</button>
+        </div>
         <div class="sidebar-submenu-wrap">
           <button class="sidebar-nav-item" onclick="event.stopPropagation();this.nextElementSibling.classList.toggle('show')"><span class="sidebar-nav-icon">&#127912;</span>Theme &#9656;</button>
           <div class="sidebar-submenu">
