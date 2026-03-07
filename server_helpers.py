@@ -471,6 +471,22 @@ def is_anthropic_session(session_id: str) -> bool:
     return sid.startswith("anthropic") or sid.startswith("tab-anthropic") or sid.startswith("deleg-anthropic")
 
 
+def project_id_for_session(session_id: str) -> str:
+    """Look up the project_id for a session from tab_meta."""
+    try:
+        from auth import db_connection
+        with db_connection() as db:
+            row = db.execute(
+                "SELECT COALESCE(project_id, '') FROM tab_meta WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if row and row[0]:
+                return str(row[0])
+        return ""
+    except Exception:
+        return ""
+
+
 def worker_identity_for_session(session_id: str) -> str:
     """Look up the worker_identity for a session from tab_meta."""
     try:

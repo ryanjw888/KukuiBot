@@ -92,6 +92,109 @@ RESUME_TIMEOUT_SECS = 3600  # 1 hour
 _app_dir = WORKSPACE
 
 
+_current_project_id = ""  # Active project for context injection (set via /project endpoint)
+
+
+def _load_project_context(project_id: str, max_chars: int = 0) -> str:
+    """Load project-specific context from the projects registry.
+
+    Priority: CLAUDE.md > README.md > auto-generated from key_files + tree.
+    Respects per-project context_budget.
+    """
+    if not project_id:
+        return ""
+    try:
+        import sqlite3
+        db_path = WORKSPACE / "kukuibot.db"
+        with sqlite3.connect(str(db_path)) as db:
+            db.row_factory = sqlite3.Row
+            row = db.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+            if not row:
+                logger.warning(f"Project '{project_id}' not found in registry")
+                return ""
+
+            root = Path(row["root_path"])
+            budget = max_chars or row["context_budget"] or 8000
+            key_files_json = row["key_files"] or "[]"
+
+            if not root.is_dir():
+                logger.warning(f"Project root {root} does not exist")
+                return ""
+
+            parts = []
+            parts.append(f"**Project:** {row['name']}")
+            parts.append(f"**Root:** {root}")
+            if row["description"]:
+                parts.append(f"**Description:** {row['description']}")
+
+            # Priority 1: CLAUDE.md
+            claude_md = root / "CLAUDE.md"
+            if claude_md.is_file():
+                content = claude_md.read_text(errors="replace")
+                if len(content) > budget - 500:
+                    content = content[:budget - 500] + "\n... (truncated)"
+                parts.append(f"\n## CLAUDE.md\n{content}")
+                result = "\n".join(parts)
+                return result[:budget]
+
+            # Priority 2: README.md
+            readme = root / "README.md"
+            if readme.is_file():
+                content = readme.read_text(errors="replace")[:3000]
+                parts.append(f"\n## README.md\n{content}")
+
+            # Priority 3: Key files listing
+            key_files = json.loads(key_files_json)
+            if key_files:
+                kf_lines = []
+                for kf in key_files[:10]:
+                    kf_path = root / kf
+                    if kf_path.exists():
+                        if kf_path.is_file():
+                            try:
+                                size = kf_path.stat().st_size
+                                lines = len(kf_path.read_text(errors="replace").splitlines())
+                                kf_lines.append(f"- `{kf}` ({lines} lines, {size:,} bytes)")
+                            except Exception:
+                                kf_lines.append(f"- `{kf}` (exists)")
+                        elif kf_path.is_dir():
+                            try:
+                                count = sum(1 for _ in kf_path.iterdir())
+                                kf_lines.append(f"- `{kf}/` ({count} entries)")
+                            except Exception:
+                                kf_lines.append(f"- `{kf}/` (directory)")
+                if kf_lines:
+                    parts.append(f"\n## Key Files\n" + "\n".join(kf_lines))
+
+            # Priority 4: Shallow file tree
+            tree_lines = []
+            try:
+                for entry in sorted(root.iterdir()):
+                    if entry.name.startswith('.') and entry.name not in ['.github']:
+                        continue
+                    if entry.is_dir():
+                        try:
+                            sub_count = sum(1 for _ in entry.iterdir())
+                        except Exception:
+                            sub_count = 0
+                        tree_lines.append(f"  {entry.name}/ ({sub_count} entries)")
+                    else:
+                        tree_lines.append(f"  {entry.name}")
+                    if len(tree_lines) >= 30:
+                        tree_lines.append("  ... (more)")
+                        break
+            except Exception:
+                pass
+            if tree_lines:
+                parts.append(f"\n## Structure\n```\n" + "\n".join(tree_lines) + "\n```")
+
+            result = "\n".join(parts)
+            return result[:budget]
+    except Exception as e:
+        logger.warning(f"Failed to load project context for '{project_id}': {e}")
+        return ""
+
+
 def _load_session_state() -> dict:
     """Load session state from disk."""
     try:
@@ -337,6 +440,13 @@ def build_system_prompt(user_system: Optional[str] = None) -> tuple[str, list[st
     if worker:
         sections.append(f"# Worker Role\n{worker}")
         loaded_files.append(f"workers/{_worker_identity}.md")
+
+    # Active project context (per-tab)
+    if _current_project_id:
+        project_ctx = _load_project_context(_current_project_id)
+        if project_ctx:
+            sections.append(f"# Active Project Context\n{project_ctx}")
+            loaded_files.append(f"project:{_current_project_id}")
 
     # Recent chat history (from persistent log — survives compaction)
     chat_tail = _load_chat_log_tail(kukuibot_session_id=_kukuibot_session_id, worker_identity=_worker_identity)
@@ -1804,6 +1914,29 @@ async def run_server(port: int = DEFAULT_PORT):
             }
         })
 
+    async def set_project(request):
+        """POST /project — Set the active project for context injection."""
+        global _current_project_id
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+        _current_project_id = str(body.get("project_id") or "").strip()
+        if _persistent_claude:
+            _persistent_claude._context_injected = False
+        # Persist to tab_meta so project survives restarts
+        if _kukuibot_session_id:
+            try:
+                import sqlite3
+                db_path = WORKSPACE / "kukuibot.db"
+                with sqlite3.connect(str(db_path)) as db:
+                    db.execute("UPDATE tab_meta SET project_id = ? WHERE session_id = ?",
+                               (_current_project_id, _kukuibot_session_id))
+                    db.commit()
+            except Exception as e:
+                logger.warning(f"Failed to persist project_id to tab_meta: {e}")
+        return web.json_response({"ok": True, "project_id": _current_project_id})
+
     app = web.Application()
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
@@ -1823,6 +1956,7 @@ async def run_server(port: int = DEFAULT_PORT):
     app.router.add_get("/workers", workers_endpoint)
     app.router.add_post("/steer", steer_endpoint)
     app.router.add_post("/steer/hook", steer_hook_endpoint)
+    app.router.add_post("/project", set_project)
     app.router.add_options("/chat", options_handler)
 
     runner = web.AppRunner(app)

@@ -42,6 +42,7 @@ from typing import AsyncIterator, Optional
 from config import (
     COMPACTION_LOG_FILE,
     COMPACTION_LOG_MAX_LINES,
+    KUKUIBOT_HOME,
     MAX_CLAUDE_PROCESSES,
     SKILLS_DIR,
     WORKSPACE,
@@ -553,6 +554,107 @@ def _load_project_report(path: Path, *, max_chars: int = 6000) -> Optional[str]:
     return content
 
 
+def _load_project_context(project_id: str, max_chars: int = 0) -> str:
+    """Load project-specific context from the projects registry.
+
+    Priority: CLAUDE.md > README.md > auto-generated from key_files + tree.
+    Respects per-project context_budget.
+    """
+    if not project_id:
+        return ""
+    try:
+        import sqlite3
+        db_path = KUKUIBOT_HOME / "kukuibot.db"
+        with sqlite3.connect(str(db_path)) as db:
+            db.row_factory = sqlite3.Row
+            row = db.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+            if not row:
+                logger.warning(f"Project '{project_id}' not found in registry")
+                return ""
+
+            root = Path(row["root_path"])
+            budget = max_chars or row["context_budget"] or 8000
+            key_files_json = row["key_files"] or "[]"
+
+            if not root.is_dir():
+                logger.warning(f"Project root {root} does not exist")
+                return ""
+
+            parts = []
+            parts.append(f"**Project:** {row['name']}")
+            parts.append(f"**Root:** {root}")
+            if row["description"]:
+                parts.append(f"**Description:** {row['description']}")
+
+            # Priority 1: CLAUDE.md
+            claude_md = root / "CLAUDE.md"
+            if claude_md.is_file():
+                content = claude_md.read_text(errors="replace")
+                if len(content) > budget - 500:
+                    content = content[:budget - 500] + "\n... (truncated)"
+                parts.append(f"\n## CLAUDE.md\n{content}")
+                result = "\n".join(parts)
+                return result[:budget]
+
+            # Priority 2: README.md
+            readme = root / "README.md"
+            if readme.is_file():
+                content = readme.read_text(errors="replace")[:3000]
+                parts.append(f"\n## README.md\n{content}")
+
+            # Priority 3: Key files listing
+            import json as _json
+            key_files = _json.loads(key_files_json)
+            if key_files:
+                kf_lines = []
+                for kf in key_files[:10]:
+                    kf_path = root / kf
+                    if kf_path.exists():
+                        if kf_path.is_file():
+                            try:
+                                size = kf_path.stat().st_size
+                                lines = len(kf_path.read_text(errors="replace").splitlines())
+                                kf_lines.append(f"- `{kf}` ({lines} lines, {size:,} bytes)")
+                            except Exception:
+                                kf_lines.append(f"- `{kf}` (exists)")
+                        elif kf_path.is_dir():
+                            try:
+                                count = sum(1 for _ in kf_path.iterdir())
+                                kf_lines.append(f"- `{kf}/` ({count} entries)")
+                            except Exception:
+                                kf_lines.append(f"- `{kf}/` (directory)")
+                if kf_lines:
+                    parts.append(f"\n## Key Files\n" + "\n".join(kf_lines))
+
+            # Priority 4: Shallow file tree
+            tree_lines = []
+            try:
+                for entry in sorted(root.iterdir()):
+                    if entry.name.startswith('.') and entry.name not in ['.github']:
+                        continue
+                    if entry.is_dir():
+                        try:
+                            sub_count = sum(1 for _ in entry.iterdir())
+                        except Exception:
+                            sub_count = 0
+                        tree_lines.append(f"  {entry.name}/ ({sub_count} entries)")
+                    else:
+                        tree_lines.append(f"  {entry.name}")
+                    if len(tree_lines) >= 30:
+                        tree_lines.append("  ... (more)")
+                        break
+            except Exception:
+                pass
+            if tree_lines:
+                parts.append(f"\n## Structure\n```\n" + "\n".join(tree_lines) + "\n```")
+
+            result = "\n".join(parts)
+            return result[:budget]
+    except Exception as e:
+        logger.warning(f"Failed to load project context for '{project_id}': {e}")
+        return ""
+
+
 def _build_available_workers_section(current_session_id: str = "") -> str:
     """Query tab_meta and return a concise markdown table of active worker tabs.
 
@@ -619,15 +721,17 @@ def _build_available_workers_section(current_session_id: str = "") -> str:
         return ""
 
 
-def build_system_prompt(worker_identity: str = "", include_chat_log: bool = True, kukuibot_session_id: str = "", model: str = "") -> tuple[str, list[str]]:
+def build_system_prompt(worker_identity: str = "", include_chat_log: bool = True, kukuibot_session_id: str = "", model: str = "", project_id: str = "") -> tuple[str, list[str]]:
     """Build the full system prompt for fresh start context injection.
 
-    Loads: SOUL, USER, TOOLS, Model Identity, Worker Identity, chat log tail (5KB).
+    Loads: SOUL, USER, TOOLS, Model Identity, Worker Identity, Project Context, chat log tail (5KB).
 
     Args:
         worker_identity: Worker role key (e.g. "developer", "it-admin")
         include_chat_log: Whether to include recent chat history
         kukuibot_session_id: KukuiBot tab session_id — filters chat log to only this session's messages
+        model: Claude model shortname
+        project_id: Active project ID for project-specific context injection
 
     Returns:
         (prompt_text, loaded_files) — the assembled prompt and list of files that were loaded.
@@ -727,6 +831,13 @@ def build_system_prompt(worker_identity: str = "", include_chat_log: bool = True
         sections.append(f"# Project Report\n{project_report}")
         loaded_files.append(str(project_report_path))
 
+    # Active project context (per-tab)
+    if project_id:
+        project_ctx = _load_project_context(project_id)
+        if project_ctx:
+            sections.append(f"# Active Project Context\n{project_ctx}")
+            loaded_files.append(f"project:{project_id}")
+
     # Available workers (dynamic from DB — gives coordinators delegation awareness)
     workers_section = _build_available_workers_section(current_session_id=kukuibot_session_id)
     if workers_section:
@@ -764,6 +875,7 @@ class PersistentClaudeProcess:
         self.worker_identity = worker_identity
         self.model = model
         self.kukuibot_session_id = kukuibot_session_id
+        self.project_id: str = ""
 
         self.proc: Optional[asyncio.subprocess.Process] = None
         self.session_id: Optional[str] = None
@@ -955,7 +1067,7 @@ class PersistentClaudeProcess:
             pre_compact_docs = sorted(self._active_docs)
 
             # Build context summary for the memory log flush (not injected into process)
-            context, loaded_files = build_system_prompt(worker_identity=self.worker_identity, kukuibot_session_id=self.kukuibot_session_id, model=self.model)
+            context, loaded_files = build_system_prompt(worker_identity=self.worker_identity, kukuibot_session_id=self.kukuibot_session_id, model=self.model, project_id=self.project_id)
 
             # Flush to memory log
             loop = asyncio.get_event_loop()
@@ -1570,8 +1682,8 @@ class PersistentClaudeProcess:
                 # Send ping so client knows we're working
                 yield {"type": "ping", "elapsed": 0, "tool": "loading context"}
 
-                # FRESH START: inject SOUL, USER, TOOLS, Model Identity, Worker Identity
-                context, loaded_files = build_system_prompt(worker_identity=self.worker_identity, kukuibot_session_id=self.kukuibot_session_id, model=self.model)
+                # FRESH START: inject SOUL, USER, TOOLS, Model Identity, Worker Identity, Project Context
+                context, loaded_files = build_system_prompt(worker_identity=self.worker_identity, kukuibot_session_id=self.kukuibot_session_id, model=self.model, project_id=self.project_id)
                 await self._send_raw_message(
                     f"[System Context - read carefully but do not repeat]\n{context}\n[End System Context]\n\n"
                     f"Acknowledge with 'Context loaded.' and wait for the first real message.\n"
@@ -1773,6 +1885,7 @@ class PersistentClaudeProcess:
             "active_docs": sorted(self._active_docs),
             "last_activity": self.last_activity,
             "cli_context_window": self.cli_context_window,
+            "project_id": self.project_id,
         }
 
         if not self.proc or self.proc.returncode is not None:
@@ -1869,8 +1982,19 @@ class ClaudeProcessPool:
             kukuibot_session_id=session_id,
         )
         proc.set_auth_strategy(self._auth_strategy)
+        # Load project_id from tab_meta if available
+        try:
+            with db_connection() as db:
+                row = db.execute(
+                    "SELECT COALESCE(project_id, '') FROM tab_meta WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+                if row and row[0]:
+                    proc.project_id = str(row[0])
+        except Exception:
+            pass
         self._processes[session_id] = proc
-        logger.info(f"Pool: created process for {session_id} (slot={slot_id}, worker={worker_identity}, pool_size={len(self._processes)})")
+        logger.info(f"Pool: created process for {session_id} (slot={slot_id}, worker={worker_identity}, project={proc.project_id or 'none'}, pool_size={len(self._processes)})")
         return proc
 
     def _evict_oldest_idle(self) -> bool:

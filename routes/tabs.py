@@ -111,6 +111,29 @@ def _ensure_tab_meta_schema(db):
         except Exception:
             pass
 
+    if "project_id" not in cols:
+        try:
+            db.execute("ALTER TABLE tab_meta ADD COLUMN project_id TEXT DEFAULT ''")
+        except Exception:
+            pass
+
+    # Ensure projects table exists (project context registry)
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS projects (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            root_path TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            key_files TEXT DEFAULT '[]',
+            context_budget INTEGER DEFAULT 8000,
+            auto_scan INTEGER DEFAULT 1,
+            created_at INTEGER DEFAULT 0,
+            updated_at INTEGER DEFAULT 0
+        )
+        """
+    )
+
     # Ensure tab_tombstones table exists (tracks deleted tabs for cross-device sync)
     db.execute(
         """
@@ -171,7 +194,7 @@ async def api_history_sessions(request: Request, limit: int = 20):
             meta_rows = []
             if owner:
                 meta_rows = db.execute(
-                    "SELECT session_id, tab_id, model_key, label, label_updated_at, updated_at, COALESCE(sort_order, 0), COALESCE(worker_identity, ''), COALESCE(created_explicitly, 0) FROM tab_meta WHERE owner = ?",
+                    "SELECT session_id, tab_id, model_key, label, label_updated_at, updated_at, COALESCE(sort_order, 0), COALESCE(worker_identity, ''), COALESCE(created_explicitly, 0), COALESCE(project_id, '') FROM tab_meta WHERE owner = ?",
                     (owner,),
                 ).fetchall()
 
@@ -211,6 +234,7 @@ async def api_history_sessions(request: Request, limit: int = 20):
             sort_order_val = int(row[6]) if len(row) > 6 else 0
             worker_identity_val = str(row[7]) if len(row) > 7 else ""
             created_explicitly_val = bool(int(row[8])) if len(row) > 8 else False
+            project_id_val = str(row[9]) if len(row) > 9 else ""
             key = sid
             entry = sessions_map.get(key)
             if not entry:
@@ -226,6 +250,7 @@ async def api_history_sessions(request: Request, limit: int = 20):
                     "sort_order": 0,
                     "worker_identity": "",
                     "created_explicitly": False,
+                    "project_id": "",
                 }
                 sessions_map[key] = entry
 
@@ -237,6 +262,7 @@ async def api_history_sessions(request: Request, limit: int = 20):
             entry["sort_order"] = sort_order_val
             entry["worker_identity"] = worker_identity_val
             entry["created_explicitly"] = created_explicitly_val
+            entry["project_id"] = project_id_val
             entry["updated_at"] = max(int(entry.get("updated_at", 0)), int(meta_updated or 0))
 
         sessions = sorted(sessions_map.values(), key=lambda x: int(x.get("updated_at", 0)), reverse=True)[:cap]
@@ -655,19 +681,21 @@ async def api_session_state(request: Request, session_id: str = "", max_messages
     except Exception:
         pass
 
-    # Fetch tab metadata (worker, label) from tab_meta table
+    # Fetch tab metadata (worker, label, project_id) from tab_meta table
     worker = ""
     tab_label = ""
+    project_id = ""
     try:
         with db_connection() as db:
             _ensure_tab_meta_schema(db)
             row = db.execute(
-                "SELECT label, COALESCE(worker_identity, '') FROM tab_meta WHERE session_id = ?",
+                "SELECT label, COALESCE(worker_identity, ''), COALESCE(project_id, '') FROM tab_meta WHERE session_id = ?",
                 (sid,),
             ).fetchone()
             if row:
                 tab_label = str(row[0] or "")
                 worker = str(row[1] or "")
+                project_id = str(row[2] or "")
     except Exception:
         pass
     # Fallback: derive worker from session_id for delegated sessions
@@ -686,6 +714,7 @@ async def api_session_state(request: Request, session_id: str = "", max_messages
         "messages": messages,
         "worker": worker,
         "tab_label": tab_label,
+        "project_id": project_id,
     }
 
 

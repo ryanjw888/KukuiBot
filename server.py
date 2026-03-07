@@ -125,6 +125,7 @@ from server_helpers import (
     is_openrouter_session as _is_openrouter_session,
     is_anthropic_session as _is_anthropic_session,
     worker_identity_for_session as _worker_identity_for_session,
+    project_id_for_session as _project_id_for_session,
 )
 from openrouter_bridge import openrouter_stream, openrouter_health, openrouter_chat
 from routes.session_events import (
@@ -160,6 +161,7 @@ from routes.bridge import (
     shutdown_bridges,
 )
 from routes.email_drafter import router as drafter_router
+from routes.projects import router as projects_router, seed_default_projects
 from routes.delegation import (
     router as delegation_router,
     init_delegation_routes,
@@ -229,6 +231,7 @@ app.include_router(tabs_router)
 app.include_router(bridge_router)
 app.include_router(delegation_router)
 app.include_router(drafter_router)
+app.include_router(projects_router)
 
 # --- Logging ---
 
@@ -595,10 +598,10 @@ def _load_project_report_content(max_chars: int = 6000) -> str:
         return ""
 
 
-def _get_system_prompt(model_key: str = "", worker_identity: str = "") -> str:
+def _get_system_prompt(model_key: str = "", worker_identity: str = "", project_id: str = "") -> str:
     """Build the system prompt for Codex/Spark/OpenRouter tabs.
 
-    Loads: SOUL, USER, TOOLS, Model Identity, Worker Identity.
+    Loads: SOUL, USER, TOOLS, Model Identity, Worker Identity, Project Context.
     No ROADMAP, no MEMORY.md, no daily memory, no README/DESIGN docs.
     """
     # MINIMAL MODE: "none" worker identity — lightweight email assistant
@@ -722,6 +725,16 @@ def _get_system_prompt(model_key: str = "", worker_identity: str = "") -> str:
     project_report = _load_project_report_content(max_chars=6000)
     if project_report:
         parts.append(f"## Project Report\n{project_report}\n")
+
+    # Active project context (per-tab)
+    if project_id:
+        try:
+            from claude_bridge import _load_project_context
+            project_ctx = _load_project_context(project_id)
+            if project_ctx:
+                parts.append(f"## Active Project Context\n{project_ctx}\n")
+        except Exception:
+            pass
 
     parts.append(f"\nWorkspace: {WORKSPACE}")
     parts.append(f"Current time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -1350,8 +1363,9 @@ async def api_compact(req: Request):
 
     _mk3 = _model_key_from_session(session_id)
     _wi3 = _worker_identity_for_session(session_id)
+    _pi3 = _project_id_for_session(session_id)
     items = await asyncio.get_event_loop().run_in_executor(
-        None, lambda: compact_messages(items, session_id=session_id, model_key=_mk3, worker_identity=_wi3),
+        None, lambda: compact_messages(items, session_id=session_id, model_key=_mk3, worker_identity=_wi3, project_id=_pi3),
     )
     _active_docs.pop(session_id, None)
     save_history(session_id, items)
@@ -2499,6 +2513,37 @@ async def api_claude_smart_compact(req: Request):
     result = await proc.smart_compact()
     status_code = 200 if result.get("status") == "ok" else 500
     return JSONResponse({"ok": result.get("status") == "ok", **result}, status_code=status_code)
+
+
+@app.post("/api/claude/project")
+async def api_set_project(req: Request):
+    """Set the active project on a tab's Claude process for context injection."""
+    try:
+        body = await req.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    project_id = str(body.get("project_id") or "").strip()
+    session_id = str(body.get("session_id") or "").strip()
+    if not session_id:
+        return JSONResponse({"error": "session_id required"}, status_code=400)
+
+    # Update tab_meta
+    try:
+        with db_connection() as db:
+            db.execute("UPDATE tab_meta SET project_id = ? WHERE session_id = ?", (project_id, session_id))
+            db.commit()
+    except Exception as e:
+        logger.warning(f"Failed to update project_id in tab_meta: {e}")
+
+    # Reset context injection flag on the active Claude process so next message re-injects
+    pool = get_claude_pool()
+    if pool:
+        proc = pool.get(session_id)
+        if proc:
+            proc.project_id = project_id
+            proc._context_injected = False  # Force re-injection with new project context
+
+    return {"ok": True, "project_id": project_id}
 
 
 @app.get("/api/workers")
@@ -5526,6 +5571,8 @@ async def startup():
         _sync_nightly_report_cron_job()
         # Sync all DB scheduled jobs to launchd plists
         _ensure_launchd_sync()
+        # Seed default projects if projects table is empty
+        seed_default_projects()
         # Try importing token from legacy path on first run
         status = get_auth_status()
         if not status["authenticated"]:

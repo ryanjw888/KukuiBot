@@ -79,6 +79,81 @@
     .dropdown-item:hover { background: rgba(255,255,255,0.05); }
     .dropdown-item.danger { color: var(--red); }
 
+    /* Project selector */
+    .project-selector { position: relative; margin-left: 8px; }
+    .project-btn {
+      background: none;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 6px;
+      color: var(--muted);
+      font-size: 11px;
+      padding: 3px 8px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.15s;
+      white-space: nowrap;
+      max-width: 160px;
+    }
+    .project-btn:hover { color: var(--text); border-color: rgba(255,255,255,0.15); }
+    .project-btn.has-project { color: var(--accent); border-color: rgba(255,255,255,0.12); }
+    .project-btn svg { opacity: 0.5; flex-shrink: 0; }
+    .project-dropdown {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      background: var(--surface);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px;
+      min-width: 200px;
+      max-height: 300px;
+      overflow-y: auto;
+      z-index: 250;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+    }
+    .project-dropdown.hidden { display: none; }
+    .project-dropdown-header {
+      padding: 8px 12px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .project-option {
+      padding: 8px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: background 0.1s;
+    }
+    .project-option:hover { background: rgba(255,255,255,0.05); }
+    .project-option.selected { color: var(--accent); }
+    .project-option .check { width: 14px; text-align: center; font-size: 10px; }
+    .project-option .proj-name { flex: 1; }
+    .project-option .proj-path { font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+    .project-dropdown-footer {
+      border-top: 1px solid rgba(255,255,255,0.05);
+      padding: 4px;
+    }
+    .project-dropdown-footer button {
+      width: 100%;
+      padding: 6px 12px;
+      font-size: 11px;
+      color: var(--muted);
+      background: none;
+      border: none;
+      cursor: pointer;
+      text-align: left;
+      border-radius: 4px;
+    }
+    .project-dropdown-footer button:hover { background: rgba(255,255,255,0.05); color: var(--text); }
+
     /* Context bar */
     .context-bar { display: none; }
     .context-fill { height: 100%; transition: width 0.7s ease-out, background 0.5s; }
@@ -315,6 +390,8 @@
     .sol-dark .context-bar { background: rgba(10,10,10,0.5); }
     .sol-dark .work-log { background: rgba(0,0,0,0.7); }
     .sol-dark .dropdown { background: var(--surface); border-color: rgba(88,110,117,0.2); }
+    .sol-dark .project-dropdown { background: #002b36; border-color: rgba(88,110,117,0.3); }
+    .sol-dark .project-btn:hover { border-color: rgba(88,110,117,0.5); }
     .sol-dark .input-row textarea:focus { box-shadow: 0 0 0 1px rgba(38,139,210,0.5); }
     .sol-dark .chat-area::-webkit-scrollbar-thumb { background: rgba(88,110,117,0.3); }
     .sol-dark .msg-bubble th { background: rgba(88,110,117,0.15); }
@@ -349,6 +426,10 @@
     .sol-light .work-log { background: rgba(253,246,227,0.7); border-color: rgba(0,0,0,0.06); }
     .sol-light .work-log-toggle:hover { background: rgba(0,0,0,0.03); }
     .sol-light .dropdown { background: var(--surface); border-color: rgba(0,0,0,0.1); box-shadow: 0 8px 32px rgba(0,0,0,0.15); }
+    .sol-light .project-dropdown { background: #fdf6e3; border-color: rgba(0,0,0,0.1); box-shadow: 0 8px 24px rgba(0,0,0,0.1); }
+    .sol-light .project-btn { border-color: rgba(0,0,0,0.08); }
+    .sol-light .project-btn:hover { border-color: rgba(0,0,0,0.15); }
+    .sol-light .project-option:hover { background: rgba(0,0,0,0.04); }
     .sol-light .dropdown-item { color: var(--text); border-bottom-color: rgba(0,0,0,0.06); }
     .sol-light .dropdown-item:hover { background: rgba(0,0,0,0.04); }
     .sol-light .chat-area::-webkit-scrollbar-thumb { background: rgba(147,161,161,0.3); }
@@ -400,6 +481,26 @@
           <span class="status-dot" id="status-dot"></span>
         </span>
         <span class="header-sub" id="worker-label"></span>
+        <!-- Project selector -->
+        <div class="project-selector" id="project-selector">
+          <button class="project-btn" id="project-btn" onclick="toggleProjectDropdown(event)" title="Switch project context">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+            <span id="project-name">No Project</span>
+            <svg width="8" height="8" viewBox="0 0 8 8" style="margin-left:2px"><path d="M1 3l3 3 3-3" stroke="currentColor" fill="none" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
+          <div class="project-dropdown hidden" id="project-dropdown">
+            <div class="project-dropdown-header">Project Context</div>
+            <div id="project-list">
+              <div class="project-option" onclick="selectProject('')">
+                <span class="check"></span>
+                <span class="proj-name">None</span>
+              </div>
+            </div>
+            <div class="project-dropdown-footer">
+              <button onclick="refreshProjectList()">Refresh</button>
+            </div>
+          </div>
+        </div>
       </div>
       <div class="header-right">
         <div class="header-meta" id="perf-display"></div>
@@ -527,6 +628,12 @@ let systemPromptTokens = 10720;
 let lastSeenIdx = -1;
 let _activeResolve = null;
 let _workerName = 'Claude';
+
+// Project selector state
+let _currentProjectId = '';
+let _currentProjectName = 'No Project';
+let _projectList = [];
+const PROJECT_STORAGE_KEY = 'kukuibot_project_';
 
 function estimateTokens() {
   const msgChars = messages.reduce((sum, m) => sum + (m.text || '').length, 0);
@@ -866,6 +973,125 @@ function toggleFooterDropdown(e) {
   }
 }
 function closeFooterDropdown() { footerDropdownOpen = false; const d = $('footer-dropdown'); if (d) d.classList.add('hidden'); }
+
+// ---- Project Selector ----
+
+function toggleProjectDropdown(e) {
+  if (e) e.stopPropagation();
+  const dd = $('project-dropdown');
+  dd.classList.toggle('hidden');
+  // Close other dropdowns
+  $('dropdown').classList.add('hidden');
+  if (!dd.classList.contains('hidden')) {
+    refreshProjectList();
+    setTimeout(() => document.addEventListener('click', closeProjectDropdown, { once: true }), 0);
+  }
+}
+
+function closeProjectDropdown() {
+  const dd = $('project-dropdown');
+  if (dd) dd.classList.add('hidden');
+}
+
+async function refreshProjectList() {
+  try {
+    const resp = await fetch('/api/projects');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    _projectList = data.projects || data || [];
+    renderProjectList();
+  } catch (e) {
+    console.warn('Failed to load projects:', e);
+  }
+}
+
+function renderProjectList() {
+  const container = $('project-list');
+  let html = `<div class="project-option ${!_currentProjectId ? 'selected' : ''}" onclick="selectProject('')">
+    <span class="check">${!_currentProjectId ? '\u2713' : ''}</span>
+    <span class="proj-name">None</span>
+  </div>`;
+
+  for (const p of _projectList) {
+    const selected = p.id === _currentProjectId;
+    const pathShort = esc((p.root_path || '').replace(/^\/Users\/jarvis\//, '~/'));
+    const safeId = esc(p.id).replace(/'/g, '&#39;');
+    const safeName = esc(p.name).replace(/'/g, '&#39;');
+    html += `<div class="project-option ${selected ? 'selected' : ''}" onclick="selectProject('${safeId}', '${safeName}')">
+      <span class="check">${selected ? '\u2713' : ''}</span>
+      <span class="proj-name">${esc(p.name)}</span>
+      <span class="proj-path">${pathShort}</span>
+    </div>`;
+  }
+  container.innerHTML = html;
+}
+
+async function selectProject(projectId, projectName) {
+  _currentProjectId = projectId;
+  _currentProjectName = projectName || (projectId ? projectId : 'No Project');
+
+  // Update UI
+  updateProjectUI();
+
+  // Close dropdown
+  $('project-dropdown').classList.add('hidden');
+
+  // Persist to localStorage
+  localStorage.setItem(PROJECT_STORAGE_KEY + 'default', JSON.stringify({
+    id: _currentProjectId,
+    name: _currentProjectName
+  }));
+
+  // Notify backend
+  try {
+    await fetch(API + '/project', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId })
+    });
+  } catch (e) {
+    console.warn('Failed to set project on backend:', e);
+  }
+
+  // Show confirmation in chat
+  if (projectId) {
+    appendSystemMessage('Project context switched to <b>' + esc(_currentProjectName) + '</b>. Next message will include ' + esc(_currentProjectName) + ' project context.');
+  } else {
+    appendSystemMessage('Project context cleared. Using default context only.');
+  }
+}
+
+function updateProjectUI() {
+  const btn = $('project-btn');
+  const nameEl = $('project-name');
+  if (nameEl) nameEl.textContent = _currentProjectName;
+  if (btn) {
+    if (_currentProjectId) btn.classList.add('has-project');
+    else btn.classList.remove('has-project');
+  }
+}
+
+function restoreProject() {
+  try {
+    const stored = localStorage.getItem(PROJECT_STORAGE_KEY + 'default');
+    if (stored) {
+      const { id, name } = JSON.parse(stored);
+      _currentProjectId = id || '';
+      _currentProjectName = name || 'No Project';
+      updateProjectUI();
+    }
+  } catch (e) {}
+}
+
+function appendSystemMessage(html) {
+  const area = $('chat-area');
+  const div = document.createElement('div');
+  div.className = 'system-msg';
+  div.style.cssText = 'text-align:center;padding:8px;font-size:12px;color:var(--muted);opacity:0.8;';
+  div.innerHTML = html;
+  area.appendChild(div);
+  area.scrollTop = area.scrollHeight;
+}
 
 // Input
 function autoResize(el) {
@@ -1368,6 +1594,8 @@ function connectBridgeEvents() {
 document.title = 'Claude — KukuiBot';
 (async function init() {
   await Promise.all([refreshStatus(), refreshSystemPrompt(), refreshWorkerIdentity(), hydrateFromServer()]);
+  restoreProject();
+  refreshProjectList();
   _userScrolledUp = false;
   _scrollLockUntil = Date.now() + 500;
   render();

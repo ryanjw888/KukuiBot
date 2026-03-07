@@ -31,6 +31,7 @@ from server_helpers import (
     extract_web_links_from_tool_output,
     model_key_from_session,
     profile_limits,
+    project_id_for_session,
     repair_tool_items,
     response_has_links,
     worker_identity_for_session,
@@ -141,7 +142,7 @@ async def process_chat_codex(
             items.append({"role": "user", "content": user_message})
             _append_to_chat_log(session_id, "user", user_message)
 
-        instructions = _get_system_prompt_via_server(model_key=model_key_from_session(session_id), worker_identity=worker_identity_for_session(session_id))
+        instructions = _get_system_prompt_via_server(model_key=model_key_from_session(session_id), worker_identity=worker_identity_for_session(session_id), project_id=project_id_for_session(session_id))
 
         est, _ = _effective_context_tokens(items, last_api_usage.get(session_id, {}))
         if est > compaction_threshold:
@@ -150,8 +151,9 @@ async def process_chat_codex(
 
             _mk = model_key_from_session(session_id)
             _wi = worker_identity_for_session(session_id)
+            _pi = project_id_for_session(session_id)
             items = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: compact_messages(items, session_id=session_id, model_key=_mk, worker_identity=_wi),
+                None, lambda: compact_messages(items, session_id=session_id, model_key=_mk, worker_identity=_wi, project_id=_pi),
             )
             active_docs.pop(session_id, None)
             last_api_usage.pop(session_id, None)
@@ -401,8 +403,9 @@ async def process_chat_codex(
 
                     _mk2 = model_key_from_session(session_id)
                     _wi2 = worker_identity_for_session(session_id)
+                    _pi2 = project_id_for_session(session_id)
                     items = await asyncio.get_event_loop().run_in_executor(
-                        None, lambda: compact_messages(items, session_id=session_id, model_key=_mk2, worker_identity=_wi2),
+                        None, lambda: compact_messages(items, session_id=session_id, model_key=_mk2, worker_identity=_wi2, project_id=_pi2),
                     )
                     active_docs.pop(session_id, None)
                     last_api_usage.pop(session_id, None)
@@ -466,9 +469,9 @@ def _get_runtime_config() -> dict:
     import server as _srv
     return _srv._runtime_config
 
-def _get_system_prompt_via_server(model_key: str = "", worker_identity: str = "") -> str:
+def _get_system_prompt_via_server(model_key: str = "", worker_identity: str = "", project_id: str = "") -> str:
     import server as _srv
-    return _srv._get_system_prompt(model_key=model_key, worker_identity=worker_identity)
+    return _srv._get_system_prompt(model_key=model_key, worker_identity=worker_identity, project_id=project_id)
 
 def _estimate_total_context(items: list) -> int:
     import server as _srv

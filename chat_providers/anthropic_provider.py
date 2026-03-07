@@ -27,6 +27,7 @@ from server_helpers import (
     build_anthropic_attachment_blocks,
     model_key_from_session,
     profile_limits,
+    project_id_for_session,
     resolve_profile,
     worker_identity_for_session,
 )
@@ -97,7 +98,7 @@ async def process_chat_anthropic(
 
         model = _anthropic_model(session_id)
         items, _, _ = load_history(session_id)
-        instructions = _get_system_prompt_via_server(model_key=model_key_from_session(session_id), worker_identity=worker_identity_for_session(session_id))
+        instructions = _get_system_prompt_via_server(model_key=model_key_from_session(session_id), worker_identity=worker_identity_for_session(session_id), project_id=project_id_for_session(session_id))
 
         system_blocks, messages = convert_history_to_anthropic(items, instructions)
 
@@ -463,9 +464,9 @@ async def process_chat_anthropic(
 
 # --- Thin wrappers for server.py functions ---
 
-def _get_system_prompt_via_server(model_key: str = "", worker_identity: str = "") -> str:
+def _get_system_prompt_via_server(model_key: str = "", worker_identity: str = "", project_id: str = "") -> str:
     import server as _srv
-    return _srv._get_system_prompt(model_key=model_key, worker_identity=worker_identity)
+    return _srv._get_system_prompt(model_key=model_key, worker_identity=worker_identity, project_id=project_id)
 
 def _estimate_total_context(items: list) -> int:
     import server as _srv

@@ -26,6 +26,7 @@ from server_helpers import (
     build_openai_attachment_parts,
     model_key_from_session,
     profile_limits,
+    project_id_for_session,
     resolve_profile,
     worker_identity_for_session,
 )
@@ -190,8 +191,8 @@ async def process_chat_openrouter(
         model = _openrouter_model(session_id)
 
         items, _, _ = load_history(session_id)
-        from server_helpers import model_key_from_session as _mk, worker_identity_for_session as _wi
-        instructions = _get_system_prompt_via_server(model_key=_mk(session_id), worker_identity=_wi(session_id))
+        from server_helpers import model_key_from_session as _mk, worker_identity_for_session as _wi, project_id_for_session as _pi
+        instructions = _get_system_prompt_via_server(model_key=_mk(session_id), worker_identity=_wi(session_id), project_id=_pi(session_id))
 
         # Build OpenAI-format messages (system + recent turns)
         messages: list[dict] = []
@@ -536,9 +537,9 @@ async def process_chat_openrouter(
 # --- Thin wrappers for server.py functions needed by this module ---
 # These call back into server.py to avoid duplicating state-dependent code.
 
-def _get_system_prompt_via_server(model_key: str = "", worker_identity: str = "") -> str:
+def _get_system_prompt_via_server(model_key: str = "", worker_identity: str = "", project_id: str = "") -> str:
     import server as _srv
-    return _srv._get_system_prompt(model_key=model_key, worker_identity=worker_identity)
+    return _srv._get_system_prompt(model_key=model_key, worker_identity=worker_identity, project_id=project_id)
 
 def _estimate_total_context(items: list) -> int:
     import server as _srv

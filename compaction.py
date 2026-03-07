@@ -132,10 +132,11 @@ def compact_messages(
     session_id: str = "",
     model_key: str = "",
     worker_identity: str = "",
+    project_id: str = "",
 ) -> list:
     """Smart compact: re-inject New Tab context + 20KB chat log.
 
-    Injects: SOUL, USER, TOOLS, Model Identity, Worker Identity, Project Report + chat log tail.
+    Injects: SOUL, USER, TOOLS, Model Identity, Worker Identity, Project Report, Project Context + chat log tail.
     Then keeps last N recent messages verbatim after the summary.
 
     Args:
@@ -147,6 +148,7 @@ def compact_messages(
         session_id: Session ID (for picking the right chat log)
         model_key: Model key (for model identity file)
         worker_identity: Worker role key (for worker identity file)
+        project_id: Active project ID (for project-specific context injection)
 
     Returns:
         Compacted items list with context + recent messages
@@ -213,6 +215,16 @@ def compact_messages(
     project_report = _load_project_report(WORKSPACE / "PROJECT-REPORT.md")
     if project_report:
         sections.append(f"# Project Report\n{project_report}")
+
+    # Active project context
+    if project_id:
+        try:
+            from claude_bridge import _load_project_context
+            project_ctx = _load_project_context(project_id)
+            if project_ctx:
+                sections.append(f"# Active Project Context\n{project_ctx}")
+        except Exception:
+            pass
 
     # Chat log tail (5KB)
     chat_tail = _load_chat_log_tail(
