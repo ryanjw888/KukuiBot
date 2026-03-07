@@ -73,6 +73,13 @@
 .sol-light .btn-sm.active { background: rgba(133,153,0,0.2); color: #859900; }
 .sol-light .work-log-toggle:hover { background: rgba(0,0,0,.04); }
 .sol-light .work-log { background: rgba(238,232,213,0.7); }
+.sol-light .wl-project-btn { background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.12); }
+.sol-light .wl-project-btn:hover { background: rgba(0,0,0,0.08); border-color: rgba(0,0,0,0.2); }
+.sol-light .project-dropdown { background: #fdf6e3; border-color: rgba(0,0,0,0.1); box-shadow: 0 8px 24px rgba(0,0,0,0.1); }
+.sol-light .project-option:hover { background: rgba(0,0,0,0.04); }
+.sol-light .project-dropdown-header { border-bottom-color: rgba(0,0,0,0.06); }
+.sol-light .project-dropdown-footer { border-top-color: rgba(0,0,0,0.06); }
+.sol-light .project-dropdown-footer button:hover { background: rgba(0,0,0,0.04); }
 .sol-light .deleg-bar { background: rgba(238,232,213,0.85); }
 .sol-light .deleg-bar + .deleg-bar { border-top-color: rgba(0,0,0,0.06); }
 .sol-light .deleg-bar.done { background: rgba(133,153,0,0.1); }
@@ -923,6 +930,43 @@ body {
   display: inline-flex; align-items: center; justify-content: center;
 }
 .wl-compact-btn:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+/* Project selector button in toolbar */
+.wl-project-btn {
+  background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); border-radius: 6px;
+  color: var(--text); font-size: 12px; padding: 3px 8px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 4px; white-space: nowrap;
+  flex-shrink: 0; line-height: 1; transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+.wl-project-btn:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.25); }
+.wl-project-btn.active { color: var(--accent); border-color: rgba(255,255,255,0.2); }
+/* Project dropdown */
+.project-dropdown {
+  position: fixed; z-index: 9999; background: var(--surface); border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px; min-width: 200px; max-height: 300px; overflow-y: auto;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+}
+.project-dropdown.hidden { display: none; }
+.project-dropdown-header {
+  padding: 8px 12px; font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--muted); border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.project-option {
+  padding: 8px 12px; font-size: 12px; cursor: pointer; color: var(--text);
+  display: flex; align-items: center; gap: 8px; transition: background 0.1s;
+}
+.project-option:hover { background: rgba(255,255,255,0.05); }
+.project-option.selected { color: var(--accent); }
+.project-option .proj-check { width: 14px; text-align: center; font-size: 10px; }
+.project-option .proj-name { flex: 1; }
+.project-option .proj-path { font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+.project-dropdown-footer {
+  border-top: 1px solid rgba(255,255,255,0.05); padding: 4px;
+}
+.project-dropdown-footer button {
+  width: 100%; padding: 6px 12px; font-size: 11px; color: var(--muted); background: none;
+  border: none; cursor: pointer; text-align: left; border-radius: 4px;
+}
+.project-dropdown-footer button:hover { background: rgba(255,255,255,0.05); color: var(--text); }
 /* Inline stop button in work-log header (replaces busy dots) */
 .wl-inline-stop {
   font-size: 11px;

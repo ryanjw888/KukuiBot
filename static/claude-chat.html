@@ -80,36 +80,13 @@
     .dropdown-item.danger { color: var(--red); }
 
     /* Project selector */
-    .project-selector { position: relative; margin-left: 8px; }
-    .project-btn {
-      background: none;
-      border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 6px;
-      color: var(--muted);
-      font-size: 11px;
-      padding: 3px 8px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      transition: all 0.15s;
-      white-space: nowrap;
-      max-width: 160px;
-    }
-    .project-btn:hover { color: var(--text); border-color: rgba(255,255,255,0.15); }
-    .project-btn.has-project { color: var(--accent); border-color: rgba(255,255,255,0.12); }
-    .project-btn svg { opacity: 0.5; flex-shrink: 0; }
     .project-dropdown {
-      position: absolute;
-      top: calc(100% + 4px);
-      left: 0;
       background: var(--surface);
       border: 1px solid rgba(255,255,255,0.08);
       border-radius: 8px;
       min-width: 200px;
       max-height: 300px;
       overflow-y: auto;
-      z-index: 250;
       box-shadow: 0 8px 24px rgba(0,0,0,0.3);
     }
     .project-dropdown.hidden { display: none; }
@@ -391,7 +368,6 @@
     .sol-dark .work-log { background: rgba(0,0,0,0.7); }
     .sol-dark .dropdown { background: var(--surface); border-color: rgba(88,110,117,0.2); }
     .sol-dark .project-dropdown { background: #002b36; border-color: rgba(88,110,117,0.3); }
-    .sol-dark .project-btn:hover { border-color: rgba(88,110,117,0.5); }
     .sol-dark .input-row textarea:focus { box-shadow: 0 0 0 1px rgba(38,139,210,0.5); }
     .sol-dark .chat-area::-webkit-scrollbar-thumb { background: rgba(88,110,117,0.3); }
     .sol-dark .msg-bubble th { background: rgba(88,110,117,0.15); }
@@ -427,8 +403,6 @@
     .sol-light .work-log-toggle:hover { background: rgba(0,0,0,0.03); }
     .sol-light .dropdown { background: var(--surface); border-color: rgba(0,0,0,0.1); box-shadow: 0 8px 32px rgba(0,0,0,0.15); }
     .sol-light .project-dropdown { background: #fdf6e3; border-color: rgba(0,0,0,0.1); box-shadow: 0 8px 24px rgba(0,0,0,0.1); }
-    .sol-light .project-btn { border-color: rgba(0,0,0,0.08); }
-    .sol-light .project-btn:hover { border-color: rgba(0,0,0,0.15); }
     .sol-light .project-option:hover { background: rgba(0,0,0,0.04); }
     .sol-light .dropdown-item { color: var(--text); border-bottom-color: rgba(0,0,0,0.06); }
     .sol-light .dropdown-item:hover { background: rgba(0,0,0,0.04); }
@@ -481,26 +455,6 @@
           <span class="status-dot" id="status-dot"></span>
         </span>
         <span class="header-sub" id="worker-label"></span>
-        <!-- Project selector -->
-        <div class="project-selector" id="project-selector">
-          <button class="project-btn" id="project-btn" onclick="toggleProjectDropdown(event)" title="Switch project context">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
-            <span id="project-name">No Project</span>
-            <svg width="8" height="8" viewBox="0 0 8 8" style="margin-left:2px"><path d="M1 3l3 3 3-3" stroke="currentColor" fill="none" stroke-width="1.5" stroke-linecap="round"/></svg>
-          </button>
-          <div class="project-dropdown hidden" id="project-dropdown">
-            <div class="project-dropdown-header">Project Context</div>
-            <div id="project-list">
-              <div class="project-option" onclick="selectProject('')">
-                <span class="check"></span>
-                <span class="proj-name">None</span>
-              </div>
-            </div>
-            <div class="project-dropdown-footer">
-              <button onclick="refreshProjectList()">Refresh</button>
-            </div>
-          </div>
-        </div>
       </div>
       <div class="header-right">
         <div class="header-meta" id="perf-display"></div>
@@ -531,6 +485,19 @@
 
     <!-- Work log -->
     <div id="work-log-host"></div>
+    <!-- Project dropdown (anchored to toolbar, rendered by JS) -->
+    <div class="project-dropdown hidden" id="project-dropdown" style="position:fixed;z-index:9999">
+      <div class="project-dropdown-header">Project Context</div>
+      <div id="project-list">
+        <div class="project-option" onclick="selectProject('')">
+          <span class="check"></span>
+          <span class="proj-name">None</span>
+        </div>
+      </div>
+      <div class="project-dropdown-footer">
+        <button onclick="refreshProjectList()">Refresh</button>
+      </div>
+    </div>
 
     <!-- Input -->
     <div class="input-area">
@@ -780,6 +747,8 @@ function render() {
       `<div class="empty-sub">Claude Opus 4.6 via KukuiBot<br>` +
       `Persistent process · Full tool access<br>Auto-compaction · Session resume<br>` +
       `<span style="color:var(--purple);font-size:12px">$0 cost · Claude Code CLI</span></div></div>`;
+    renderWorkLogFixed();
+    updateChrome();
     return;
   }
 
@@ -924,6 +893,11 @@ function renderWorkLogFixed() {
     `<path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>` +
     `</svg></button>` +
     `<span class="work-head-ctx" style="flex-shrink:0;font-size:10px;white-space:nowrap;margin-right:8px"><span style="color:${ctxColor(p)}">${pre}${fmtK(tk)}/${fmtK(CONTEXT_WINDOW)}</span></span>` +
+    `<button id="project-btn" onclick="event.stopPropagation();toggleProjectDropdown(event)" title="Switch project context" style="flex-shrink:0;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:6px;color:${_currentProjectId ? 'var(--accent)' : 'var(--text)'};font-size:12px;padding:3px 8px;cursor:pointer;display:flex;align-items:center;gap:4px;white-space:nowrap;margin-right:8px">` +
+    `<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="opacity:0.7"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>` +
+    `<span id="project-name">${esc(_currentProjectName)}</span>` +
+    `<svg width="7" height="7" viewBox="0 0 8 8" style="margin-left:1px"><path d="M1 3l3 3 3-3" stroke="currentColor" fill="none" stroke-width="1.5" stroke-linecap="round"/></svg>` +
+    `</button>` +
     `<span onclick="showWorkLog=!showWorkLog;renderWorkLogFixed()" style="display:flex;align-items:center;gap:8px;cursor:pointer;flex:1;min-width:0;overflow:hidden">` +
     `<span class="work-head-arrow">${showWorkLog && workLog.length ? '▼' : '▶'}</span>` +
     `<span class="work-head-left">${esc(leftText)}</span>` +
@@ -981,9 +955,18 @@ function toggleProjectDropdown(e) {
   const dd = $('project-dropdown');
   dd.classList.toggle('hidden');
   // Close other dropdowns
-  $('dropdown').classList.add('hidden');
+  $('footer-dropdown').classList.add('hidden');
   if (!dd.classList.contains('hidden')) {
     refreshProjectList();
+    // Position above the button (toolbar is at screen bottom)
+    const btn = $('project-btn');
+    if (btn) {
+      const rect = btn.getBoundingClientRect();
+      dd.style.bottom = (window.innerHeight - rect.top + 6) + 'px';
+      dd.style.left = rect.left + 'px';
+      dd.style.right = 'auto';
+      dd.style.top = 'auto';
+    }
     setTimeout(() => document.addEventListener('click', closeProjectDropdown, { once: true }), 0);
   }
 }
@@ -1066,8 +1049,8 @@ function updateProjectUI() {
   const nameEl = $('project-name');
   if (nameEl) nameEl.textContent = _currentProjectName;
   if (btn) {
-    if (_currentProjectId) btn.classList.add('has-project');
-    else btn.classList.remove('has-project');
+    btn.style.color = _currentProjectId ? 'var(--accent)' : 'var(--muted)';
+    btn.style.borderColor = _currentProjectId ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.08)';
   }
 }
 

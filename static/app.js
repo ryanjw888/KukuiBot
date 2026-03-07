@@ -56,6 +56,13 @@ let autoNameTimer = null;
 let autoNamedSessions = new Set();
 const AUTO_NAME_INTERVAL_MS = 60 * 60 * 1000;
 
+// --- Project Selector State ---
+let _projectList = [];
+let _currentProjectId = '';
+let _currentProjectName = 'No Project';
+let _projectDropdownOpen = false;
+const LS_PROJECT_KEY = 'kukuibot.project.';
+
 // --- Theme ---
 const THEMES = ['blue', 'claudia', 'sol-dark', 'sol-light'];
 const THEME_LABELS = { 'blue': 'Blue', 'claudia': 'Claudia', 'sol-dark': 'Solarized Dark', 'sol-light': 'Solarized Light' };
@@ -2325,6 +2332,14 @@ function render(opts = {}) {
     ${showBackupModal ? renderBackupModal() : ''}
     ${showRestartModal ? renderRestartModal() : ''}
     ${showCompactModal ? renderCompactModal() : ''}
+
+    <div class="project-dropdown hidden" id="project-dropdown">
+      <div class="project-dropdown-header">Project Context</div>
+      <div id="project-list"></div>
+      <div class="project-dropdown-footer">
+        <button onclick="refreshProjectList()">Refresh</button>
+      </div>
+    </div>
   `;
 
   const el = document.getElementById('messages');
@@ -3319,6 +3334,11 @@ function renderWorkLog(workLog, isWorking = false, activeToolLabel = null, toolC
   return `<div class="work-log">
     <div class="conn-bar conn-${connStatus}" title="${connTitle}" style="display:flex;align-items:center;gap:0;">
       <button class="wl-compact-btn" onclick="showCompactConfirm()" title="Smart Compact">🗜</button>
+      <button id="project-btn" class="wl-project-btn${_currentProjectId ? ' active' : ''}" onclick="event.stopPropagation();toggleProjectDropdown(event)" title="Switch project context">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="opacity:0.7"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+        <span id="project-name">${escText(_currentProjectName)}</span>
+        <svg width="7" height="7" viewBox="0 0 8 8" style="margin-left:1px"><path d="M1 3l3 3 3-3" stroke="currentColor" fill="none" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
       <button class="work-log-toggle" onclick="toggleWorkLog()" style="flex:1;">
         <span class="work-head-left">${showWorkLog ? '▼' : '▶'} ${escText(leftText)}</span>
         ${rightBusy}
@@ -6546,6 +6566,7 @@ async function boot() {
     if (_sd.app_name) APP_NAME = _sd.app_name;
   } catch (_) {}
   document.title = APP_NAME;
+  restoreProjectFromStorage();
   loadAutoNamePrefs();
   if (autoNameEnabled) startAutoNameScheduler();
   startStreamRecoveryLoop();
@@ -6902,5 +6923,85 @@ setInterval(() => {
   const tab = activeTab();
   if (tab && !isTabLoading(tab)) refreshMeta();
 }, 30000);
+
+// --- Project Selector ---
+
+function toggleProjectDropdown(e) {
+  if (e) e.stopPropagation();
+  _projectDropdownOpen = !_projectDropdownOpen;
+  const dd = document.getElementById('project-dropdown');
+  if (!dd) return;
+  dd.classList.toggle('hidden', !_projectDropdownOpen);
+  if (_projectDropdownOpen) {
+    refreshProjectList();
+    const btn = document.getElementById('project-btn');
+    if (btn) {
+      const rect = btn.getBoundingClientRect();
+      dd.style.bottom = (window.innerHeight - rect.top + 6) + 'px';
+      dd.style.left = rect.left + 'px';
+      dd.style.right = 'auto';
+      dd.style.top = 'auto';
+    }
+    setTimeout(() => document.addEventListener('click', closeProjectDropdown, { once: true }), 0);
+  }
+}
+
+function closeProjectDropdown() {
+  _projectDropdownOpen = false;
+  const dd = document.getElementById('project-dropdown');
+  if (dd) dd.classList.add('hidden');
+}
+
+async function refreshProjectList() {
+  try {
+    const resp = await fetch(API + '/api/projects');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    _projectList = data.projects || data || [];
+    renderProjectDropdownList();
+  } catch (e) {
+    console.warn('Failed to load projects:', e);
+  }
+}
+
+function renderProjectDropdownList() {
+  const container = document.getElementById('project-list');
+  if (!container) return;
+  let html = `<div class="project-option ${!_currentProjectId ? 'selected' : ''}" onclick="selectProject('')">
+    <span class="proj-check">${!_currentProjectId ? '\u2713' : ''}</span>
+    <span class="proj-name">None</span>
+  </div>`;
+  for (const p of _projectList) {
+    const selected = p.id === _currentProjectId;
+    const pathShort = escText((p.root_path || '').replace(/^\/Users\/jarvis\//, '~/'));
+    const safeId = escText(p.id).replace(/'/g, '&#39;');
+    const safeName = escText(p.name).replace(/'/g, '&#39;');
+    html += `<div class="project-option ${selected ? 'selected' : ''}" onclick="selectProject('${safeId}', '${safeName}')">
+      <span class="proj-check">${selected ? '\u2713' : ''}</span>
+      <span class="proj-name">${escText(p.name)}</span>
+      <span class="proj-path">${pathShort}</span>
+    </div>`;
+  }
+  container.innerHTML = html;
+}
+
+function selectProject(projectId, projectName) {
+  _currentProjectId = projectId;
+  _currentProjectName = projectName || (projectId ? projectId : 'No Project');
+  closeProjectDropdown();
+  localStorage.setItem(LS_PROJECT_KEY + 'default', JSON.stringify({ id: _currentProjectId, name: _currentProjectName }));
+  requestRender({ preserveScroll: true });
+}
+
+function restoreProjectFromStorage() {
+  try {
+    const stored = localStorage.getItem(LS_PROJECT_KEY + 'default');
+    if (stored) {
+      const { id, name } = JSON.parse(stored);
+      _currentProjectId = id || '';
+      _currentProjectName = name || 'No Project';
+    }
+  } catch (_) {}
+}
 
 boot();
