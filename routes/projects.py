@@ -26,6 +26,8 @@ router = APIRouter()
 
 ALLOWED_ROOTS = [Path("/Users/jarvis")]
 
+VALID_STATUSES = {"active", "archived", "paused"}
+
 EXCLUDED_PATTERNS = re.compile(
     r"(\.env$|\.credentials|secrets?|password|key\.json|id_rsa|\.p12$|\.pfx$|\.pem$)",
     re.IGNORECASE,
@@ -79,8 +81,8 @@ def seed_default_projects():
             now = int(time.time())
             for proj in DEFAULT_PROJECTS:
                 db.execute(
-                    """INSERT OR IGNORE INTO projects (id, name, root_path, description, key_files, context_budget, auto_scan, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)""",
+                    """INSERT OR IGNORE INTO projects (id, name, root_path, description, key_files, context_budget, auto_scan, status, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)""",
                     (
                         proj["id"],
                         proj["name"],
@@ -88,6 +90,7 @@ def seed_default_projects():
                         proj.get("description", ""),
                         json.dumps(proj.get("key_files", [])),
                         proj.get("context_budget", 8000),
+                        proj.get("status", "active"),
                         now,
                         now,
                     ),
@@ -101,14 +104,21 @@ def seed_default_projects():
 # --- Endpoints ---
 
 @router.get("/api/projects")
-async def api_list_projects():
-    """List all registered projects."""
+async def api_list_projects(request: Request):
+    """List all registered projects. Optional ?status=active|archived|paused filter."""
     try:
+        status_filter = request.query_params.get("status")
         with db_connection() as db:
             _ensure_tab_meta_schema(db)
-            rows = db.execute(
-                "SELECT id, name, root_path, description, key_files, context_budget, auto_scan, created_at, updated_at FROM projects ORDER BY name"
-            ).fetchall()
+            if status_filter and status_filter in VALID_STATUSES:
+                rows = db.execute(
+                    "SELECT id, name, root_path, description, key_files, context_budget, auto_scan, status, created_at, updated_at FROM projects WHERE status = ? ORDER BY name",
+                    (status_filter,),
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT id, name, root_path, description, key_files, context_budget, auto_scan, status, created_at, updated_at FROM projects ORDER BY name"
+                ).fetchall()
         projects = []
         for row in rows:
             projects.append({
@@ -119,8 +129,9 @@ async def api_list_projects():
                 "key_files": json.loads(row[4]) if row[4] else [],
                 "context_budget": row[5] or 8000,
                 "auto_scan": bool(row[6]),
-                "created_at": row[7] or 0,
-                "updated_at": row[8] or 0,
+                "status": row[7] or "active",
+                "created_at": row[8] or 0,
+                "updated_at": row[9] or 0,
             })
         return {"projects": projects}
     except Exception as e:
@@ -153,6 +164,9 @@ async def api_create_project(request: Request):
     if not isinstance(key_files, list):
         key_files = []
     context_budget = int(body.get("context_budget", 8000) or 8000)
+    status = str(body.get("status", "active")).strip()
+    if status not in VALID_STATUSES:
+        return JSONResponse({"error": f"Invalid status '{status}'. Must be one of: {', '.join(sorted(VALID_STATUSES))}"}, status_code=400)
 
     now = int(time.time())
     try:
@@ -162,9 +176,9 @@ async def api_create_project(request: Request):
             if existing:
                 return JSONResponse({"error": f"Project '{project_id}' already exists"}, status_code=409)
             db.execute(
-                """INSERT INTO projects (id, name, root_path, description, key_files, context_budget, auto_scan, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)""",
-                (project_id, name, str(validated_path), description, json.dumps(key_files), context_budget, now, now),
+                """INSERT INTO projects (id, name, root_path, description, key_files, context_budget, auto_scan, status, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)""",
+                (project_id, name, str(validated_path), description, json.dumps(key_files), context_budget, status, now, now),
             )
             db.commit()
         return {"ok": True, "id": project_id}
@@ -215,6 +229,12 @@ async def api_update_project(project_id: str, request: Request):
             if "auto_scan" in body:
                 updates.append("auto_scan = ?")
                 params.append(1 if body["auto_scan"] else 0)
+            if "status" in body:
+                s = str(body["status"]).strip()
+                if s not in VALID_STATUSES:
+                    return JSONResponse({"error": f"Invalid status '{s}'. Must be one of: {', '.join(sorted(VALID_STATUSES))}"}, status_code=400)
+                updates.append("status = ?")
+                params.append(s)
 
             if not updates:
                 return {"ok": True, "id": project_id, "changed": 0}

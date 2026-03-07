@@ -128,11 +128,20 @@ def _ensure_tab_meta_schema(db):
             key_files TEXT DEFAULT '[]',
             context_budget INTEGER DEFAULT 8000,
             auto_scan INTEGER DEFAULT 1,
+            status TEXT DEFAULT 'active',
             created_at INTEGER DEFAULT 0,
             updated_at INTEGER DEFAULT 0
         )
         """
     )
+
+    # Migration: add status column to projects if missing
+    try:
+        proj_cols = {r[1] for r in db.execute("PRAGMA table_info(projects)").fetchall()}
+        if "status" not in proj_cols:
+            db.execute("ALTER TABLE projects ADD COLUMN status TEXT DEFAULT 'active'")
+    except Exception:
+        pass
 
     # Ensure tab_tombstones table exists (tracks deleted tabs for cross-device sync)
     db.execute(

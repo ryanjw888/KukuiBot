@@ -517,6 +517,9 @@
         <span class="nav-icon">&#9729;</span><span class="nav-label">Cloudflare</span>
       </button>
       <div class="sidebar-nav-divider"></div>
+      <button class="sidebar-nav-btn" onclick="showSection('projects')">
+        <span class="nav-icon">&#128193;</span><span class="nav-label">Projects</span>
+      </button>
       <button class="sidebar-nav-btn" onclick="showSection('workers')">
         <span class="nav-icon">&#128736;</span><span class="nav-label">Workers</span>
       </button>
@@ -1794,6 +1797,86 @@
 
     <!-- ===== CERTIFICATE SECTION ===== -->
     <!-- ===== WORKERS SECTION ===== -->
+    <!-- ===== PROJECTS SECTION ===== -->
+    <div class="settings-section" id="section-projects">
+      <div class="section-title">Projects</div>
+
+      <!-- Project List -->
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+          <h2 style="margin-bottom:0;">Projects</h2>
+          <button class="btn primary" onclick="showProjectForm()">+ Add Project</button>
+        </div>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:12px;">Manage project contexts injected into AI workers. Each project maps a root path to context files.</p>
+        <div id="projects-list"></div>
+        <div id="projects-empty" style="display:none;text-align:center;padding:24px;color:var(--muted);font-size:13px;">No projects found. Click "Add Project" to create one.</div>
+      </div>
+
+      <!-- Project Form (hidden by default) -->
+      <div class="card" id="project-form-card" style="display:none;">
+        <h2 id="project-form-title">Add Project</h2>
+        <input type="hidden" id="project-edit-id" value="">
+
+        <div class="auth-input-group">
+          <label>Project Name <span style="color:var(--red);">*</span></label>
+          <input type="text" id="project-name" placeholder="e.g. My App" oninput="autoSlugify()" style="width:100%;">
+        </div>
+        <div class="auth-input-group" style="margin-top:8px;">
+          <label>Project ID (slug)</label>
+          <input type="text" id="project-id" placeholder="auto-generated" style="width:100%;font-family:'SF Mono',Menlo,monospace;font-size:12px;">
+        </div>
+        <div class="auth-input-group" style="margin-top:8px;">
+          <label>Root Path <span style="color:var(--red);">*</span></label>
+          <div style="display:flex;gap:8px;">
+            <input type="text" id="project-root-path" placeholder="/Users/jarvis/myproject" style="flex:1;">
+            <button class="btn" onclick="scanProjectPath()">Scan</button>
+          </div>
+        </div>
+        <div class="auth-input-group" style="margin-top:8px;">
+          <label>Description</label>
+          <textarea id="project-description" rows="2" placeholder="Optional description" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:6px;font-size:13px;font-family:inherit;resize:vertical;"></textarea>
+        </div>
+        <div style="display:flex;gap:12px;margin-top:8px;">
+          <div class="auth-input-group" style="flex:1;">
+            <label>Status</label>
+            <select id="project-status" style="width:100%;">
+              <option value="active">Active</option>
+              <option value="paused">Paused</option>
+              <option value="archived">Archived</option>
+            </select>
+          </div>
+          <div class="auth-input-group" style="flex:1;">
+            <label>Context Budget</label>
+            <input type="number" id="project-budget" value="8000" min="0" style="width:100%;">
+            <div style="font-size:11px;color:var(--muted);margin-top:2px;">Max chars injected into AI context</div>
+          </div>
+        </div>
+        <div class="setting-row" style="padding:8px 0;border-bottom:none;">
+          <div class="setting-info">
+            <div class="setting-label" style="font-size:13px;">Auto Scan</div>
+            <div class="setting-desc">Automatically detect key files on save</div>
+          </div>
+          <div id="project-auto-scan" class="toggle on" onclick="this.classList.toggle('on')"></div>
+        </div>
+        <div class="auth-input-group" style="margin-top:4px;">
+          <label>Key Files</label>
+          <textarea id="project-key-files" rows="3" placeholder="One file per line, e.g.&#10;README.md&#10;CLAUDE.md&#10;src/main.py" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:6px;font-size:12px;font-family:'SF Mono',Menlo,monospace;resize:vertical;"></textarea>
+        </div>
+
+        <!-- Scan results preview -->
+        <div id="project-scan-result" style="display:none;margin-top:8px;padding:10px 12px;border-radius:8px;border:1px solid rgba(94,181,247,0.2);background:rgba(94,181,247,0.04);font-size:12px;">
+          <div style="font-weight:600;color:var(--accent);margin-bottom:4px;">Scan Results</div>
+          <pre id="project-scan-tree" style="color:var(--muted);margin:0;white-space:pre-wrap;max-height:120px;overflow-y:auto;"></pre>
+        </div>
+
+        <div id="project-form-msg" style="font-size:12px;margin-top:8px;"></div>
+        <div class="btn-row" style="margin-top:12px;">
+          <button class="btn primary" onclick="saveProject()">Save</button>
+          <button class="btn" onclick="hideProjectForm()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
     <div class="settings-section" id="section-workers">
       <div class="section-title">Workers</div>
       <div class="card">
@@ -1966,6 +2049,10 @@ function showSection(id) {
   // Lazy-load Report Manager when opened
   if (id === 'nightly') {
     initReportManager(true);
+  }
+  // Lazy-load Projects when opened
+  if (id === 'projects') {
+    loadProjects();
   }
 }
 // Restore section from URL hash on load
@@ -6253,6 +6340,219 @@ loadAccessMode();
   }
 })();
 
+// ---- Projects Management ----
+let _projectsLoaded = false;
+
+function slugify(text) {
+  return (text || '').toLowerCase().trim()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .replace(/[\s]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+function autoSlugify() {
+  const editId = document.getElementById('project-edit-id').value;
+  if (editId) return; // Don't auto-slug when editing
+  const name = document.getElementById('project-name').value;
+  document.getElementById('project-id').value = slugify(name);
+}
+
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+async function loadProjects() {
+  _projectsLoaded = true;
+  const listEl = document.getElementById('projects-list');
+  const emptyEl = document.getElementById('projects-empty');
+  try {
+    const r = await fetch(API + '/api/projects');
+    const data = await r.json();
+    const projects = data.projects || [];
+    if (projects.length === 0) {
+      listEl.innerHTML = '';
+      emptyEl.style.display = 'block';
+      return;
+    }
+    emptyEl.style.display = 'none';
+    const statusColors = { active: 'var(--green)', paused: 'var(--yellow)', archived: 'var(--muted)' };
+    const statusBg = { active: 'rgba(77,217,100,0.1)', paused: 'rgba(250,204,21,0.1)', archived: 'rgba(112,132,153,0.1)' };
+    const statusBorder = { active: 'rgba(77,217,100,0.3)', paused: 'rgba(250,204,21,0.3)', archived: 'rgba(112,132,153,0.3)' };
+    listEl.innerHTML = projects.map(p => {
+      const st = p.status || 'active';
+      const kf = Array.isArray(p.key_files) ? p.key_files : [];
+      return '<div style="display:flex;align-items:center;gap:12px;padding:12px;border:1px solid var(--border);border-radius:var(--radius);margin-bottom:8px;transition:border-color 0.2s;" onmouseenter="this.style.borderColor=\'var(--border-light)\'" onmouseleave="this.style.borderColor=\'var(--border)\'">'
+        + '<div style="flex:1;min-width:0;">'
+        + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+        + '<span style="font-size:14px;font-weight:600;">' + escHtml(p.name) + '</span>'
+        + '<span class="proj-status-badge" onclick="cycleProjectStatus(\'' + escHtml(p.id) + '\',\'' + escHtml(st) + '\')" style="cursor:pointer;font-size:11px;padding:2px 8px;border-radius:10px;color:' + (statusColors[st]||statusColors.active) + ';background:' + (statusBg[st]||statusBg.active) + ';border:1px solid ' + (statusBorder[st]||statusBorder.active) + ';font-weight:500;text-transform:capitalize;">' + escHtml(st) + '</span>'
+        + '</div>'
+        + '<div style="font-size:12px;color:var(--muted);margin-top:2px;font-family:\'SF Mono\',Menlo,monospace;">' + escHtml(p.root_path) + '</div>'
+        + (p.description ? '<div style="font-size:12px;color:var(--muted);margin-top:2px;">' + escHtml(p.description) + '</div>' : '')
+        + '<div style="font-size:11px;color:var(--muted);margin-top:4px;">Budget: ' + (p.context_budget || 8000) + ' chars' + (kf.length ? ' · ' + kf.length + ' key file' + (kf.length !== 1 ? 's' : '') : '') + '</div>'
+        + '</div>'
+        + '<div style="display:flex;gap:6px;flex-shrink:0;">'
+        + '<button class="btn" style="padding:6px 10px;font-size:12px;" onclick="showProjectForm(\'' + escHtml(p.id) + '\')">Edit</button>'
+        + '<button class="btn danger" style="padding:6px 10px;font-size:12px;" onclick="deleteProject(\'' + escHtml(p.id) + '\',\'' + escHtml(p.name).replace(/'/g, '\\\'') + '\')">Delete</button>'
+        + '</div></div>';
+    }).join('');
+  } catch (e) {
+    listEl.innerHTML = '<div style="color:var(--red);font-size:13px;">Failed to load projects: ' + escHtml(e.message) + '</div>';
+  }
+}
+
+function showProjectForm(projectId) {
+  const card = document.getElementById('project-form-card');
+  const title = document.getElementById('project-form-title');
+  const idInput = document.getElementById('project-id');
+  const editInput = document.getElementById('project-edit-id');
+  const msgEl = document.getElementById('project-form-msg');
+  const scanEl = document.getElementById('project-scan-result');
+  msgEl.textContent = '';
+  msgEl.style.color = '';
+  scanEl.style.display = 'none';
+
+  // Reset form
+  document.getElementById('project-name').value = '';
+  idInput.value = '';
+  document.getElementById('project-root-path').value = '';
+  document.getElementById('project-description').value = '';
+  document.getElementById('project-status').value = 'active';
+  document.getElementById('project-budget').value = '8000';
+  document.getElementById('project-auto-scan').className = 'toggle on';
+  document.getElementById('project-key-files').value = '';
+  editInput.value = '';
+
+  if (projectId) {
+    // Edit mode — fetch project data
+    title.textContent = 'Edit Project';
+    idInput.readOnly = true;
+    idInput.style.opacity = '0.6';
+    editInput.value = projectId;
+    fetch(API + '/api/projects').then(r => r.json()).then(data => {
+      const p = (data.projects || []).find(x => x.id === projectId);
+      if (!p) { msgEl.style.color = 'var(--red)'; msgEl.textContent = 'Project not found'; return; }
+      document.getElementById('project-name').value = p.name || '';
+      idInput.value = p.id;
+      document.getElementById('project-root-path').value = p.root_path || '';
+      document.getElementById('project-description').value = p.description || '';
+      document.getElementById('project-status').value = p.status || 'active';
+      document.getElementById('project-budget').value = p.context_budget || 8000;
+      document.getElementById('project-auto-scan').className = 'toggle' + (p.auto_scan !== false ? ' on' : '');
+      const kf = Array.isArray(p.key_files) ? p.key_files : [];
+      document.getElementById('project-key-files').value = kf.join('\n');
+    }).catch(e => { msgEl.style.color = 'var(--red)'; msgEl.textContent = 'Failed to load: ' + e.message; });
+  } else {
+    // Add mode
+    title.textContent = 'Add Project';
+    idInput.readOnly = false;
+    idInput.style.opacity = '1';
+  }
+  card.style.display = 'block';
+  document.getElementById('project-name').focus();
+}
+
+function hideProjectForm() {
+  document.getElementById('project-form-card').style.display = 'none';
+}
+
+async function saveProject() {
+  const msgEl = document.getElementById('project-form-msg');
+  const editId = document.getElementById('project-edit-id').value;
+  const projectId = document.getElementById('project-id').value.trim();
+  const name = document.getElementById('project-name').value.trim();
+  const rootPath = document.getElementById('project-root-path').value.trim();
+  const description = document.getElementById('project-description').value.trim();
+  const status = document.getElementById('project-status').value;
+  const budget = parseInt(document.getElementById('project-budget').value) || 8000;
+  const autoScan = document.getElementById('project-auto-scan').classList.contains('on');
+  const keyFilesRaw = document.getElementById('project-key-files').value.trim();
+  const keyFiles = keyFilesRaw ? keyFilesRaw.split('\n').map(f => f.trim()).filter(Boolean) : [];
+
+  if (!name) { msgEl.style.color = 'var(--red)'; msgEl.textContent = 'Name is required'; return; }
+  if (!rootPath) { msgEl.style.color = 'var(--red)'; msgEl.textContent = 'Root path is required'; return; }
+  if (!editId && !projectId) { msgEl.style.color = 'var(--red)'; msgEl.textContent = 'Project ID is required'; return; }
+
+  const body = { name, root_path: rootPath, description, status, context_budget: budget, auto_scan: autoScan, key_files: keyFiles };
+
+  try {
+    let r;
+    if (editId) {
+      r = await fetch(API + '/api/projects/' + encodeURIComponent(editId), {
+        method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+      });
+    } else {
+      body.id = projectId;
+      r = await fetch(API + '/api/projects', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+      });
+    }
+    const data = await r.json();
+    if (!r.ok) { msgEl.style.color = 'var(--red)'; msgEl.textContent = data.error || 'Save failed'; return; }
+    msgEl.style.color = 'var(--green)'; msgEl.textContent = editId ? 'Updated!' : 'Created!';
+    toast(editId ? 'Project updated' : 'Project created');
+    hideProjectForm();
+    loadProjects();
+  } catch (e) {
+    msgEl.style.color = 'var(--red)'; msgEl.textContent = 'Error: ' + e.message;
+  }
+}
+
+async function deleteProject(id, name) {
+  if (!confirm('Delete project "' + name + '"? This cannot be undone.')) return;
+  try {
+    const r = await fetch(API + '/api/projects/' + encodeURIComponent(id), { method: 'DELETE' });
+    const data = await r.json();
+    if (!r.ok) { toast('Delete failed: ' + (data.error || 'Unknown error')); return; }
+    toast('Project deleted');
+    loadProjects();
+  } catch (e) {
+    toast('Delete failed: ' + e.message);
+  }
+}
+
+async function cycleProjectStatus(id, currentStatus) {
+  const cycle = { active: 'paused', paused: 'archived', archived: 'active' };
+  const newStatus = cycle[currentStatus] || 'active';
+  try {
+    const r = await fetch(API + '/api/projects/' + encodeURIComponent(id), {
+      method: 'PUT', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ status: newStatus })
+    });
+    if (!r.ok) { const d = await r.json(); toast('Status update failed: ' + (d.error || '')); return; }
+    toast('Status → ' + newStatus);
+    loadProjects();
+  } catch (e) { toast('Error: ' + e.message); }
+}
+
+async function scanProjectPath() {
+  const rootPath = document.getElementById('project-root-path').value.trim();
+  if (!rootPath) { toast('Enter a root path first'); return; }
+  const scanEl = document.getElementById('project-scan-result');
+  const treeEl = document.getElementById('project-scan-tree');
+  scanEl.style.display = 'block';
+  treeEl.textContent = 'Scanning...';
+  try {
+    const r = await fetch(API + '/api/projects/scan', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ root_path: rootPath })
+    });
+    const data = await r.json();
+    if (!r.ok) { treeEl.textContent = 'Error: ' + (data.error || 'Scan failed'); return; }
+    treeEl.textContent = data.tree_preview || '(empty)';
+    // Populate key files from scan
+    if (data.suggested_key_files && data.suggested_key_files.length) {
+      document.getElementById('project-key-files').value = data.suggested_key_files.join('\n');
+    }
+    toast('Scan complete — ' + (data.suggested_key_files || []).length + ' key files detected');
+  } catch (e) {
+    treeEl.textContent = 'Error: ' + e.message;
+  }
+}
+
 startClaudeStatusPolling();
 loadClaudeAutoCompactPct();
 loadOpenRouterConfig();
@@ -6269,6 +6569,9 @@ loadUpdateInfo();
 loadCronJobs();
 if ((window.location.hash || '').replace('#', '') === 'nightly') {
   initReportManager(true);
+}
+if ((window.location.hash || '').replace('#', '') === 'projects') {
+  loadProjects();
 }
 </script>
 </body>
