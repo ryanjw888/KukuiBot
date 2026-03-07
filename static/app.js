@@ -5185,9 +5185,9 @@ function updateModelSelectorsUI() {
 
 function toggleSettings() {
   showSettings = !showSettings;
-  // In editor mode, toggle the dropdown via direct DOM manipulation
-  // to avoid a full render() that would destroy the Ace editor instance.
-  if (appMode === 'editor') {
+  // In editor/email mode, toggle the dropdown via direct DOM manipulation
+  // to avoid a full render() that would destroy the Ace editor or email panel.
+  if (appMode === 'editor' || appMode === 'email') {
     _toggleEditorSettingsDOM();
     return;
   }
@@ -5497,7 +5497,7 @@ function closeMobileWorkerMenu() {
 function closeSettingsOnClickOutside(e) {
   if (!e.target.closest('.sidebar-header-wrap') && !e.target.closest('.sidebar-nav') && !e.target.closest('.mobile-settings-nav') && !e.target.closest('.mobile-menu-btn')) {
     showSettings = false;
-    if (appMode === 'editor') {
+    if (appMode === 'editor' || appMode === 'email') {
       _toggleEditorSettingsDOM(); // removes dropdowns via direct DOM
     } else {
       updateSettingsUI();
