@@ -1252,7 +1252,8 @@ async def generate_ai_reply(from_addr: str, subject: str, body: str,
 
 
 def _create_threaded_draft(from_email: str, original_from: str, subject: str,
-                           body: str, message_id: str, signature_html: str = "") -> str | None:
+                           body: str, message_id: str, signature_html: str = "",
+                           cc: str = "") -> str | None:
     """Create a Gmail draft threaded as a reply. Returns the draft UID or None."""
     re_subject = subject
     if not re.match(r"^Re:\s", subject, re.IGNORECASE):
@@ -1276,6 +1277,8 @@ def _create_threaded_draft(from_email: str, original_from: str, subject: str,
         msg["To"] = email.utils.formataddr(_parsed[0])
     else:
         msg["To"] = original_from
+    if cc:
+        msg["Cc"] = cc
     msg["Subject"] = re_subject
     msg[X_DRAFTER_HEADER] = X_DRAFTER_VALUE
     if message_id:
@@ -1519,10 +1522,23 @@ async def check_and_draft(dry_run: bool = False) -> dict:
                     processed_ids.add(message_id)
                     continue
 
+                # Build reply-all Cc: original To + Cc, minus our own address
+                # and the person already in To (Reply-To/From)
+                _my_lower = from_email.lower()
+                _reply_to_lower = from_addr_parsed  # already lowered
+                _orig_to = msg.get("To", "")
+                _orig_cc = msg.get("Cc", "")
+                _all_addrs = email.utils.getaddresses([_orig_to, _orig_cc])
+                _exclude = {_my_lower, _reply_to_lower}
+                _cc_list = [email.utils.formataddr((n, a)) for n, a in _all_addrs
+                            if a and a.lower() not in _exclude]
+                _cc_str = ", ".join(_cc_list)
+
                 # Create threaded draft
                 draft_uid = _create_threaded_draft(
                     from_email, original_from, subject,
                     draft_body, message_id, signature_html,
+                    cc=_cc_str,
                 )
 
                 if draft_uid:
@@ -1878,13 +1894,15 @@ def send_draft(uid: str) -> dict:
         msg = email.message_from_bytes(raw)
 
         to_addr = msg.get("To", "")
+        cc_addr = msg.get("Cc", "")
         subject = _parse_header(msg.get("Subject", ""))
 
         if not to_addr:
             raise ValueError("Draft has no recipient")
 
-        # Parse all recipients (handles multi-address To headers)
-        recipients = [addr.lower() for _, addr in email.utils.getaddresses([to_addr]) if addr]
+        # Parse all recipients from To + Cc for SMTP envelope
+        recipients = [addr.lower() for _, addr in
+                      email.utils.getaddresses([to_addr, cc_addr]) if addr]
         if not recipients:
             raise ValueError("Draft has no valid recipient address")
 
