@@ -1788,7 +1788,7 @@ async def run_server(port: int = DEFAULT_PORT):
         return web.json_response({"ok": True, "queued": True, "position": pos})
 
     async def steer_hook_endpoint(request):
-        """GET /steer/hook — Claude CLI PreToolUse hook callback. Returns additionalContext if steering messages are queued."""
+        """POST /steer/hook — Claude CLI PreToolUse HTTP hook callback. Returns additionalContext if steering messages are queued."""
         async with _persistent_claude._steering_lock:
             if not _persistent_claude._steering_messages:
                 return web.Response(status=200)
@@ -1822,7 +1822,7 @@ async def run_server(port: int = DEFAULT_PORT):
     app.router.add_post("/root-revoke", root_revoke_endpoint)
     app.router.add_get("/workers", workers_endpoint)
     app.router.add_post("/steer", steer_endpoint)
-    app.router.add_get("/steer/hook", steer_hook_endpoint)
+    app.router.add_post("/steer/hook", steer_hook_endpoint)
     app.router.add_options("/chat", options_handler)
 
     runner = web.AppRunner(app)

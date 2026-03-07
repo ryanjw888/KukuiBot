@@ -2298,7 +2298,7 @@ function render(opts = {}) {
       <div class="input-area">
         <div class="drag-overlay"><div class="drag-overlay-label"><span class="drag-icon">📂</span>Drop files here</div></div>
         ${renderAttachmentBar(tab)}
-        <input type="file" id="file-picker" multiple accept="image/*,.txt,.md,.py,.js,.ts,.json,.csv,.html,.css,.pdf,.log,.xml,.yaml,.yml,.sh,.toml,.env,.sql,.rb,.go,.rs,.java,.c,.cpp,.h,.hpp" style="display:none" onchange="if(this.files.length){_processFiles(this.files);this.value=''}">
+        <input type="file" id="file-picker" multiple style="display:none" onchange="if(this.files.length){_processFiles(this.files);this.value=''}">
         <div class="input-row" style="position:relative;">
           <div class="textarea-wrap">
             <textarea id="input" rows="2" autocomplete="off" placeholder="Message ${tab ? escText(tab.label) : def.name}..." onkeydown="handleKey(event)" oninput="onInputChange(this);autoResize(this);updateInputBtn()"></textarea>
@@ -3387,7 +3387,7 @@ function autoResize(el) { el.style.height = 'auto'; el.style.height = Math.min(e
 
 // --- File Paste & Drag-Drop ---
 const FILE_MAX_IMAGE_BYTES = 10 * 1024 * 1024;  // 10MB
-const FILE_MAX_TEXT_BYTES = 500 * 1024;           // 500KB
+const FILE_MAX_TEXT_BYTES = 5 * 1024 * 1024;       // 5MB
 const FILE_MAX_COUNT = 5;
 let _fileReadersLoading = 0;  // Track in-flight FileReader ops to prevent send() race
 
@@ -3431,11 +3431,7 @@ function _processFiles(fileList) {
       break;
     }
     const isImage = _fileIsImage(file);
-    const isText = _fileIsText(file);
-    if (!isImage && !isText) {
-      _showFileToast(`Unsupported file type: ${file.name}`);
-      continue;
-    }
+    const isText = _fileIsText(file) || !isImage;  // treat any non-image as text
     if (isImage && file.size > FILE_MAX_IMAGE_BYTES) {
       _showFileToast(`Image too large (max 10MB): ${file.name}`);
       continue;

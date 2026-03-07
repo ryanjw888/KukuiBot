@@ -874,6 +874,7 @@ function autoResize(el) {
 }
 function handleInputKey(e) {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (_sttListening) stopSTTSilent(); sendMessage(); }
+  if (e.key === 'Enter' && e.shiftKey && loading) { e.preventDefault(); sendMessage(); }
   if (e.key === 'ArrowRight') {
     const inp = $('msg-input');
     const atEnd = inp.selectionStart === inp.value.length;
