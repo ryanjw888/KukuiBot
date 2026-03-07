@@ -37,7 +37,7 @@ TAGGED_JSON = "/Users/jarvis/.kukuibot/audiobook/chapter_001_tagged.json"
 VOICES_DIR = "/Users/jarvis/.kukuibot/audiobook/voices"
 BASE_MODEL_PATH = os.path.join(REPO_DIR, "models", "Qwen3-TTS-12Hz-1.7B-Base-8bit")
 OUTPUT_DIR = "/Users/jarvis/.kukuibot/audiobook/cloned_segments"
-FINAL_MP3 = "/Users/jarvis/.kukuibot/audiobook/chapter_001_cloned_final.mp3"
+FINAL_MP3 = "/Users/jarvis/.kukuibot/audiobook/chapter_001_qwen_v2.mp3"
 FFMPEG = "/opt/homebrew/bin/ffmpeg"
 
 # ── Voice mapping ──────────────────────────────────────────────────────
@@ -47,7 +47,7 @@ VOICE_MAP = {
     ("carl", "carl_spoken"):      ["carl_dialogue_01.wav", "carl_dialogue_02.wav"],
     ("donut", "donut_spoken"):    ["donut_01.wav", "donut_02.wav", "donut_03.wav"],
     ("donut", "donut_chat"):      ["donut_01.wav", "donut_02.wav", "donut_03.wav"],
-    ("mordecai", "mordecai_chat"): ["mordecai_01.wav", "mordecai_02.wav"],
+    ("mordecai", "mordecai_chat"): ["mordecai_01.wav", "mordecai_02.wav", "mordecai_03.wav"],
     ("system", "system_message"): ["system_01.wav", "system_02.wav", "system_03.wav"],
     ("system", "description_box"): ["system_01.wav", "system_02.wav", "system_03.wav"],
 }

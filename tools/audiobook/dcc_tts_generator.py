@@ -24,42 +24,48 @@ from pathlib import Path
 API_KEY = "sk_3012c5eed997818a3ba698ee536138c5ec92a83ba64bfbd3"
 TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=mp3_44100_128"
 
-DEFAULT_INPUT = Path(__file__).resolve().parents[3] / "audiobook_output" / "chapter_001_tagged.json"
-DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parents[3] / "audiobook_output"
+DEFAULT_INPUT = Path(__file__).resolve().parents[3] / "audiobook" / "chapter_001_tagged.json"
+DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parents[3] / "audiobook"
 
 # Voice mapping: speaker -> (voice_id, default voice_settings)
+# Cloned voices from Jeff Hays' DCC Book 7 audiobook performance
 VOICE_MAP = {
     "carl": {
-        "voice_id": "iP95p4xoKVk53GoZ742B",
+        "voice_id_narration": "jbtQFXFLZ9rzGRw7aVjB",    # DCC Carl Narration clone
+        "voice_id_dialogue":  "E11UzLNeh6UCz892XdUz",     # DCC Carl Dialogue clone
         "narration": {"stability": 0.5, "similarity_boost": 0.75, "style": 0.3, "speed": 1.0},
         "spoken":    {"stability": 0.4, "similarity_boost": 0.75, "style": 0.6, "speed": 1.0},
     },
     "donut": {
-        "voice_id": "FGY2WhTYpPnrIDTdsKH5",
+        "voice_id": "vz4GbuvKcn6l5a8tYR9I",               # DCC Donut clone
         "default": {"stability": 0.35, "similarity_boost": 0.8, "style": 0.8, "speed": 1.0},
     },
     "mordecai": {
-        "voice_id": "cjVigY5qzO86Huf0OWal",
+        "voice_id": "KT6VzCjdjidZrRIATaLB",               # DCC Mordecai clone
         "default": {"stability": 0.6, "similarity_boost": 0.8, "style": 0.4, "speed": 1.0},
     },
     "system": {
-        "voice_id": "onwK4e9ZLuTAKqWW03F9",
+        "voice_id": "IFaEf5ukSzTEzAVkO19G",               # DCC System Voice clone
         "default": {"stability": 0.7, "similarity_boost": 0.9, "style": 0.2, "speed": 0.95},
     },
+    "samantha": {
+        "voice_id": "aGweQObIgjy3bHHgH78w",               # DCC Samantha clone
+        "default": {"stability": 0.3, "similarity_boost": 0.8, "style": 0.8, "speed": 1.0},
+    },
     "hedy the gremlin": {
-        "voice_id": "N2lVS1w4EtoT3dr4eOWO",
+        "voice_id": "N2lVS1w4EtoT3dr4eOWO",               # Premade: Callum
         "default": {"stability": 0.4, "similarity_boost": 0.75, "style": 0.7, "speed": 1.0},
     },
     "waldrip chris": {
-        "voice_id": "N2lVS1w4EtoT3dr4eOWO",
+        "voice_id": "N2lVS1w4EtoT3dr4eOWO",               # Premade: Callum
         "default": {"stability": 0.35, "similarity_boost": 0.75, "style": 0.8, "speed": 1.0},
     },
     "justice light": {
-        "voice_id": "JBFqnCBsd6RMkjVDRZzb",
+        "voice_id": "JBFqnCBsd6RMkjVDRZzb",               # Premade: George
         "default": {"stability": 0.5, "similarity_boost": 0.75, "style": 0.5, "speed": 1.0},
     },
     "rosetta": {
-        "voice_id": "EXAVITQu4vr4xnSDxMaL",
+        "voice_id": "EXAVITQu4vr4xnSDxMaL",               # Premade: Sarah
         "default": {"stability": 0.5, "similarity_boost": 0.75, "style": 0.5, "speed": 1.0},
     },
 }
@@ -90,15 +96,17 @@ def get_voice_config(segment):
     seg_type = segment["type"]
 
     entry = VOICE_MAP.get(speaker, VOICE_MAP["carl"])
-    voice_id = entry["voice_id"]
 
-    # Carl has different settings for narration vs spoken
+    # Carl has different voice clones for narration vs dialogue
     if speaker == "carl":
         if "narration" in seg_type:
+            voice_id = entry["voice_id_narration"]
             settings = dict(entry["narration"])
         else:
+            voice_id = entry["voice_id_dialogue"]
             settings = dict(entry["spoken"])
     else:
+        voice_id = entry["voice_id"]
         settings = dict(entry["default"])
 
     # description_box gets slower speed
