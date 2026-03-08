@@ -62,7 +62,14 @@ let _projectDropdownOpen = false;
 const LS_PROJECT_KEY = 'kukuibot.project.';
 
 function _tabProjectId(tab) { return (tab && tab.projectId) || ''; }
-function _tabProjectName(tab) { return (tab && tab.projectName) || 'No Project'; }
+function _tabProjectName(tab) {
+  if (!tab || !tab.projectId) return 'No Project';
+  if (tab.projectName && tab.projectName !== 'No Project') return tab.projectName;
+  // Resolve from cached project list if name is missing (e.g. after server sync)
+  const match = _projectList.find(p => p.id === tab.projectId);
+  if (match) { tab.projectName = match.name; return match.name; }
+  return tab.projectId;  // Fallback to ID until project list loads
+}
 
 // --- Theme ---
 const THEMES = ['blue', 'claudia', 'sol-dark', 'sol-light'];
@@ -1370,6 +1377,7 @@ async function pushTabsToServer() {
         created_explicitly: !!t.createdExplicitly,
         sort_order: idx,
         worker_identity: t.workerIdentity || '',
+        project_id: t.projectId || '',
       })),
     };
     const res = await fetch(API + '/api/tabs/sync', {
@@ -1569,6 +1577,7 @@ async function syncTabsFromServerSessions(limit = 60, opts = {}) {
       const desiredLabel = savedLabel || fallbackLabel;
 
       const savedWorkerIdentity = String(s?.worker_identity || '').trim();
+      const savedProjectId = String(s?.project_id || '').trim();
 
       let existing = tabs.find(t => t.sessionId === sid || t.id === tabId);
       if (!existing) {
@@ -1582,6 +1591,8 @@ async function syncTabsFromServerSessions(limit = 60, opts = {}) {
           labelUpdatedAt: savedLabelUpdatedAt,
           createdExplicitly: savedCreatedExplicitly,
           workerIdentity: savedWorkerIdentity,
+          projectId: savedProjectId,
+          projectName: '',  // Will be resolved on next render from project list
           silent: true,
         });
         changed = true;
@@ -1600,6 +1611,10 @@ async function syncTabsFromServerSessions(limit = 60, opts = {}) {
         }
         if (savedWorkerIdentity && existing.workerIdentity !== savedWorkerIdentity) {
           existing.workerIdentity = savedWorkerIdentity;
+          changed = true;
+        }
+        if (savedProjectId && existing.projectId !== savedProjectId) {
+          existing.projectId = savedProjectId;
           changed = true;
         }
       }
@@ -6602,6 +6617,8 @@ async function boot() {
       // Server is the sole source of truth for tabs. Overwrite localStorage state.
       // forceServerLabels + serverAuthoritative ensures server wins on all fields.
       await syncTabsFromServerSessions(80, { forceServerLabels: true, serverAuthoritative: true });
+      // Pre-fetch project list so _tabProjectName() can resolve IDs to names
+      refreshProjectList().catch(() => {});
 
       // Only create a default tab if the server returned nothing.
       if (tabs.length === 0) {

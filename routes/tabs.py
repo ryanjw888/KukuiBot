@@ -363,6 +363,7 @@ async def api_tabs_sync(req: Request):
                 except Exception:
                     sort_order = 0
                 worker_identity = str(row.get("worker_identity") or "").strip()
+                project_id = str(row.get("project_id") or "").strip()
                 try:
                     created_explicitly = 1 if row.get("created_explicitly") else 0
                 except Exception:
@@ -430,8 +431,8 @@ async def api_tabs_sync(req: Request):
 
                 db.execute(
                     """
-                    INSERT INTO tab_meta (owner, session_id, tab_id, model_key, label, label_updated_at, sort_order, worker_identity, created_explicitly, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO tab_meta (owner, session_id, tab_id, model_key, label, label_updated_at, sort_order, worker_identity, created_explicitly, project_id, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(owner, session_id) DO UPDATE SET
                         tab_id = excluded.tab_id,
                         model_key = excluded.model_key,
@@ -448,9 +449,10 @@ async def api_tabs_sync(req: Request):
                         sort_order = excluded.sort_order,
                         worker_identity = excluded.worker_identity,
                         created_explicitly = MAX(COALESCE(tab_meta.created_explicitly, 0), excluded.created_explicitly),
+                        project_id = excluded.project_id,
                         updated_at = excluded.updated_at
                     """,
-                    (owner, session_id, tab_id, model_key, label, label_updated_at, sort_order, worker_identity, created_explicitly, now),
+                    (owner, session_id, tab_id, model_key, label, label_updated_at, sort_order, worker_identity, created_explicitly, project_id, now),
                 )
                 saved += 1
 
