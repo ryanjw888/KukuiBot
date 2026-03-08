@@ -271,6 +271,8 @@ async def process_chat_claude(
 
             elif event_type == "user_message":
                 continue
+            elif event_type == "user":
+                continue  # CLI echo of injected/tool-result user message — already handled
             elif event_type == "context_loaded":
                 await _emit_event(session_id, queue, {"type": "context_loaded", "loaded_files": event.get("loaded_files", [])}, run_id=run_id)
             elif event_type == "compaction":

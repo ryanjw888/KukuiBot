@@ -1850,6 +1850,22 @@ class PersistentClaudeProcess:
         finally:
             self.chat_lock.release()
 
+    async def inject_user_message(self, text: str) -> bool:
+        """Inject a user message into a running turn's stdin.
+
+        Does NOT acquire chat_lock — the whole point is to write while a turn is active.
+        Uses self.lock (stdin guard) to safely serialize the write.
+        The CLI queues the message and injects it between tool iterations.
+        """
+        try:
+            await self._send_raw_message(text)
+            self._broadcast({"type": "user_message", "text": text, "ts": int(time.time() * 1000)})
+            logger.info(f"Injected mid-turn user message (slot={self.slot_id}, len={len(text)})")
+            return True
+        except (RuntimeError, OSError) as e:
+            logger.warning(f"Failed to inject mid-turn message (slot={self.slot_id}): {e}")
+            return False
+
     # --- Management ---
 
     async def restart(self):

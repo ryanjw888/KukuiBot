@@ -75,6 +75,19 @@ async def api_chat(req: Request):
                         proc.queue_notification(wake_msg)
             logger.info(f"User message preempted internal wake for {session_id} (run={current.get('run_id', '')})")
         else:
+            # Mid-turn injection for Claude sessions — write to subprocess stdin
+            if is_claude_session(session_id):
+                pool = get_claude_pool()
+                proc = pool.get(session_id) if pool else None
+                if proc:
+                    injected = await proc.inject_user_message(message)
+                    if injected:
+                        existing_queue = current.get("queue")
+                        if existing_queue:
+                            user_evt = {"type": "user_message", "text": message, "ts": int(time.time() * 1000)}
+                            await _emit_event(session_id, existing_queue, user_evt, run_id=str(current.get("run_id", "")))
+                        return JSONResponse({"ok": True, "injected": True, "run_id": str(current.get("run_id", ""))})
+            # Non-Claude or injection failed — return 409 as before
             return JSONResponse(
                 {
                     "error": "run_in_progress",

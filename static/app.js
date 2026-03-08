@@ -4658,7 +4658,25 @@ async function send() {
     textContent: !f.isImage ? (f.textContent ?? null) : null,
   })).filter(a => a.dataUrl || a.textContent !== null) : null;
   if (isTabLoading(tab)) {
-    // Queue the message — show it immediately with a pending badge
+    // Claude tabs: inject mid-turn via backend — don't queue
+    if (_isClaudeModel(tab.modelKey)) {
+      const injMsg = { id: Date.now() + Math.floor(Math.random() * 1000), role: 'user', text: sendText, timestamp: new Date(), _attachments: _msgAttachments };
+      tab.messages.push(injMsg);
+      input.value = '';
+      tab.draft = '';
+      tab.pendingFiles = [];
+      _rerenderAttachmentBar();
+      persistTabs();
+      requestRender({ forceStickBottom: true });
+      // Fire-and-forget POST — response flows through existing EventSource
+      fetch(API + '/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: sendText, session_id: tab.sessionId }),
+      }).catch(err => console.warn('Mid-turn injection failed:', err));
+      return;
+    }
+    // Non-Claude tabs: queue as before
     const pendingMsg = { id: Date.now() + Math.floor(Math.random() * 1000), role: 'user', text: sendText, timestamp: new Date(), _pending: true, _attachments: _msgAttachments };
     tab.messages.push(pendingMsg);
     _messageQueue.push({ tabId: tab.id, text: sendText, pendingMsgId: pendingMsg.id, pendingFiles: hasFiles ? [...tab.pendingFiles] : [] });
