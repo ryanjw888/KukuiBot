@@ -2478,7 +2478,7 @@ const DEFAULT_WORKER_ICON = '🤖';
 // Sidebar group definitions — tabs are grouped and ordered by these categories.
 // Within each group, tab order is the delegation priority (top = preferred).
 const WORKER_GROUPS = [
-  { label: '',               keys: ['dev-manager', 'planner'] },  // top-level, no header
+  { label: 'Projects',       keys: ['dev-manager', 'planner'] },
   { label: 'Code Planning',  keys: ['code-analyst'] },
   { label: 'Developers',     keys: ['developer'] },
   { label: 'Assistants',  keys: ['assistant'] },

@@ -23,6 +23,12 @@ logger = logging.getLogger("kukuibot.notification_store")
 # Fast-path flag to avoid repeated PRAGMA checks after first init
 _schema_initialized = False
 
+
+def _iso_minus_seconds(seconds: int) -> str:
+    """Return an ISO 8601 timestamp for (now - seconds). Used for staleness checks."""
+    from datetime import timedelta
+    return (datetime.utcnow() - timedelta(seconds=seconds)).isoformat()
+
 # Delimiter used when prepending queued delegation notifications in front of a
 # real user message. Intentionally unique to avoid accidental collisions with
 # markdown content in delegated results (e.g. "\n\n---\n\n").
@@ -385,14 +391,19 @@ def recover(*, max_attempts: int = 3, retention_seconds: int = 86400) -> dict[st
             # the model run crashed after injection — retry).
             # Exclude fire-and-forget notifications (system_wake) — these have no
             # TASK_DONE marker and should NOT be retried; mark them consumed instead.
+            # Only reset injected→pending if the notification has been stuck in
+            # 'injected' state for > 5 minutes (300s). Recently injected notifications
+            # are likely still in the subprocess's in-memory queue waiting for the
+            # next drain_notifications() call — resetting them causes duplicates.
             db.execute(
                 "UPDATE delegation_notifications SET state='consumed' "
                 "WHERE state='injected' AND task_id='system_wake'",
             )
             injected_reset = db.execute(
                 "UPDATE delegation_notifications SET state='pending', claimed_at=NULL, injected_at=NULL "
-                "WHERE state='injected' AND attempt_count < ? AND task_id != 'system_wake'",
-                (max_attempts,),
+                "WHERE state='injected' AND attempt_count < ? AND task_id != 'system_wake' "
+                "AND injected_at IS NOT NULL AND injected_at < ?",
+                (max_attempts, _iso_minus_seconds(300)),
             )
             counts["injected_reset"] = injected_reset.rowcount
 

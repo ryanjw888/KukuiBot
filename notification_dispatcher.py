@@ -241,12 +241,15 @@ class NotificationDispatcher:
         if fire_and_forget_ids:
             notification_store.mark_consumed(fire_and_forget_ids)
 
-        # Fire proactive wake only if idle — if busy, the in-memory queue
-        # will be drained by send_message() on the next turn
+        # Fire proactive wake only if idle — if busy, queue in-memory and
+        # schedule deferred retries to catch the subprocess when it goes idle
         if not self._is_subprocess_idle(session_id, proc):
             logger.info(
                 f"NotificationDispatcher: subprocess busy for {session_id}, "
-                f"{len(ids)} notification(s) queued in-memory for next message drain"
+                f"{len(ids)} notification(s) queued in-memory, scheduling deferred wake"
+            )
+            asyncio.create_task(
+                self._deferred_wake_retry(session_id, payloads, ids)
             )
             return len(ids)
 
@@ -293,6 +296,69 @@ class NotificationDispatcher:
         ):
             return False
         return True
+
+    async def _deferred_wake_retry(
+        self, session_id: str, payloads: list[dict], ids: list[str],
+        max_retries: int = 4, base_delay: float = 10.0,
+    ) -> None:
+        """Retry proactive wake with increasing delay when subprocess was busy.
+
+        Checks idle state at 10s, 20s, 30s, 40s intervals. If the subprocess
+        becomes idle within that window, fires the proactive wake. After max
+        retries, falls back to waiting for the next user message drain.
+        """
+        for attempt in range(1, max_retries + 1):
+            delay = base_delay * attempt
+            await asyncio.sleep(delay)
+
+            if self._stopped:
+                return
+
+            pool = self._get_claude_pool()
+            if not pool:
+                return
+            proc = pool.get(session_id)
+            if not proc:
+                return
+
+            if self._is_subprocess_idle(session_id, proc):
+                # Subprocess is idle — fire proactive wake now
+                notify_parts = [
+                    notification_store.render_notification(p) for p in payloads
+                ]
+                notify_text = "\n\n".join(notify_parts)
+                task_id = payloads[0].get("task_id", "dispatch") if payloads else "dispatch"
+                to_status = payloads[0].get("to_status", "notification") if payloads else "notification"
+                try:
+                    woke = await self._try_proactive_wake(
+                        session_id, proc, notify_text, task_id, to_status,
+                        label="dispatcher-deferred: ",
+                    )
+                    if woke:
+                        for payload in payloads:
+                            t_id = payload.get("task_id", "")
+                            t_status = payload.get("to_status", "")
+                            if t_id and t_status:
+                                notification_store.mark_consumed_by_dedupe(
+                                    session_id, f"{t_id}:{t_status}"
+                                )
+                        logger.info(
+                            f"NotificationDispatcher: deferred wake succeeded for {session_id} "
+                            f"on attempt {attempt}/{max_retries}"
+                        )
+                except Exception as e:
+                    logger.warning(f"NotificationDispatcher: deferred wake error for {session_id}: {e}")
+                return
+
+            logger.debug(
+                f"NotificationDispatcher: deferred wake attempt {attempt}/{max_retries} "
+                f"for {session_id} — still busy, retrying in {base_delay * (attempt + 1):.0f}s"
+            )
+
+        logger.info(
+            f"NotificationDispatcher: deferred wake exhausted {max_retries} retries for {session_id}, "
+            f"falling back to next message drain"
+        )
 
     def _release_claims(self, ids: list[str]) -> None:
         """Release claimed notifications back to pending state."""
