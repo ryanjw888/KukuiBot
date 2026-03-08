@@ -449,7 +449,10 @@ async def api_tabs_sync(req: Request):
                         sort_order = excluded.sort_order,
                         worker_identity = excluded.worker_identity,
                         created_explicitly = MAX(COALESCE(tab_meta.created_explicitly, 0), excluded.created_explicitly),
-                        project_id = excluded.project_id,
+                        project_id = CASE
+                            WHEN excluded.project_id != '' THEN excluded.project_id
+                            ELSE COALESCE(tab_meta.project_id, excluded.project_id)
+                        END,
                         updated_at = excluded.updated_at
                     """,
                     (owner, session_id, tab_id, model_key, label, label_updated_at, sort_order, worker_identity, created_explicitly, project_id, now),

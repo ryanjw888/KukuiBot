@@ -59,7 +59,7 @@ const AUTO_NAME_INTERVAL_MS = 60 * 60 * 1000;
 // --- Project Selector State (per-tab) ---
 let _projectList = [];
 let _projectDropdownOpen = false;
-const LS_PROJECT_KEY = 'kukuibot.project.';
+
 
 function _tabProjectId(tab) { return (tab && tab.projectId) || ''; }
 function _tabProjectName(tab) {
@@ -6611,7 +6611,6 @@ async function boot() {
       // Fast-paint: restore localStorage cache for instant UI, but server will overwrite.
       // This prevents a blank screen while the server fetch completes.
       restoreTabsFromStorage();
-      restoreProjectFromStorage();
       requestRender();
 
       // Server is the sole source of truth for tabs. Overwrite localStorage state.
@@ -7019,22 +7018,8 @@ function selectProject(projectId, projectName) {
   tab.projectId = projectId;
   tab.projectName = projectName || (projectId ? projectId : 'No Project');
   closeProjectDropdown();
-  localStorage.setItem(LS_PROJECT_KEY + tab.id, JSON.stringify({ id: tab.projectId, name: tab.projectName }));
   persistTabs();
   requestRender({ preserveScroll: true });
-}
-
-function restoreProjectFromStorage() {
-  for (const tab of tabs) {
-    try {
-      const stored = localStorage.getItem(LS_PROJECT_KEY + tab.id);
-      if (stored) {
-        const { id, name } = JSON.parse(stored);
-        tab.projectId = id || '';
-        tab.projectName = name || 'No Project';
-      }
-    } catch (_) {}
-  }
 }
 
 boot();
