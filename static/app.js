@@ -56,12 +56,13 @@ let autoNameTimer = null;
 let autoNamedSessions = new Set();
 const AUTO_NAME_INTERVAL_MS = 60 * 60 * 1000;
 
-// --- Project Selector State ---
+// --- Project Selector State (per-tab) ---
 let _projectList = [];
-let _currentProjectId = '';
-let _currentProjectName = 'No Project';
 let _projectDropdownOpen = false;
 const LS_PROJECT_KEY = 'kukuibot.project.';
+
+function _tabProjectId(tab) { return (tab && tab.projectId) || ''; }
+function _tabProjectName(tab) { return (tab && tab.projectName) || 'No Project'; }
 
 // --- Theme ---
 const THEMES = ['blue', 'claudia', 'sol-dark', 'sol-light'];
@@ -1429,6 +1430,8 @@ function persistTabs() {
       tpsStateStartTime: Number(t.tpsStateStartTime || 0),
       reconnecting: !!t.reconnecting,
       workerIdentity: t.workerIdentity || '',
+      projectId: t.projectId || '',
+      projectName: t.projectName || 'No Project',
       streamEpoch: Number(t.streamEpoch || 0),
       currentRunId: String(t.currentRunId || ''),
       lastFinalizedRunId: String(t.lastFinalizedRunId || ''),
@@ -1472,6 +1475,8 @@ function restoreTabsFromStorage() {
         tpsStateStartTime: Number(st.tpsStateStartTime || 0),
         reconnecting: !!st.reconnecting,
         workerIdentity: st.workerIdentity || '',
+        projectId: st.projectId || '',
+        projectName: st.projectName || 'No Project',
         streamEpoch: Number(st.streamEpoch || 0),
         currentRunId: String(st.currentRunId || ''),
         lastFinalizedRunId: String(st.lastFinalizedRunId || ''),
@@ -1757,6 +1762,8 @@ function createTab(modelKey, opts = {}) {
     tpsStateStartTime: Number(opts.tpsStateStartTime || 0),
     reconnecting: !!opts.reconnecting,
     workerIdentity: opts.workerIdentity || '',
+    projectId: opts.projectId || '',
+    projectName: opts.projectName || 'No Project',
     streamAbortController: null,
     streamEpoch: Number(opts.streamEpoch || 0),
     currentRunId: String(opts.currentRunId || ''),
@@ -2298,6 +2305,12 @@ function render(opts = {}) {
             <span class="reasoning-label">Reasoning:</span>
             <div class="reasoning-picker" id="reasoning-picker-host">${renderReasoningPickerButtons()}</div>
           </div>`}
+          <button id="project-btn" class="wl-project-btn${_tabProjectId(tab) ? ' active' : ''}" onclick="event.stopPropagation();toggleProjectDropdown(event)" title="Switch project context">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" style="opacity:0.7"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+            <span id="project-name">${escText(_tabProjectName(tab))}</span>
+            <svg width="6" height="6" viewBox="0 0 8 8" style="margin-left:1px"><path d="M1 3l3 3 3-3" stroke="currentColor" fill="none" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
+          <span style="color:var(--muted);font-size:9px;opacity:0.5">›</span>
           <span class="worker-name-badge" id="worker-name-badge" onclick="_toggleSkillsPopup(event)">${_getWorkerDisplayName(tab)}</span>
         </div>
       </div>
@@ -3335,11 +3348,6 @@ function renderWorkLog(workLog, isWorking = false, activeToolLabel = null, toolC
   return `<div class="work-log">
     <div class="conn-bar conn-${connStatus}" title="${connTitle}" style="display:flex;align-items:center;gap:0;">
       <button class="wl-compact-btn" onclick="showCompactConfirm()" title="Smart Compact">🗜</button>
-      <button id="project-btn" class="wl-project-btn${_currentProjectId ? ' active' : ''}" onclick="event.stopPropagation();toggleProjectDropdown(event)" title="Switch project context">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="opacity:0.7"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
-        <span id="project-name">${escText(_currentProjectName)}</span>
-        <svg width="7" height="7" viewBox="0 0 8 8" style="margin-left:1px"><path d="M1 3l3 3 3-3" stroke="currentColor" fill="none" stroke-width="1.5" stroke-linecap="round"/></svg>
-      </button>
       <button class="work-log-toggle" onclick="toggleWorkLog()" style="flex:1;">
         <span class="work-head-left">${showWorkLog ? '▼' : '▶'} ${escText(leftText)}</span>
         ${rightBusy}
@@ -6567,7 +6575,6 @@ async function boot() {
     if (_sd.app_name) APP_NAME = _sd.app_name;
   } catch (_) {}
   document.title = APP_NAME;
-  restoreProjectFromStorage();
   loadAutoNamePrefs();
   if (autoNameEnabled) startAutoNameScheduler();
   startStreamRecoveryLoop();
@@ -6589,6 +6596,7 @@ async function boot() {
       // Fast-paint: restore localStorage cache for instant UI, but server will overwrite.
       // This prevents a blank screen while the server fetch completes.
       restoreTabsFromStorage();
+      restoreProjectFromStorage();
       requestRender();
 
       // Server is the sole source of truth for tabs. Overwrite localStorage state.
@@ -6968,12 +6976,14 @@ async function refreshProjectList() {
 function renderProjectDropdownList() {
   const container = document.getElementById('project-list');
   if (!container) return;
-  let html = `<div class="project-option ${!_currentProjectId ? 'selected' : ''}" onclick="selectProject('')">
-    <span class="proj-check">${!_currentProjectId ? '\u2713' : ''}</span>
+  const tab = activeTab();
+  const curId = _tabProjectId(tab);
+  let html = `<div class="project-option ${!curId ? 'selected' : ''}" onclick="selectProject('')">
+    <span class="proj-check">${!curId ? '\u2713' : ''}</span>
     <span class="proj-name">None</span>
   </div>`;
   for (const p of _projectList) {
-    const selected = p.id === _currentProjectId;
+    const selected = p.id === curId;
     const pathShort = escText((p.root_path || '').replace(/^\/Users\/jarvis\//, '~/'));
     const safeId = escText(p.id).replace(/'/g, '&#39;');
     const safeName = escText(p.name).replace(/'/g, '&#39;');
@@ -6987,22 +6997,27 @@ function renderProjectDropdownList() {
 }
 
 function selectProject(projectId, projectName) {
-  _currentProjectId = projectId;
-  _currentProjectName = projectName || (projectId ? projectId : 'No Project');
+  const tab = activeTab();
+  if (!tab) return;
+  tab.projectId = projectId;
+  tab.projectName = projectName || (projectId ? projectId : 'No Project');
   closeProjectDropdown();
-  localStorage.setItem(LS_PROJECT_KEY + 'default', JSON.stringify({ id: _currentProjectId, name: _currentProjectName }));
+  localStorage.setItem(LS_PROJECT_KEY + tab.id, JSON.stringify({ id: tab.projectId, name: tab.projectName }));
+  persistTabs();
   requestRender({ preserveScroll: true });
 }
 
 function restoreProjectFromStorage() {
-  try {
-    const stored = localStorage.getItem(LS_PROJECT_KEY + 'default');
-    if (stored) {
-      const { id, name } = JSON.parse(stored);
-      _currentProjectId = id || '';
-      _currentProjectName = name || 'No Project';
-    }
-  } catch (_) {}
+  for (const tab of tabs) {
+    try {
+      const stored = localStorage.getItem(LS_PROJECT_KEY + tab.id);
+      if (stored) {
+        const { id, name } = JSON.parse(stored);
+        tab.projectId = id || '';
+        tab.projectName = name || 'No Project';
+      }
+    } catch (_) {}
+  }
 }
 
 boot();

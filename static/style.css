@@ -73,8 +73,9 @@
 .sol-light .btn-sm.active { background: rgba(133,153,0,0.2); color: #859900; }
 .sol-light .work-log-toggle:hover { background: rgba(0,0,0,.04); }
 .sol-light .work-log { background: rgba(238,232,213,0.7); }
-.sol-light .wl-project-btn { background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.12); }
-.sol-light .wl-project-btn:hover { background: rgba(0,0,0,0.08); border-color: rgba(0,0,0,0.2); }
+.sol-light .wl-project-btn { color: var(--muted); }
+.sol-light .wl-project-btn:hover { color: var(--text); }
+.sol-light .wl-project-btn.active { color: #268bd2; }
 .sol-light .project-dropdown { background: #fdf6e3; border-color: rgba(0,0,0,0.1); box-shadow: 0 8px 24px rgba(0,0,0,0.1); }
 .sol-light .project-option:hover { background: rgba(0,0,0,0.04); }
 .sol-light .project-dropdown-header { border-bottom-color: rgba(0,0,0,0.06); }
@@ -932,13 +933,15 @@ body {
 .wl-compact-btn:hover { color: var(--text); background: rgba(255,255,255,0.06); }
 /* Project selector button in toolbar */
 .wl-project-btn {
-  background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); border-radius: 6px;
-  color: var(--text); font-size: 12px; padding: 3px 8px; cursor: pointer;
-  display: inline-flex; align-items: center; gap: 4px; white-space: nowrap;
-  flex-shrink: 0; line-height: 1; transition: color 0.15s, background 0.15s, border-color 0.15s;
+  background: none; border: none; border-radius: 4px;
+  color: var(--muted); font-size: 10px; font-weight: 500; padding: 1px 4px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 3px; white-space: nowrap;
+  flex-shrink: 0; line-height: 1; transition: color 0.15s;
+  letter-spacing: 0.3px; text-transform: capitalize;
 }
-.wl-project-btn:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.25); }
-.wl-project-btn.active { color: var(--accent); border-color: rgba(255,255,255,0.2); }
+.wl-project-btn:hover { color: var(--text); }
+.wl-project-btn.active { color: var(--accent); }
+.wl-project-btn.active:hover { color: #a3d3ff; }
 /* Project dropdown */
 .project-dropdown {
   position: fixed; z-index: 9999; background: var(--surface); border: 1px solid rgba(255,255,255,0.1);
