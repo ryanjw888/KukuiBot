@@ -13,6 +13,7 @@ Extracted from server.py Phase 9. Contains:
 import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 
@@ -125,9 +126,32 @@ async def api_delegate(req: Request):
     if not prompt:
         return JSONResponse({"ok": False, "error": "prompt is required"}, status_code=400)
 
-    # Default parent session for Claude Code callers
+    # Auto-detect calling session when parent_session_id not provided.
+    # Claude CLI tabs making Bash tool calls go through the KukuiBot server,
+    # which can identify the calling tab from request headers.
     if not parent_session_id:
-        parent_session_id = "claude-code-api"
+        # 1. Check X-Session-Id header (explicit — preferred for CLI callers)
+        header_sid = (req.headers.get("x-session-id") or "").strip()
+        if header_sid and header_sid.startswith("tab-"):
+            parent_session_id = header_sid
+            logger.info(f"Delegation: auto-detected parent_session_id from X-Session-Id header: {parent_session_id}")
+
+        # 2. Check Referer header for tab session ID (browser callers)
+        if not parent_session_id:
+            referer = req.headers.get("referer") or ""
+            ref_match = re.search(r"(tab-[a-z0-9_]+-[a-z0-9]+)", referer)
+            if ref_match:
+                parent_session_id = ref_match.group(1)
+                logger.info(f"Delegation: auto-detected parent_session_id from Referer: {parent_session_id}")
+
+        # 3. Fall back to generic identifier for truly external CLI callers
+        if not parent_session_id:
+            parent_session_id = "claude-code-api"
+            logger.warning(
+                f"Delegation: no parent_session_id provided and could not auto-detect. "
+                f"Falling back to '{parent_session_id}'. Notifications may route to wrong manager tab. "
+                f"Callers should include 'parent_session_id' in the POST body."
+            )
 
     from delegation import delegate_task
     # Run in executor to avoid blocking the event loop — delegate_task()
@@ -810,7 +834,13 @@ async def _deliver_or_queue_parent_notification(
         target_sid = parent_sid
 
         if parent_sid == "claude-code-api":
-            # REST API caller — route to dev-manager tab if available
+            # REST API caller without explicit session ID — route to dev-manager tab if available.
+            # This is ambiguous when multiple dev-manager tabs exist because we pick the first alive one.
+            logger.warning(
+                f"Delegation notify: parent_session_id is 'claude-code-api' — caller did not provide "
+                f"their session ID. Notification for {task_id}:{to_status} will route to first alive "
+                f"dev-manager tab, which may not be the dispatching tab."
+            )
             pool = get_claude_pool()
             resolved = False
             if pool:
