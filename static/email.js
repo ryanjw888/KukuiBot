@@ -48,6 +48,7 @@ const EmailModule = (function () {
   let composeQuill = null;      // Quill editor instance
   let aiReplyLoading = false;
   let syncStatus = null;      // {total_cached, last_sync_ts, last_sync_ago_str, folders}
+  let ownerEmail = '';        // authenticated Gmail address (for stripping from reply-all)
   let syncTimer = null;
   let showRedirect = false;   // redirect dialog visible
   let redirectData = { to: '', subject: '' };
@@ -127,6 +128,8 @@ const EmailModule = (function () {
     const unique = [];
     for (const addr of all) {
       const em = (addr.match(/<([^>]+)>/) || [, addr])[1].toLowerCase().trim();
+      // Skip the owner's own email address
+      if (ownerEmail && em === ownerEmail) continue;
       if (!seen.has(em)) {
         seen.add(em);
         unique.push(addr);
@@ -518,6 +521,13 @@ const EmailModule = (function () {
     const resp = await apiFetch('/api/gmail/sync-status');
     if (resp.ok) {
       syncStatus = resp;
+    }
+  }
+
+  async function fetchOwnerEmail() {
+    const resp = await apiFetch('/api/gmail/status');
+    if (resp && resp.email) {
+      ownerEmail = resp.email.toLowerCase().trim();
     }
   }
 
@@ -1345,6 +1355,7 @@ const EmailModule = (function () {
     fetchInbox();
     fetchFolders();
     fetchSyncStatus();
+    fetchOwnerEmail();
 
     // Refresh sync status every 60s
     syncTimer = setInterval(() => {

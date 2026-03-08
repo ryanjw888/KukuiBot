@@ -993,10 +993,15 @@ def _smtp_send(to: str, subject: str, body_text: str, body_html: str | None = No
     msg["To"] = to
     msg["Subject"] = subject
 
+    # Parse multi-recipient "to" into individual addresses for SMTP envelope
+    recipients = [addr for _, addr in email.utils.getaddresses([to]) if addr]
+    if not recipients:
+        raise ValueError("No valid recipient address")
+
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
         server.starttls()
         server.login(email_addr, app_password)
-        server.sendmail(email_addr, [to], msg.as_string())
+        server.sendmail(email_addr, recipients, msg.as_string())
 
 
 def create_draft(to: str, subject: str, body: str, body_html: str | None = None) -> dict:
@@ -1060,7 +1065,9 @@ def send_email(to: str, subject: str, body: str, body_html: str | None = None) -
     """
     perms = get_permissions()
     owner_emails = _get_owner_emails()
-    _enforce_send_permissions(to, perms, owner_emails)
+    for _, addr in email.utils.getaddresses([to]):
+        if addr:
+            _enforce_send_permissions(addr, perms, owner_emails)
 
     from email_sanitize import preflight_email
     passed, findings = preflight_email(subject, body, body_html=body_html)
@@ -1201,10 +1208,14 @@ def redirect_email(folder: str, uid: str, to: str, subject_override: str | None 
     and sends via SMTP preserving the full MIME structure (HTML, attachments).
     Requires at least send_within_org permission. Content sanitized.
     """
-    # Enforce send permissions
+    # Enforce send permissions per-recipient
     perms = get_permissions()
     owner_emails = _get_owner_emails()
-    _enforce_send_permissions(to, perms, owner_emails)
+    redirect_recipients = [addr for _, addr in email.utils.getaddresses([to]) if addr]
+    if not redirect_recipients:
+        raise ValueError("No valid recipient address")
+    for rcpt in redirect_recipients:
+        _enforce_send_permissions(rcpt, perms, owner_emails)
 
     email_addr = _get_config("gmail.email", "")
     app_password = _get_config("gmail.app_password", "")
@@ -1255,7 +1266,7 @@ def redirect_email(folder: str, uid: str, to: str, subject_override: str | None 
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
             server.starttls()
             server.login(email_addr, app_password)
-            server.sendmail(email_addr, [to], msg.as_bytes())
+            server.sendmail(email_addr, redirect_recipients, msg.as_bytes())
 
         original_subject = msg.get("Subject", "(no subject)")
         logger.info(f"Gmail redirect: to={to} subject={original_subject[:50]}")
