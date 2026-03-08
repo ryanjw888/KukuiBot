@@ -3057,7 +3057,19 @@ function finalizeTurn(tab, finalText, def, opts = {}) {
 
   // 2. Push assistant message with reasoning attached (collapsed by default after completion)
   const text = String(finalText || '').trim();
-  if (text) {
+  if (tab._turnInterrupted) {
+    // Turn was interrupted by user cut-in — the partial text was already flushed to
+    // tab.messages. Update that flushed message with the final text instead of pushing
+    // a duplicate.
+    const flushed = tab.messages.find(m => m._interruptFlushed);
+    if (flushed) {
+      if (text) flushed.text = finalText;
+      if (savedThinking) flushed.thinking = savedThinking;
+      flushed.tokens = tab._doneTokens || opts.tokens || null;
+      delete flushed._interruptFlushed;
+    }
+    delete tab._turnInterrupted;
+  } else if (text) {
     pushAssistantMessage(tab, finalText, def, {
       tokens: tab._doneTokens || opts.tokens || null,
       thinking: savedThinking || null,
@@ -4658,6 +4670,26 @@ async function send() {
     textContent: !f.isImage ? (f.textContent ?? null) : null,
   })).filter(a => a.dataUrl || a.textContent !== null) : null;
   if (isTabLoading(tab)) {
+    // Flush any partial streaming response into messages BEFORE the user message
+    // so rendered order is: [partial AI response] → [user cut-in] — not the reverse
+    if (tab.streamingText) {
+      const flushDef = MODELS[tab.modelKey] || MODELS.codex;
+      const flushMsg = {
+        id: Date.now() + Math.floor(Math.random() * 1000),
+        role: 'assistant',
+        text: tab.streamingText,
+        timestamp: new Date(),
+        modelLabel: flushDef.shortName || flushDef.name,
+        _interruptFlushed: true,
+      };
+      if (tab.thinkingText) {
+        flushMsg.thinking = tab.thinkingText;
+      }
+      tab.messages.push(flushMsg);
+      tab.streamingText = '';
+      tab.thinkingText = '';
+      tab._turnInterrupted = true;
+    }
     // Claude tabs: inject mid-turn via backend — don't queue
     if (_isClaudeModel(tab.modelKey)) {
       const injMsg = { id: Date.now() + Math.floor(Math.random() * 1000), role: 'user', text: sendText, timestamp: new Date(), _attachments: _msgAttachments };
