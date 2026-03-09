@@ -22,7 +22,7 @@ $ErrorActionPreference = 'Stop'
 # 1. Parse parameters (equivalent to install.sh --port / --dir)
 # =============================================
 
-if (-not $Dir) { $Dir = if ($env:KUKUIBOT_HOME) { $env:KUKUIBOT_HOME } else { "$env:USERPROFILE\.kukuibot" } }
+if (-not $Dir) { if ($env:KUKUIBOT_HOME) { $Dir = $env:KUKUIBOT_HOME } else { $Dir = "$env:USERPROFILE\.kukuibot" } }
 $KUKUIBOT_HOME = $Dir
 
 # --- Interactive port selection (equivalent to install.sh interactive prompt) ---
@@ -75,7 +75,7 @@ if ($portInUse) {
         Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 2
     } else {
-        $procName = if ($proc) { "$($proc.ProcessName) (PID $($proc.Id))" } else { "unknown" }
+        if ($proc) { $procName = "$($proc.ProcessName) (PID $($proc.Id))" } else { $procName = "unknown" }
         Write-Host "[X] Port $Port is already in use by: $procName" -ForegroundColor Red
         Write-Host "    Choose a different port with -Port or stop the conflicting process."
         exit 1
@@ -204,7 +204,7 @@ if (-not $claudeBin) {
 }
 
 if ($claudeBin) {
-    $claudeVer = & $claudeBin --version 2>$null | Select-Object -First 1
+    $claudeVer = & "$claudeBin" --version 2>$null | Select-Object -First 1
     Write-Host "[OK] Claude Code CLI $claudeVer ($claudeBin)" -ForegroundColor Green
 } else {
     Write-Host "[!] Claude Code CLI not found. Install manually: npm install -g @anthropic-ai/claude-code" -ForegroundColor Yellow
@@ -256,7 +256,7 @@ try {
 
 $SRC_DIR = "$KUKUIBOT_HOME\src"
 $VENV_DIR = "$KUKUIBOT_HOME\venv"
-$REPO_URL = if ($env:KUKUIBOT_REPO) { $env:KUKUIBOT_REPO } else { "https://github.com/ryanjw888/KukuiBot.git" }
+if ($env:KUKUIBOT_REPO) { $REPO_URL = $env:KUKUIBOT_REPO } else { $REPO_URL = "https://github.com/ryanjw888/KukuiBot.git" }
 
 if (-not (Test-Path $KUKUIBOT_HOME)) { New-Item -ItemType Directory -Path $KUKUIBOT_HOME -Force | Out-Null }
 
@@ -400,14 +400,15 @@ if (-not (Test-Path "$CERT_DIR\kukuibot.pem")) {
     Write-Host "-> Generating HTTPS certificates..."
     if (-not (Test-Path $CERT_DIR)) { New-Item -ItemType Directory -Path $CERT_DIR -Force | Out-Null }
     # Get LAN IP via default route (more reliable than interface enumeration)
-    $lanIP = try {
+    $lanIP = $null
+    try {
         $gw = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Sort-Object RouteMetric | Select-Object -First 1
         if ($gw) {
-            (Get-NetIPAddress -InterfaceIndex $gw.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-             Where-Object { $_.IPAddress -notlike '169.254*' } |
-             Select-Object -First 1).IPAddress
+            $lanIP = (Get-NetIPAddress -InterfaceIndex $gw.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                Where-Object { $_.IPAddress -notlike '169.254*' } |
+                Select-Object -First 1).IPAddress
         }
-    } catch { $null }
+    } catch {}
     if (-not $lanIP) {
         $lanIP = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {
             $_.InterfaceAlias -notlike '*Loopback*' -and $_.PrefixOrigin -ne 'WellKnown'
@@ -443,12 +444,14 @@ schtasks /Delete /TN $serverTaskName /F 2>$null
 
 # Build a wrapper script that sets env vars and launches the server
 $serverWrapper = "$KUKUIBOT_HOME\start-server.cmd"
+$claudeBinLine = ""
+if ($claudeBin) { $claudeBinLine = "set `"CLAUDE_BIN=$claudeBin`"" }
 @"
 @echo off
 set "KUKUIBOT_HOME=$KUKUIBOT_HOME"
 set "KUKUIBOT_PORT=$Port"
 set "HOME=$env:USERPROFILE"
-$(if ($claudeBin) { "set `"CLAUDE_BIN=$claudeBin`"" })
+$claudeBinLine
 cd /d "$SRC_DIR"
 "$PYTHON_BIN" server.py >> "$serverLogFile" 2>&1
 "@ | Set-Content $serverWrapper -Encoding UTF8
@@ -470,9 +473,14 @@ if ($LASTEXITCODE -eq 0) {
 
 # --- Watchdog: restart server if not listening (every 5 min) ---
 $watchdogTaskName = "KukuiBot-Watchdog"
-$watchdogCmd = "powershell.exe -NoProfile -Command `"if (-not (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)) { Start-Process -FilePath 'cmd.exe' -ArgumentList '/c `\`\"$serverWrapper`\`\"' -WindowStyle Hidden }`""
+$watchdogScript = "$KUKUIBOT_HOME\watchdog.ps1"
+@"
+if (-not (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)) {
+    Start-Process -FilePath 'cmd.exe' -ArgumentList '/c "$serverWrapper"' -WindowStyle Hidden
+}
+"@ | Set-Content $watchdogScript -Encoding UTF8
 schtasks /Delete /TN $watchdogTaskName /F 2>$null
-schtasks /Create /TN $watchdogTaskName /TR "$watchdogCmd" /SC MINUTE /MO 5 /F 2>&1 | Out-Null
+schtasks /Create /TN $watchdogTaskName /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$watchdogScript`"" /SC MINUTE /MO 5 /F 2>&1 | Out-Null
 if ($LASTEXITCODE -eq 0) {
     Write-Host "[OK] Watchdog task created (checks every 5 min)" -ForegroundColor Green
 } else {
@@ -551,14 +559,15 @@ if ($serverOk) {
 # 17. Print summary (equivalent to install.sh final banner)
 # =============================================
 
-$lanIP = try {
+$lanIP = $null
+try {
     $gw = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Sort-Object RouteMetric | Select-Object -First 1
     if ($gw) {
-        (Get-NetIPAddress -InterfaceIndex $gw.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-         Where-Object { $_.IPAddress -notlike '169.254*' } |
-         Select-Object -First 1).IPAddress
+        $lanIP = (Get-NetIPAddress -InterfaceIndex $gw.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { $_.IPAddress -notlike '169.254*' } |
+            Select-Object -First 1).IPAddress
     }
-} catch { $null }
+} catch {}
 if (-not $lanIP) {
     $lanIP = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {
         $_.InterfaceAlias -notlike '*Loopback*' -and $_.PrefixOrigin -ne 'WellKnown'
