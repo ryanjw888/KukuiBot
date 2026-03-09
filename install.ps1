@@ -16,7 +16,10 @@ param(
     [string]$Dir = ""
 )
 
-$ErrorActionPreference = 'Stop'
+# Use 'Continue' globally — native commands (git, schtasks, icacls, pip, winget)
+# emit stderr output that 'Stop' mode escalates to terminating errors.
+# Critical failures are checked explicitly via $LASTEXITCODE and Test-Path.
+$ErrorActionPreference = 'Continue'
 
 # =============================================
 # 1. Parse parameters (equivalent to install.sh --port / --dir)
@@ -439,13 +442,6 @@ Write-Host "[OK] HTTPS certs ready" -ForegroundColor Green
 # It is not needed on Windows — OS-level privilege escalation uses different mechanisms.
 Write-Host "[OK] Privileged helper: not needed on Windows (macOS-specific)" -ForegroundColor Green
 
-# Native commands (schtasks, icacls) emit non-terminating errors that
-# $ErrorActionPreference = 'Stop' escalates to terminating. Temporarily
-# lower to 'Continue' for the services section so failures are handled
-# via $LASTEXITCODE checks instead.
-$savedEAP = $ErrorActionPreference
-$ErrorActionPreference = 'Continue'
-
 Write-Host "-> Setting up services..."
 
 $serverTaskName = "KukuiBot-Server"
@@ -543,9 +539,6 @@ if ($gitBash -and (Test-Path $orphanScript)) {
         Write-Host "[!] Orphan-tab cleanup task creation failed" -ForegroundColor Yellow
     }
 }
-
-# Restore strict error handling
-$ErrorActionPreference = $savedEAP
 
 # =============================================
 # 16. Verify server started (equivalent to install.sh lsof verify loop)
