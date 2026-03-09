@@ -571,7 +571,7 @@ def _flush_summary_to_memory(summary: str):
 def _load_context_file(path: Path) -> Optional[str]:
     try:
         if path.exists():
-            text = path.read_text().strip()
+            text = path.read_text(encoding="utf-8").strip()
             return text if text else None
     except Exception as e:
         logger.warning(f"Failed to load {path}: {e}")

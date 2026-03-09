@@ -54,7 +54,7 @@ X_DRAFTER_VALUE = "auto"
 # Token the AI returns when it declines to draft a reply
 NO_REPLY_TOKEN = "[NO_REPLY_NEEDED]"
 
-HST = ZoneInfo("US/Hawaii")
+LOCAL_TZ = ZoneInfo("US/Pacific")
 
 # Patterns that indicate automated/noreply senders
 _AUTOMATED_PATTERNS = re.compile(
