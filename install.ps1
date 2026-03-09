@@ -482,7 +482,7 @@ $serviceName = "KukuiBot"
 if ($nssmBin) {
     # --- NSSM Windows Service (preferred) ---
     # Remove legacy scheduled tasks if upgrading from older install
-    foreach ($legacyTask in @("KukuiBot-Server", "KukuiBot-Watchdog")) {
+    foreach ($legacyTask in @("KukuiBot-Server", "KukuiBot-Watchdog", "KukuiBotWatchdog")) {
         schtasks /Delete /TN $legacyTask /F 2>$null | Out-Null
     }
 
