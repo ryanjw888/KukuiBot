@@ -489,7 +489,7 @@ if (-not (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Silen
 }
 "@ | Set-Content $watchdogScript -Encoding UTF8
 try { schtasks /Delete /TN $watchdogTaskName /F 2>$null | Out-Null } catch {}
-schtasks /Create /TN $watchdogTaskName /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$watchdogScript`"" /SC MINUTE /MO 5 /F 2>&1 | Out-Null
+schtasks /Create /TN $watchdogTaskName /TR "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$watchdogScript`"" /SC MINUTE /MO 5 /F 2>&1 | Out-Null
 if ($LASTEXITCODE -eq 0) {
     Write-Host "[OK] Watchdog task created (checks every 5 min)" -ForegroundColor Green
 } else {
