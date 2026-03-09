@@ -439,6 +439,13 @@ Write-Host "[OK] HTTPS certs ready" -ForegroundColor Green
 # It is not needed on Windows — OS-level privilege escalation uses different mechanisms.
 Write-Host "[OK] Privileged helper: not needed on Windows (macOS-specific)" -ForegroundColor Green
 
+# Native commands (schtasks, icacls) emit non-terminating errors that
+# $ErrorActionPreference = 'Stop' escalates to terminating. Temporarily
+# lower to 'Continue' for the services section so failures are handled
+# via $LASTEXITCODE checks instead.
+$savedEAP = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+
 Write-Host "-> Setting up services..."
 
 $serverTaskName = "KukuiBot-Server"
@@ -446,7 +453,7 @@ $serverLogFile = "$KUKUIBOT_HOME\logs\kukuibot-server.log"
 if (-not (Test-Path "$KUKUIBOT_HOME\logs")) { New-Item -ItemType Directory -Path "$KUKUIBOT_HOME\logs" -Force | Out-Null }
 
 # Remove existing task if present
-schtasks /Delete /TN $serverTaskName /F 2>$null
+try { schtasks /Delete /TN $serverTaskName /F 2>$null | Out-Null } catch {}
 
 # Build a wrapper script that sets env vars and launches the server
 $serverWrapper = "$KUKUIBOT_HOME\start-server.cmd"
@@ -485,7 +492,7 @@ if (-not (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Silen
     Start-Process -FilePath 'cmd.exe' -ArgumentList '/c "$serverWrapper"' -WindowStyle Hidden
 }
 "@ | Set-Content $watchdogScript -Encoding UTF8
-schtasks /Delete /TN $watchdogTaskName /F 2>$null
+try { schtasks /Delete /TN $watchdogTaskName /F 2>$null | Out-Null } catch {}
 schtasks /Create /TN $watchdogTaskName /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$watchdogScript`"" /SC MINUTE /MO 5 /F 2>&1 | Out-Null
 if ($LASTEXITCODE -eq 0) {
     Write-Host "[OK] Watchdog task created (checks every 5 min)" -ForegroundColor Green
@@ -510,7 +517,7 @@ if (Test-Path "C:\Program Files\Git\bin\bash.exe") { $gitBash = "C:\Program File
 elseif (Test-Path "C:\Program Files (x86)\Git\bin\bash.exe") { $gitBash = "C:\Program Files (x86)\Git\bin\bash.exe" }
 
 if ($gitBash -and (Test-Path $backupScript)) {
-    schtasks /Delete /TN $backupTaskName /F 2>$null
+    try { schtasks /Delete /TN $backupTaskName /F 2>$null | Out-Null } catch {}
     schtasks /Create /TN $backupTaskName `
         /TR "`"$gitBash`" `"$backupScript`"" `
         /SC HOURLY `
@@ -528,7 +535,7 @@ if ($gitBash -and (Test-Path $backupScript)) {
 $orphanTaskName = "KukuiBot-OrphanCleanup"
 $orphanScript = "$SRC_DIR\cleanup-orphan-tabs.sh"
 if ($gitBash -and (Test-Path $orphanScript)) {
-    schtasks /Delete /TN $orphanTaskName /F 2>$null
+    try { schtasks /Delete /TN $orphanTaskName /F 2>$null | Out-Null } catch {}
     schtasks /Create /TN $orphanTaskName /TR "`"$gitBash`" `"$orphanScript`" --apply --min-age-seconds 7200" /SC HOURLY /F 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) {
         Write-Host "[OK] Orphan-tab cleanup task created" -ForegroundColor Green
@@ -536,6 +543,9 @@ if ($gitBash -and (Test-Path $orphanScript)) {
         Write-Host "[!] Orphan-tab cleanup task creation failed" -ForegroundColor Yellow
     }
 }
+
+# Restore strict error handling
+$ErrorActionPreference = $savedEAP
 
 # =============================================
 # 16. Verify server started (equivalent to install.sh lsof verify loop)
