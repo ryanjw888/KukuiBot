@@ -4635,8 +4635,7 @@ async def api_restart(req: Request):
 
     async def _delayed_exit():
         await asyncio.sleep(0.3)
-        logger.info("Restart requested — exiting (process manager will respawn)")
-        os._exit(0)
+        _restart_process()
 
     asyncio.create_task(_delayed_exit())
     return {"ok": True, "message": "Restarting server..."}
@@ -4978,6 +4977,18 @@ def _git_repair_working_tree(src_dir: str) -> int:
     return len(missing)
 
 
+def _restart_process():
+    """Restart the server process. On macOS, exits for launchd to respawn.
+    On Windows, re-execs the process since there's no keep-alive service."""
+    if platform.system() == "Windows":
+        logger.info("Restart requested — re-execing process (Windows)")
+        python = sys.executable
+        os.execv(python, [python] + sys.argv)
+    else:
+        logger.info("Restart requested — exiting (process manager will respawn)")
+        os._exit(0)
+
+
 def _schedule_restart():
     """Rate-limited delayed restart. Returns (scheduled: bool, reason: str|None)."""
     limited, reason = _restart_rate_limited()
@@ -4988,7 +4999,7 @@ def _schedule_restart():
 
     async def _delayed():
         await asyncio.sleep(0.3)
-        os._exit(0)
+        _restart_process()
 
     asyncio.create_task(_delayed())
     return True, None
