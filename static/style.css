@@ -62,6 +62,7 @@
 .sol-light .send-btn { color: #fff; }
 .sol-light .code-block-wrap .code-copy-btn { background: rgba(238,232,213,0.9); color: #586e75; border-color: rgba(101,123,131,0.2); }
 .sol-light .code-block-wrap .code-copy-btn:hover { background: rgba(238,232,213,1); color: #073642; }
+.sol-light .msg-copy-btn:hover { background: rgba(0,0,0,0.06); color: #073642; }
 .sol-light .settings-menu { border-color: rgba(0,0,0,0.1); box-shadow: 0 12px 40px rgba(0,0,0,0.15); }
 .sol-light .settings-menu .menu-section { border-bottom-color: rgba(0,0,0,0.06); }
 .sol-light .theme-submenu { border-color: rgba(0,0,0,0.1); box-shadow: 0 8px 32px rgba(0,0,0,0.12); }
@@ -751,6 +752,30 @@ body {
 .msg.user .bubble { background: var(--bubble-user); border-bottom-right-radius: 6px; }
 .msg.assistant .bubble { background: var(--bubble-agent); border-bottom-left-radius: 6px; }
 .msg .time { font-size: 10px; color: var(--muted); margin-top: 2px; padding: 0 12px; }
+
+/* Message copy button */
+.msg .bubble { position: relative; }
+.msg-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.msg .bubble:hover .msg-copy-btn { opacity: 0.7; }
+.msg-copy-btn:hover { opacity: 1 !important; background: rgba(255,255,255,0.1); color: var(--text); }
+.msg-copy-btn.copied { opacity: 1 !important; color: #86efac; }
 
 /* Thinking block (collapsible, visible during streaming) */
 .thinking-block {

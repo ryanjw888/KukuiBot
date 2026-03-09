@@ -1318,6 +1318,25 @@ async function copyCodeBlock(btn) {
   }
 }
 
+async function copyMessage(btn) {
+  try {
+    const bubble = btn.closest('.bubble');
+    if (!bubble) return;
+    const mdContent = bubble.querySelector('.md-content');
+    const text = (mdContent || bubble).innerText || '';
+    if (!text.trim()) return;
+    await navigator.clipboard.writeText(text);
+    btn.innerHTML = '✓';
+    btn.classList.add('copied');
+    setTimeout(() => {
+      btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+      btn.classList.remove('copied');
+    }, 1200);
+  } catch {
+    // no-op
+  }
+}
+
 function linkifyText(s) {
   const escaped = escText(s || '');
   const urlRegex = /\b(https?:\/\/[^\s<>"]+|www\.[^\s<>"]+)/gi;
@@ -3223,7 +3242,8 @@ function renderMessage(m, def, tabId = null, msgIdx = -1) {
   const bubbleCls = hasChoiceBtns ? 'bubble has-choice-buttons' : 'bubble';
   const pendingBadge = m._pending ? '<div class="pending-badge">Pending — will send when ready</div>' : '';
   const pendingDismiss = m._pending ? `<button class="pending-dismiss" onclick="_cancelQueuedMessage(${m.id})" title="Remove from queue">&times;</button>` : '';
-  return `<div class="msg ${cls}${pendingCls}"${streamingAttr}>${pendingDismiss}<div class="label">${label}</div><div class="${bubbleCls}">${content}${choiceBtnsHtml}</div>${thinkingHtml}${time ? `<div class="time">${time}${tokenStr}</div>` : ''}${pendingBadge}</div>`;
+  const copyBtn = (hasText && !m._pending && !m._streaming) ? '<button class="msg-copy-btn" onclick="copyMessage(this)" title="Copy message" aria-label="Copy message"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>' : '';
+  return `<div class="msg ${cls}${pendingCls}"${streamingAttr}>${pendingDismiss}<div class="label">${label}</div><div class="${bubbleCls}">${copyBtn}${content}${choiceBtnsHtml}</div>${thinkingHtml}${time ? `<div class="time">${time}${tokenStr}</div>` : ''}${pendingBadge}</div>`;
 }
 
 function renderMessagesInner(tab, def) {
