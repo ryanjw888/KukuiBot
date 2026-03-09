@@ -61,19 +61,13 @@ The installer handles all dependencies (Python 3.11+, mkcert, ripgrep, Node.js 1
 
 ### One-Line Install (Windows)
 
-Open **PowerShell as Administrator** and run:
-
-```powershell
-Invoke-RestMethod https://github.com/ryanjw888/KukuiBot/raw/main/install.ps1 | Invoke-Expression
-```
-
-If that doesn't work (policy restrictions, CMD, etc.), use the batch launcher instead — works from any terminal or double-click:
+Open **any terminal as Administrator** (CMD, PowerShell, or Windows Terminal) and run:
 
 ```cmd
 curl -o install.bat https://raw.githubusercontent.com/ryanjw888/KukuiBot/main/install.bat && install.bat
 ```
 
-With custom options (PowerShell):
+With custom options (after cloning):
 
 ```powershell
 .\install.ps1 -Port 8443 -Dir C:\kukuibot
