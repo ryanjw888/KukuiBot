@@ -73,7 +73,7 @@ Or with custom options:
 .\install.ps1 -Port 8443 -Dir C:\kukuibot
 ```
 
-The installer uses `winget` for dependencies (Python 3.13, Node.js, mkcert, ripgrep, Claude Code CLI), creates a Windows Scheduled Task for the server (runs at logon), and sets up hourly backups. Requires Windows 10/11 with winget available.
+The installer uses `winget` for dependencies (Python 3.13, Node.js, Git, mkcert, ripgrep, Claude Code CLI), creates Windows Scheduled Tasks for the server (runs at logon), a watchdog (restarts server if it crashes), hourly backups, and orphan-tab cleanup. Requires Windows 10/11 with winget available.
 
 **Note:** `uvloop` is automatically excluded from pip install on Windows (Unix-only). All platform-specific features (vm_stat, launchd, afplay, etc.) gracefully degrade with Windows-appropriate fallbacks.
 
@@ -244,13 +244,15 @@ Removes services, cron jobs, sudoers rules, data, and logs. Does not remove Home
 ```powershell
 # Remove scheduled tasks
 schtasks /Delete /TN KukuiBot-Server /F
+schtasks /Delete /TN KukuiBot-Watchdog /F
 schtasks /Delete /TN KukuiBot-Backup /F
+schtasks /Delete /TN KukuiBot-OrphanCleanup /F
 
 # Remove data directory (adjust path if custom)
 Remove-Item -Recurse -Force "$env:USERPROFILE\.kukuibot"
 ```
 
-Does not remove Python, Node.js, Claude Code CLI, or the mkcert root CA.
+Does not remove Python, Node.js, Git, Claude Code CLI, or the mkcert root CA.
 
 ## Docs
 

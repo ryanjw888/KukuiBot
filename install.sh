@@ -52,10 +52,17 @@ if ! echo "$PORT" | grep -qE '^[0-9]+$' || [ "$PORT" -lt 1024 ] || [ "$PORT" -gt
 fi
 
 if lsof -nP -iTCP:${PORT} -sTCP:LISTEN >/dev/null 2>&1; then
-  EXISTING_PROC=$(lsof -nP -iTCP:${PORT} -sTCP:LISTEN | tail -1 | awk '{print $1, $2}')
-  echo "⚠️  Port $PORT is already in use by: $EXISTING_PROC"
-  echo "   Choose a different port with --port or stop the conflicting process"
-  exit 1
+  EXISTING_PID=$(lsof -nP -iTCP:${PORT} -sTCP:LISTEN -t 2>/dev/null | head -1)
+  if [ -n "$EXISTING_PID" ] && ps -p "$EXISTING_PID" -o args= 2>/dev/null | grep -q 'server\.py'; then
+    echo "-> KukuiBot already running on port $PORT, stopping for upgrade..."
+    kill "$EXISTING_PID" 2>/dev/null
+    sleep 2
+  else
+    EXISTING_PROC=$(lsof -nP -iTCP:${PORT} -sTCP:LISTEN | tail -1 | awk '{print $1, $2}')
+    echo "⚠️  Port $PORT is already in use by: $EXISTING_PROC"
+    echo "   Choose a different port with --port or stop the conflicting process"
+    exit 1
+  fi
 fi
 
 if [ ! -d "$(dirname "$KUKUIBOT_HOME")" ]; then
@@ -310,12 +317,23 @@ mkdir -p "$KUKUIBOT_HOME" "$LAUNCH_AGENTS"
 # --- Create/update virtual environment ---
 # PEP 668 (Python 3.12+) blocks system-wide pip installs.
 # A venv avoids this and keeps deps isolated.
+PYTHON_BIN="$VENV_DIR/bin/python3"
+if [ -d "$VENV_DIR" ]; then
+  if [ -x "$PYTHON_BIN" ]; then
+    if ! "$PYTHON_BIN" -m pip check >/dev/null 2>&1; then
+      echo "-> Existing venv has broken packages, recreating..."
+      rm -rf "$VENV_DIR"
+    fi
+  else
+    echo "-> Existing venv is missing python3, recreating..."
+    rm -rf "$VENV_DIR"
+  fi
+fi
 if [ ! -d "$VENV_DIR" ]; then
   echo "→ Creating virtual environment..."
   python3 -m venv "$VENV_DIR"
 fi
 # Use the venv's python for everything from here on
-PYTHON_BIN="$VENV_DIR/bin/python3"
 PYTHON_BIN_DIR="$(dirname "$PYTHON_BIN")"
 # Build PATH for launchd — include the directory where claude was found
 PATH_ENV="${PYTHON_BIN_DIR}:${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -343,6 +361,10 @@ sudo xcodebuild -license accept </dev/null 2>/dev/null || true
 if [ -d "$SRC_DIR/.git" ]; then
   echo "→ Updating existing source at $SRC_DIR"
   cd "$SRC_DIR"
+  if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+    echo "  Stashing local changes before update..."
+    git stash push -u -m "installer-backup-$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+  fi
   git fetch origin --quiet 2>/dev/null || true
   # Strategy 1: fast-forward (cleanest)
   if ! git pull --ff-only 2>/dev/null; then
@@ -434,10 +456,13 @@ CERT_DIR="$SRC_DIR/certs"
 if [ ! -f "$CERT_DIR/kukuibot.pem" ]; then
   echo "→ Generating HTTPS certificates..."
   mkdir -p "$CERT_DIR"
-  LAN_IP=$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "")
+  LAN_IP="$(route -n get default 2>/dev/null | awk '/interface:/{print $2}' | head -1 | xargs -I{} ipconfig getifaddr {} 2>/dev/null)"
+  [ -z "$LAN_IP" ] && LAN_IP=$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "")
   CERT_NAMES="localhost 127.0.0.1"
   [ -n "$LAN_IP" ] && CERT_NAMES="$CERT_NAMES $LAN_IP"
   mkcert -cert-file "$CERT_DIR/kukuibot.pem" -key-file "$CERT_DIR/kukuibot-key.pem" $CERT_NAMES
+  # Restrict private key permissions to owner only
+  chmod 600 "$CERT_DIR/kukuibot-key.pem"
   CAROOT=$(mkcert -CAROOT)
   cp "$CAROOT/rootCA.pem" "$CERT_DIR/rootCA.pem" 2>/dev/null || true
   echo "  Certificates: $CERT_DIR"
@@ -504,8 +529,11 @@ cat > "$LAUNCH_AGENTS/com.kukuibot.server.plist" << PLIST
 </plist>
 PLIST
 
-launchctl bootstrap "gui/${UID_VAL}" "$LAUNCH_AGENTS/com.kukuibot.server.plist" 2>/dev/null || \
-  launchctl load "$LAUNCH_AGENTS/com.kukuibot.server.plist" 2>/dev/null || true
+if ! launchctl bootstrap "gui/${UID_VAL}" "$LAUNCH_AGENTS/com.kukuibot.server.plist" 2>/dev/null; then
+  if ! launchctl load "$LAUNCH_AGENTS/com.kukuibot.server.plist" 2>/dev/null; then
+    echo "⚠️  Failed to load server launch agent. Check: launchctl list | grep kukuibot"
+  fi
+fi
 echo "✓ KukuiBot server (port $PORT) installed"
 
 # =============================================
@@ -621,7 +649,8 @@ else
   echo ""
 fi
 
-LAN_IP=$(ipconfig getifaddr en0 2>/dev/null || echo "<your-ip>")
+LAN_IP="$(route -n get default 2>/dev/null | awk '/interface:/{print $2}' | head -1 | xargs -I{} ipconfig getifaddr {} 2>/dev/null)"
+[ -z "$LAN_IP" ] && LAN_IP=$(ipconfig getifaddr en0 2>/dev/null || echo "<your-ip>")
 
 echo ""
 echo "═══════════════════════════════════════════════════"

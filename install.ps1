@@ -294,11 +294,23 @@ if (Test-Path "$SRC_DIR\.git") {
 # 9. Create venv, install Python deps (equivalent to install.sh venv + pip install)
 # =============================================
 
+$PYTHON_BIN = "$VENV_DIR\Scripts\python.exe"
+if (Test-Path $VENV_DIR) {
+    if (Test-Path $PYTHON_BIN) {
+        $pipCheck = & $PYTHON_BIN -m pip check 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "-> Existing venv has broken packages, recreating..."
+            Remove-Item $VENV_DIR -Recurse -Force
+        }
+    } else {
+        Write-Host "-> Existing venv is missing python, recreating..."
+        Remove-Item $VENV_DIR -Recurse -Force
+    }
+}
 if (-not (Test-Path $VENV_DIR)) {
     Write-Host "-> Creating virtual environment..."
     python -m venv $VENV_DIR
 }
-$PYTHON_BIN = "$VENV_DIR\Scripts\python.exe"
 if (-not (Test-Path $PYTHON_BIN)) {
     Write-Host "[X] Virtual environment creation failed — $PYTHON_BIN not found" -ForegroundColor Red
     exit 1
@@ -386,13 +398,25 @@ $CERT_DIR = "$SRC_DIR\certs"
 if (-not (Test-Path "$CERT_DIR\kukuibot.pem")) {
     Write-Host "-> Generating HTTPS certificates..."
     if (-not (Test-Path $CERT_DIR)) { New-Item -ItemType Directory -Path $CERT_DIR -Force | Out-Null }
-    # Get LAN IP (equivalent to install.sh ipconfig getifaddr en0)
-    $lanIP = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {
-        $_.InterfaceAlias -notlike '*Loopback*' -and $_.PrefixOrigin -ne 'WellKnown'
-    } | Select-Object -First 1).IPAddress
+    # Get LAN IP via default route (more reliable than interface enumeration)
+    $lanIP = try {
+        $gw = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Sort-Object RouteMetric | Select-Object -First 1
+        if ($gw) {
+            (Get-NetIPAddress -InterfaceIndex $gw.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+             Where-Object { $_.IPAddress -notlike '169.254*' } |
+             Select-Object -First 1).IPAddress
+        }
+    } catch { $null }
+    if (-not $lanIP) {
+        $lanIP = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {
+            $_.InterfaceAlias -notlike '*Loopback*' -and $_.PrefixOrigin -ne 'WellKnown'
+        } | Select-Object -First 1).IPAddress
+    }
     $certNames = @('localhost', '127.0.0.1')
     if ($lanIP) { $certNames += $lanIP }
     & mkcert -cert-file "$CERT_DIR\kukuibot.pem" -key-file "$CERT_DIR\kukuibot-key.pem" @certNames
+    # Restrict private key permissions to current user only
+    icacls "$CERT_DIR\kukuibot-key.pem" /inheritance:r /grant:r "${env:USERNAME}:R" 2>$null | Out-Null
     $caRoot = & mkcert -CAROOT
     if (Test-Path "$caRoot\rootCA.pem") { Copy-Item "$caRoot\rootCA.pem" "$CERT_DIR\rootCA.pem" -ErrorAction SilentlyContinue }
     Write-Host "   Certificates: $CERT_DIR"
@@ -420,22 +444,39 @@ schtasks /Delete /TN $serverTaskName /F 2>$null
 $serverWrapper = "$KUKUIBOT_HOME\start-server.cmd"
 @"
 @echo off
-set KUKUIBOT_HOME=$KUKUIBOT_HOME
-set KUKUIBOT_PORT=$Port
-set HOME=$env:USERPROFILE
-$(if ($claudeBin) { "set CLAUDE_BIN=$claudeBin" })
+set "KUKUIBOT_HOME=$KUKUIBOT_HOME"
+set "KUKUIBOT_PORT=$Port"
+set "HOME=$env:USERPROFILE"
+$(if ($claudeBin) { "set `"CLAUDE_BIN=$claudeBin`"" })
 cd /d "$SRC_DIR"
 "$PYTHON_BIN" server.py >> "$serverLogFile" 2>&1
-"@ | Set-Content $serverWrapper -Encoding ASCII
+"@ | Set-Content $serverWrapper -Encoding UTF8
 
-# Create scheduled task: runs at logon, restarts on failure (equivalent to launchd RunAtLoad + KeepAlive)
+# Restrict wrapper script permissions
+icacls $serverWrapper /inheritance:r /grant:r "${env:USERNAME}:(R,X)" | Out-Null
+
+# Create scheduled task: runs at logon (equivalent to launchd RunAtLoad + KeepAlive)
 schtasks /Create /TN $serverTaskName `
     /TR "`"$serverWrapper`"" `
     /SC ONLOGON `
-    /RL HIGHEST `
-    /F | Out-Null
+    /RL LIMITED `
+    /F 2>&1 | Out-Null
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "[OK] KukuiBot server task created (port $Port, runs at logon)" -ForegroundColor Green
+} else {
+    Write-Host "[!] Failed to create server scheduled task (exit code $LASTEXITCODE). Run as Administrator." -ForegroundColor Yellow
+}
 
-Write-Host "[OK] KukuiBot server task created (port $Port, runs at logon)" -ForegroundColor Green
+# --- Watchdog: restart server if not listening (every 5 min) ---
+$watchdogTaskName = "KukuiBot-Watchdog"
+$watchdogCmd = "powershell.exe -NoProfile -Command `"if (-not (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)) { Start-Process -FilePath 'cmd.exe' -ArgumentList '/c `\`\"$serverWrapper`\`\"' -WindowStyle Hidden }`""
+schtasks /Delete /TN $watchdogTaskName /F 2>$null
+schtasks /Create /TN $watchdogTaskName /TR "$watchdogCmd" /SC MINUTE /MO 5 /F 2>&1 | Out-Null
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "[OK] Watchdog task created (checks every 5 min)" -ForegroundColor Green
+} else {
+    Write-Host "[!] Watchdog task creation failed" -ForegroundColor Yellow
+}
 
 # Start the server now
 Write-Host "-> Starting KukuiBot server..."
@@ -458,10 +499,27 @@ if ($gitBash -and (Test-Path $backupScript)) {
     schtasks /Create /TN $backupTaskName `
         /TR "`"$gitBash`" `"$backupScript`"" `
         /SC HOURLY `
-        /F | Out-Null
-    Write-Host "[OK] Hourly backup task created" -ForegroundColor Green
+        /F 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[OK] Hourly backup task created" -ForegroundColor Green
+    } else {
+        Write-Host "[!] Failed to create backup scheduled task (exit code $LASTEXITCODE). Run as Administrator." -ForegroundColor Yellow
+    }
 } else {
     Write-Host "[!] Backup task skipped (requires Git Bash). Run backup.sh manually." -ForegroundColor Yellow
+}
+
+# --- Orphan-tab cleanup task ---
+$orphanTaskName = "KukuiBot-OrphanCleanup"
+$orphanScript = "$SRC_DIR\cleanup-orphan-tabs.sh"
+if ($gitBash -and (Test-Path $orphanScript)) {
+    schtasks /Delete /TN $orphanTaskName /F 2>$null
+    schtasks /Create /TN $orphanTaskName /TR "`"$gitBash`" `"$orphanScript`" --apply --min-age-seconds 7200" /SC HOURLY /F 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[OK] Orphan-tab cleanup task created" -ForegroundColor Green
+    } else {
+        Write-Host "[!] Orphan-tab cleanup task creation failed" -ForegroundColor Yellow
+    }
 }
 
 # =============================================
@@ -492,9 +550,19 @@ if ($serverOk) {
 # 17. Print summary (equivalent to install.sh final banner)
 # =============================================
 
-$lanIP = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {
-    $_.InterfaceAlias -notlike '*Loopback*' -and $_.PrefixOrigin -ne 'WellKnown'
-} | Select-Object -First 1).IPAddress
+$lanIP = try {
+    $gw = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Sort-Object RouteMetric | Select-Object -First 1
+    if ($gw) {
+        (Get-NetIPAddress -InterfaceIndex $gw.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+         Where-Object { $_.IPAddress -notlike '169.254*' } |
+         Select-Object -First 1).IPAddress
+    }
+} catch { $null }
+if (-not $lanIP) {
+    $lanIP = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object {
+        $_.InterfaceAlias -notlike '*Loopback*' -and $_.PrefixOrigin -ne 'WellKnown'
+    } | Select-Object -First 1).IPAddress
+}
 if (-not $lanIP) { $lanIP = "<your-ip>" }
 
 Write-Host ""
