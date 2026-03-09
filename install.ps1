@@ -35,7 +35,14 @@ if ($Port -eq 0) {
     Write-Host "  Other - Custom port (1024-65535)"
     Write-Host ""
     $userPort = Read-Host "Enter port [7000]"
-    $Port = if ($userPort) { [int]$userPort } else { 7000 }
+    if ($userPort -and $userPort -match '^\d+$') {
+        $Port = [int]$userPort
+    } elseif ($userPort) {
+        Write-Host "[X] Invalid port: '$userPort' (must be a number)" -ForegroundColor Red
+        exit 1
+    } else {
+        $Port = 7000
+    }
     Write-Host ""
 }
 
@@ -62,10 +69,16 @@ if ($Port -lt 1024 -or $Port -gt 65535) {
 $portInUse = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
 if ($portInUse) {
     $proc = Get-Process -Id $portInUse[0].OwningProcess -ErrorAction SilentlyContinue
-    $procName = if ($proc) { "$($proc.ProcessName) (PID $($proc.Id))" } else { "unknown" }
-    Write-Host "[X] Port $Port is already in use by: $procName" -ForegroundColor Red
-    Write-Host "    Choose a different port with -Port or stop the conflicting process."
-    exit 1
+    if ($proc -and $proc.CommandLine -match 'server\.py') {
+        Write-Host "-> KukuiBot already running on port $Port, stopping for upgrade..."
+        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+    } else {
+        $procName = if ($proc) { "$($proc.ProcessName) (PID $($proc.Id))" } else { "unknown" }
+        Write-Host "[X] Port $Port is already in use by: $procName" -ForegroundColor Red
+        Write-Host "    Choose a different port with -Port or stop the conflicting process."
+        exit 1
+    }
 }
 
 # Parent directory check
@@ -151,12 +164,19 @@ $claudeBin = ""
 if (Test-Command 'claude') {
     $claudeBin = (Get-Command claude).Source
 } else {
-    # Search common npm global locations
+    # Search common npm global locations (including nvm-windows, scoop, npm prefix)
     $candidates = @(
         "$env:APPDATA\npm\claude.cmd",
         "$env:LOCALAPPDATA\npm\claude.cmd",
-        "$env:ProgramFiles\nodejs\claude.cmd"
+        "$env:ProgramFiles\nodejs\claude.cmd",
+        "$env:LOCALAPPDATA\npm-global\claude.cmd",
+        "$env:APPDATA\nvm\current\claude.cmd"
     )
+    # Also check npm global prefix dynamically
+    try {
+        $npmPrefix = & npm prefix -g 2>$null
+        if ($npmPrefix) { $candidates = @("$npmPrefix\claude.cmd") + $candidates }
+    } catch {}
     foreach ($c in $candidates) {
         if (Test-Path $c) { $claudeBin = $c; break }
     }
@@ -169,7 +189,16 @@ if (-not $claudeBin) {
         $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
         if (Test-Command 'claude') { $claudeBin = (Get-Command claude).Source }
     } catch {
-        Write-Host "[!] Claude Code CLI install failed. Install manually: npm install -g @anthropic-ai/claude-code" -ForegroundColor Yellow
+        Write-Host "   Global install failed, trying user-local..."
+        try {
+            $localNpmDir = "$env:LOCALAPPDATA\npm-global"
+            npm config set prefix $localNpmDir 2>$null
+            npm install -g @anthropic-ai/claude-code 2>&1 | Select-Object -Last 1
+            $env:Path = "$localNpmDir;$env:Path"
+            if (Test-Command 'claude') { $claudeBin = (Get-Command claude).Source }
+        } catch {
+            Write-Host "[!] Claude Code CLI install failed. Install manually: npm install -g @anthropic-ai/claude-code" -ForegroundColor Yellow
+        }
     }
 }
 
@@ -190,8 +219,24 @@ foreach ($pkg in @(@{name='mkcert'; cmd='mkcert'; id='FiloSottile.mkcert'}, @{na
         winget install --id $pkg.id --accept-source-agreements --accept-package-agreements --silent
         $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
     }
-    Write-Host "[OK] $($pkg.name)" -ForegroundColor Green
+    if (Test-Command $pkg.cmd) {
+        Write-Host "[OK] $($pkg.name)" -ForegroundColor Green
+    } else {
+        Write-Host "[!] $($pkg.name) not found after install attempt" -ForegroundColor Yellow
+    }
 }
+
+# --- Check/install Git (required for repo operations) ---
+if (-not (Test-Command 'git')) {
+    Write-Host "-> Installing Git..."
+    winget install --id Git.Git --accept-source-agreements --accept-package-agreements --silent
+    $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
+    if (-not (Test-Command 'git')) {
+        Write-Host "[X] Git not found after install. Install Git manually and re-run." -ForegroundColor Red
+        exit 1
+    }
+}
+Write-Host "[OK] Git" -ForegroundColor Green
 
 # =============================================
 # 7. Install root CA (equivalent to install.sh mkcert -install)
@@ -218,6 +263,11 @@ if (Test-Path "$SRC_DIR\.git") {
     Write-Host "-> Updating existing source at $SRC_DIR"
     Push-Location $SRC_DIR
     try {
+        $dirty = & git status --porcelain 2>$null
+        if ($dirty) {
+            Write-Host "   Stashing local changes before update..."
+            git stash push -u -m "installer-backup-$(Get-Date -Format 'yyyyMMdd-HHmmss')" 2>$null
+        }
         git fetch origin --quiet 2>$null
         $pulled = $false
         try { git pull --ff-only 2>$null; $pulled = $true } catch { }
