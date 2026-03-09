@@ -168,7 +168,7 @@ async def refresh_cli_oauth_token() -> tuple[bool, str]:
     # expiry but not yet fully expired)
     try:
         proc = await asyncio.create_subprocess_exec(
-            CLAUDE_BIN, "--print", "-p", "ping",
+            *_cmd_prefix(), "--print", "-p", "ping",
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
@@ -296,6 +296,14 @@ def _find_claude_binary() -> str:
 
 CLAUDE_BIN = _find_claude_binary()
 
+
+def _cmd_prefix() -> list[str]:
+    """On Windows, .cmd/.bat files can't be exec'd directly — prepend cmd /c."""
+    if platform.system() == "Windows" and CLAUDE_BIN.lower().endswith((".cmd", ".bat")):
+        return ["cmd.exe", "/c", CLAUDE_BIN]
+    return [CLAUDE_BIN]
+
+
 # Context window: Claude Code CLI uses 1M context
 CONTEXT_WINDOW = 1_000_000
 
@@ -352,8 +360,10 @@ async def claude_health() -> ClaudeHealth:
         if not os.path.isfile(path):
             return ClaudeHealth(False, path, "", f"claude not found at {path}")
 
+        # On Windows, .cmd/.bat wrappers can't be exec'd directly
+        vcmd = ["cmd.exe", "/c", path] if (platform.system() == "Windows" and path.lower().endswith((".cmd", ".bat"))) else [path]
         vproc = await asyncio.create_subprocess_exec(
-            path, "--version",
+            *vcmd, "--version",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -1239,7 +1249,7 @@ class PersistentClaudeProcess:
             env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
 
         base_cmd = [
-            CLAUDE_BIN, "--print",
+            *_cmd_prefix(), "--print",
             "--model", self.model,
             "--input-format", "stream-json",
             "--output-format", "stream-json",

@@ -26,6 +26,7 @@ import asyncio
 import json
 import logging
 import os
+import platform
 import sys
 import time
 import uuid
@@ -61,6 +62,13 @@ from log_store import log_query
 # No OpenRouter fallback — KukuiBot handles that in server.py
 
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
+
+
+def _cmd_prefix() -> list:
+    """On Windows, .cmd/.bat files can't be exec'd directly — prepend cmd /c."""
+    if platform.system() == "Windows" and CLAUDE_BIN.lower().endswith((".cmd", ".bat")):
+        return ["cmd.exe", "/c", CLAUDE_BIN]
+    return [CLAUDE_BIN]
 DEFAULT_MODEL = "opus"  # Claude Code alias — maps to latest Opus
 DEFAULT_PORT = 9085
 _model = DEFAULT_MODEL  # Set from --model arg at startup
@@ -676,7 +684,7 @@ class PersistentClaudeProcess:
         resume fails or session is stale.
         """
         base_cmd = [
-            CLAUDE_BIN, "--print",
+            *_cmd_prefix(), "--print",
             "--model", _model,
             "--input-format", "stream-json",
             "--output-format", "stream-json",
@@ -1258,7 +1266,7 @@ async def run_server(port: int = DEFAULT_PORT):
     async def health(request):
         try:
             proc = await asyncio.create_subprocess_exec(
-                CLAUDE_BIN, "--version",
+                *_cmd_prefix(), "--version",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
