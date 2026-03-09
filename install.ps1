@@ -3,7 +3,8 @@
 .SYNOPSIS
     KukuiBot — One-line installer for Windows
 .DESCRIPTION
-    Usage: irm https://raw.githubusercontent.com/ryanjw888/KukuiBot/main/install.ps1 | iex
+    Usage: Invoke-RestMethod https://raw.githubusercontent.com/ryanjw888/KukuiBot/main/install.ps1 | Invoke-Expression
+      or:  powershell -ExecutionPolicy Bypass -File install.ps1
       or:  .\install.ps1 -Port 8080 -Dir C:\kukuibot
 .PARAMETER Port
     Server port (default: 7000)

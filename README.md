@@ -64,14 +64,22 @@ The installer handles all dependencies (Python 3.11+, mkcert, ripgrep, Node.js 1
 Open **PowerShell as Administrator** and run:
 
 ```powershell
-irm https://github.com/ryanjw888/KukuiBot/raw/main/install.ps1 | iex
+Invoke-RestMethod https://github.com/ryanjw888/KukuiBot/raw/main/install.ps1 | Invoke-Expression
 ```
 
-Or with custom options:
+Or download and run manually (works in any terminal):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
+
+With custom options:
 
 ```powershell
 .\install.ps1 -Port 8443 -Dir C:\kukuibot
 ```
+
+> **Tip:** If you get "not recognized" errors, make sure you're in **PowerShell** (not CMD). Type `powershell` first if needed.
 
 The installer uses `winget` for dependencies (Python 3.13, Node.js, Git, mkcert, ripgrep, Claude Code CLI), creates Windows Scheduled Tasks for the server (runs at logon), a watchdog (restarts server if it crashes), hourly backups, and orphan-tab cleanup. Requires Windows 10/11 with winget available.
 
