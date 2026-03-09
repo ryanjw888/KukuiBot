@@ -793,6 +793,7 @@ class PersistentClaudeProcess:
             # API key instead of the local login session. The .env loader
             # may have injected an expired/wrong API key into os.environ.
             _subprocess_env = {**os.environ, "NO_COLOR": "1"}
+            _subprocess_env.pop("CLAUDECODE", None)  # Prevent nested-session detection
             # Explicit output token limits — prevent thinking from consuming
             # the entire output budget on fresh installs.
             _subprocess_env.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "128000")

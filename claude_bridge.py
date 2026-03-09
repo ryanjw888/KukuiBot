@@ -167,11 +167,14 @@ async def refresh_cli_oauth_token() -> tuple[bool, str]:
     # Strategy 2: Spawn throwaway CLI process (may work if token is close to
     # expiry but not yet fully expired)
     try:
+        _refresh_env = {**os.environ}
+        _refresh_env.pop("CLAUDECODE", None)
         proc = await asyncio.create_subprocess_exec(
             *_cmd_prefix(), "--print", "-p", "ping",
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
+            env=_refresh_env,
         )
         await asyncio.wait_for(proc.wait(), timeout=45)
     except asyncio.TimeoutError:
@@ -391,10 +394,13 @@ async def claude_health() -> ClaudeHealth:
 
         # On Windows, always use cmd.exe /c (handles .cmd wrappers and PATHEXT)
         vcmd = ["cmd.exe", "/c", path] if platform.system() == "Windows" else [path]
+        _ver_env = {**os.environ}
+        _ver_env.pop("CLAUDECODE", None)
         vproc = await asyncio.create_subprocess_exec(
             *vcmd, "--version",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=_ver_env,
         )
         vout, verr = await vproc.communicate()
         version = (vout.decode(errors="ignore").strip() if vout else "")
@@ -1256,6 +1262,9 @@ class PersistentClaudeProcess:
 
         # Build env with explicit auth strategy handling.
         env = {**os.environ, "NO_COLOR": "1"}
+        # Remove CLAUDECODE to prevent "nested session" detection when the
+        # server itself runs inside a Claude Code session (e.g. on Windows).
+        env.pop("CLAUDECODE", None)
         # Explicit output token limits — without these, the CLI defaults to
         # 32K max output with 31,999 thinking budget, leaving almost nothing
         # for actual tool-use turns.  On fresh installs where `claude` was
