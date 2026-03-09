@@ -8,4 +8,5 @@ python-multipart>=0.0.9
 requests>=2.31
 openai>=1.30
 certifi
+tzdata>=2024.1
 playwright>=1.47

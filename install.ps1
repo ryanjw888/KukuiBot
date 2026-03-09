@@ -217,7 +217,7 @@ if ($claudeBin) {
 # 6. Check/install mkcert and ripgrep (equivalent to install.sh brew install mkcert ripgrep)
 # =============================================
 
-foreach ($pkg in @(@{name='mkcert'; cmd='mkcert'; id='FiloSottile.mkcert'}, @{name='ripgrep'; cmd='rg'; id='BurntSushi.ripgrep.MSVC'})) {
+foreach ($pkg in @(@{name='mkcert'; cmd='mkcert'; id='FiloSottile.mkcert'}, @{name='ripgrep'; cmd='rg'; id='BurntSushi.ripgrep.MSVC'}, @{name='NSSM'; cmd='nssm'; id='NSSM.NSSM'})) {
     if (-not (Test-Command $pkg.cmd)) {
         Write-Host "-> Installing $($pkg.name)..."
         winget install --id $pkg.id --accept-source-agreements --accept-package-agreements --silent
@@ -228,6 +228,21 @@ foreach ($pkg in @(@{name='mkcert'; cmd='mkcert'; id='FiloSottile.mkcert'}, @{na
     } else {
         Write-Host "[!] $($pkg.name) not found after install attempt" -ForegroundColor Yellow
     }
+}
+
+# Locate nssm.exe (winget may install it outside PATH)
+$nssmBin = ""
+if (Test-Command 'nssm') {
+    $nssmBin = (Get-Command nssm).Source
+} else {
+    $nssmSearch = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\NSSM*" -Recurse -Filter "nssm.exe" -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match 'win64' } | Select-Object -First 1
+    if ($nssmSearch) { $nssmBin = $nssmSearch.FullName }
+}
+if ($nssmBin) {
+    Write-Host "[OK] NSSM located: $nssmBin" -ForegroundColor Green
+} else {
+    Write-Host "[!] NSSM not found — falling back to scheduled tasks for server management" -ForegroundColor Yellow
 }
 
 # --- Check/install Git (required for repo operations) ---
@@ -435,7 +450,7 @@ if (-not (Test-Path "$CERT_DIR\kukuibot.pem")) {
 Write-Host "[OK] HTTPS certs ready" -ForegroundColor Green
 
 # =============================================
-# 14. Create Windows Scheduled Task for server (equivalent to install.sh launchd plist)
+# 14. Create Windows Service via NSSM (equivalent to install.sh launchd plist)
 # =============================================
 
 # NOTE: Privileged helper is macOS-specific (sudoers, Spotlight, AF_UNIX socket).
@@ -444,14 +459,10 @@ Write-Host "[OK] Privileged helper: not needed on Windows (macOS-specific)" -For
 
 Write-Host "-> Setting up services..."
 
-$serverTaskName = "KukuiBot-Server"
 $serverLogFile = "$KUKUIBOT_HOME\logs\kukuibot-server.log"
 if (-not (Test-Path "$KUKUIBOT_HOME\logs")) { New-Item -ItemType Directory -Path "$KUKUIBOT_HOME\logs" -Force | Out-Null }
 
-# Remove existing task if present
-try { schtasks /Delete /TN $serverTaskName /F 2>$null | Out-Null } catch {}
-
-# Build a wrapper script that sets env vars and launches the server
+# Build a wrapper script (kept as fallback and for manual use)
 $serverWrapper = "$KUKUIBOT_HOME\start-server.cmd"
 $claudeBinLine = ""
 if ($claudeBin) { $claudeBinLine = "set `"CLAUDE_BIN=$claudeBin`"" }
@@ -464,41 +475,101 @@ $claudeBinLine
 cd /d "$SRC_DIR"
 "$PYTHON_BIN" server.py >> "$serverLogFile" 2>&1
 "@ | Set-Content $serverWrapper -Encoding UTF8
-
-# Restrict wrapper script permissions
 icacls $serverWrapper /inheritance:r /grant:r "${env:USERNAME}:(R,X)" | Out-Null
 
-# Create scheduled task: runs at logon (equivalent to launchd RunAtLoad + KeepAlive)
-schtasks /Create /TN $serverTaskName `
-    /TR "`"$serverWrapper`"" `
-    /SC ONLOGON `
-    /RL LIMITED `
-    /F 2>&1 | Out-Null
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "[OK] KukuiBot server task created (port $Port, runs at logon)" -ForegroundColor Green
-} else {
-    Write-Host "[!] Failed to create server scheduled task (exit code $LASTEXITCODE). Run as Administrator." -ForegroundColor Yellow
+$serviceName = "KukuiBot"
+
+if ($nssmBin) {
+    # --- NSSM Windows Service (preferred) ---
+    # Remove legacy scheduled tasks if upgrading from older install
+    foreach ($legacyTask in @("KukuiBot-Server", "KukuiBot-Watchdog")) {
+        schtasks /Delete /TN $legacyTask /F 2>$null | Out-Null
+    }
+
+    # Stop and remove existing service for clean reinstall
+    $ErrorActionPreference = "SilentlyContinue"
+    & $nssmBin stop $serviceName 2>$null | Out-Null
+    Start-Sleep -Seconds 2
+    & $nssmBin remove $serviceName confirm 2>$null | Out-Null
+    $ErrorActionPreference = "Continue"
+
+    # Install the service
+    & $nssmBin install $serviceName "$PYTHON_BIN" "server.py"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[!] NSSM service install failed — falling back to scheduled task" -ForegroundColor Yellow
+        $nssmBin = ""  # fall through to schtasks fallback below
+    } else {
+        # Configure service parameters
+        & $nssmBin set $serviceName AppDirectory "$SRC_DIR"
+
+        # Environment variables — KUKUIBOT_SERVICE=1 tells server to use clean exit for restarts
+        $envArgs = @(
+            "KUKUIBOT_HOME=$KUKUIBOT_HOME",
+            "KUKUIBOT_PORT=$Port",
+            "HOME=$env:USERPROFILE",
+            "KUKUIBOT_SERVICE=1"
+        )
+        if ($claudeBin) { $envArgs += "CLAUDE_BIN=$claudeBin" }
+        & $nssmBin set $serviceName AppEnvironmentExtra @envArgs
+
+        # Logging — append to existing log file
+        & $nssmBin set $serviceName AppStdout "$serverLogFile"
+        & $nssmBin set $serviceName AppStderr "$serverLogFile"
+        & $nssmBin set $serviceName AppStdoutCreationDisposition 4
+        & $nssmBin set $serviceName AppStderrCreationDisposition 4
+
+        # Auto-restart on crash after 5 seconds
+        & $nssmBin set $serviceName AppExit Default Restart
+        & $nssmBin set $serviceName AppRestartDelay 5000
+
+        # Start automatically at boot
+        & $nssmBin set $serviceName Start SERVICE_AUTO_START
+
+        # Display name and description
+        & $nssmBin set $serviceName DisplayName "KukuiBot Server"
+        & $nssmBin set $serviceName Description "KukuiBot AI agent server (FastAPI on port $Port)"
+
+        # Start the service now
+        Write-Host "-> Starting KukuiBot service..."
+        & $nssmBin start $serviceName 2>$null | Out-Null
+
+        Write-Host "[OK] KukuiBot Windows service created (port $Port, auto-start, auto-restart)" -ForegroundColor Green
+    }
 }
 
-# --- Watchdog: restart server if not listening (every 5 min) ---
-$watchdogTaskName = "KukuiBot-Watchdog"
-$watchdogScript = "$KUKUIBOT_HOME\watchdog.ps1"
+if (-not $nssmBin) {
+    # --- Fallback: Scheduled Task + Watchdog ---
+    $serverTaskName = "KukuiBot-Server"
+    try { schtasks /Delete /TN $serverTaskName /F 2>$null | Out-Null } catch {}
+    schtasks /Create /TN $serverTaskName `
+        /TR "`"$serverWrapper`"" `
+        /SC ONLOGON `
+        /RL LIMITED `
+        /F 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[OK] KukuiBot server task created (port $Port, runs at logon)" -ForegroundColor Green
+    } else {
+        Write-Host "[!] Failed to create server scheduled task (exit code $LASTEXITCODE). Run as Administrator." -ForegroundColor Yellow
+    }
+
+    $watchdogTaskName = "KukuiBot-Watchdog"
+    $watchdogScript = "$KUKUIBOT_HOME\watchdog.ps1"
 @"
 if (-not (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)) {
     Start-Process -FilePath 'cmd.exe' -ArgumentList '/c "$serverWrapper"' -WindowStyle Hidden
 }
 "@ | Set-Content $watchdogScript -Encoding UTF8
-try { schtasks /Delete /TN $watchdogTaskName /F 2>$null | Out-Null } catch {}
-schtasks /Create /TN $watchdogTaskName /TR "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$watchdogScript`"" /SC MINUTE /MO 5 /F 2>&1 | Out-Null
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "[OK] Watchdog task created (checks every 5 min)" -ForegroundColor Green
-} else {
-    Write-Host "[!] Watchdog task creation failed" -ForegroundColor Yellow
-}
+    try { schtasks /Delete /TN $watchdogTaskName /F 2>$null | Out-Null } catch {}
+    schtasks /Create /TN $watchdogTaskName /TR "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$watchdogScript`"" /SC MINUTE /MO 5 /F 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[OK] Watchdog task created (checks every 5 min)" -ForegroundColor Green
+    } else {
+        Write-Host "[!] Watchdog task creation failed" -ForegroundColor Yellow
+    }
 
-# Start the server now
-Write-Host "-> Starting KukuiBot server..."
-Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$serverWrapper`"" -WindowStyle Hidden
+    Write-Host "-> Starting KukuiBot server..."
+    Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$serverWrapper`"" -WindowStyle Hidden
+}
 
 # =============================================
 # 15. Create Windows Scheduled Task for hourly backup (equivalent to install.sh crontab)
@@ -602,10 +673,16 @@ if ($claudeBin) {
 }
 Write-Host ""
 Write-Host "  Manage:"
-Write-Host "    Stop:       schtasks /End /TN $serverTaskName"
-Write-Host "    Start:      schtasks /Run /TN $serverTaskName"
+if ($nssmBin) {
+    Write-Host "    Status:     sc query KukuiBot"
+    Write-Host "    Stop:       net stop KukuiBot"
+    Write-Host "    Start:      net start KukuiBot"
+    Write-Host "    Restart:    net stop KukuiBot && net start KukuiBot"
+} else {
+    Write-Host "    Stop:       schtasks /End /TN KukuiBot-Server"
+    Write-Host "    Start:      schtasks /Run /TN KukuiBot-Server"
+}
 Write-Host "    Logs:       Get-Content '$serverLogFile' -Tail 50 -Wait"
-Write-Host "    Uninstall:  schtasks /Delete /TN $serverTaskName /F; schtasks /Delete /TN $backupTaskName /F"
 Write-Host ("=" * 55)
 
 # =============================================

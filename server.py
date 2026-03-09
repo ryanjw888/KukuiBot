@@ -4983,12 +4983,32 @@ def _git_repair_working_tree(src_dir: str) -> int:
 
 
 def _restart_process():
-    """Restart the server process. On macOS, exits for launchd to respawn.
-    On Windows, re-execs the process since there's no keep-alive service."""
+    """Restart the server process. Exits cleanly and relies on the process
+    manager (NSSM service on Windows, launchd on macOS) to respawn.
+    Falls back to spawning a detached replacement on Windows if not running
+    as a managed service."""
     if platform.system() == "Windows":
-        logger.info("Restart requested — re-execing process (Windows)")
-        python = sys.executable
-        os.execv(python, [python] + sys.argv)
+        # When running under NSSM (or any service manager), just exit and let
+        # the manager respawn us.  Detect NSSM by checking if our parent is
+        # nssm.exe, or if the KUKUIBOT_SERVICE env var is set.
+        is_service = os.environ.get("KUKUIBOT_SERVICE") == "1"
+        if is_service:
+            logger.info("Restart requested — exiting (NSSM service will respawn)")
+            os._exit(0)
+        else:
+            import subprocess
+            logger.info("Restart requested — spawning replacement process (Windows)")
+            python = sys.executable
+            subprocess.Popen(
+                [python] + sys.argv,
+                cwd=os.getcwd(),
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
+                close_fds=True,
+                stdout=open(os.path.join(os.environ.get("KUKUIBOT_HOME", "."), "logs", "kukuibot-server.log"), "a"),
+                stderr=subprocess.STDOUT,
+            )
+            time.sleep(1)
+            os._exit(0)
     else:
         logger.info("Restart requested — exiting (process manager will respawn)")
         os._exit(0)
