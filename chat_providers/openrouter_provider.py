@@ -261,6 +261,7 @@ async def process_chat_openrouter(
         _or_client = httpx.AsyncClient(timeout=httpx.Timeout(300, connect=15))
 
         _OPENROUTER_TOOLS_UNSUPPORTED_TTL_S = 2 * 60
+        _reasoning_retry_done = False
 
         for round_idx in range(max_rounds):
             if round_idx > 0:
@@ -390,6 +391,21 @@ async def process_chat_openrouter(
                             final_text = alt
                     except Exception:
                         pass
+                # Reasoning-exhaustion retry: model spent all tokens on
+                # internal reasoning, leaving no content.  Retry once
+                # with reasoning disabled so the full budget goes to content.
+                if not final_text.strip() and finish_reason == "length" and not _reasoning_retry_done:
+                    _reasoning_retry_done = True
+                    logger.warning(
+                        f"[openrouter] Empty content with finish_reason=length for {model} "
+                        f"— reasoning likely exhausted token budget. Retrying without reasoning."
+                    )
+                    await _emit_event(session_id, queue, {
+                        "type": "info",
+                        "message": "Model used all tokens for reasoning — retrying without reasoning overhead.",
+                    }, run_id=run_id)
+                    effort = "none"
+                    continue
                 if not final_text.strip() and round_idx > 0:
                     messages.append({"role": "user", "content": "Please summarize the results of the tool calls above and provide your answer."})
                     logger.warning(f"[openrouter] Empty response after {round_idx} tool rounds — nudging model for summary")

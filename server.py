@@ -410,6 +410,7 @@ _OPENROUTER_BUILTIN_MODELS: dict[str, dict] = {
     "x-ai/grok-3": {"label": "Grok 3", "max_tokens": 16384},
     "x-ai/grok-3-mini": {"label": "Grok 3 Mini", "max_tokens": 16384},
     "meta-llama/llama-4-maverick": {"label": "Llama 4 Maverick", "max_tokens": 16384},
+    "inception/mercury-2": {"label": "Mercury 2 (Inception)", "max_tokens": 50000, "reasoning": "high", "temperature": 0.75},
 }
 
 def _or_load_models() -> dict[str, dict]:
