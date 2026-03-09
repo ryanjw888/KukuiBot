@@ -67,19 +67,17 @@ Open **PowerShell as Administrator** and run:
 Invoke-RestMethod https://github.com/ryanjw888/KukuiBot/raw/main/install.ps1 | Invoke-Expression
 ```
 
-Or download and run manually (works in any terminal):
+If that doesn't work (policy restrictions, CMD, etc.), use the batch launcher instead — works from any terminal or double-click:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File install.ps1
+```cmd
+curl -o install.bat https://raw.githubusercontent.com/ryanjw888/KukuiBot/main/install.bat && install.bat
 ```
 
-With custom options:
+With custom options (PowerShell):
 
 ```powershell
 .\install.ps1 -Port 8443 -Dir C:\kukuibot
 ```
-
-> **Tip:** If you get "not recognized" errors, make sure you're in **PowerShell** (not CMD). Type `powershell` first if needed.
 
 The installer uses `winget` for dependencies (Python 3.13, Node.js, Git, mkcert, ripgrep, Claude Code CLI), creates Windows Scheduled Tasks for the server (runs at logon), a watchdog (restarts server if it crashes), hourly backups, and orphan-tab cleanup. Requires Windows 10/11 with winget available.
 
