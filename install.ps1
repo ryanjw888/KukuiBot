@@ -298,7 +298,7 @@ if (Test-Path "$SRC_DIR\.git") {
 $PYTHON_BIN = "$VENV_DIR\Scripts\python.exe"
 if (Test-Path $VENV_DIR) {
     if (Test-Path $PYTHON_BIN) {
-        $pipCheck = & $PYTHON_BIN -m pip check 2>&1
+        $pipCheck = & "$PYTHON_BIN" -m pip check 2>&1
         if ($LASTEXITCODE -ne 0) {
             Write-Host "-> Existing venv has broken packages, recreating..."
             Remove-Item $VENV_DIR -Recurse -Force
@@ -318,17 +318,23 @@ if (-not (Test-Path $PYTHON_BIN)) {
 }
 
 Write-Host "-> Installing Python dependencies..."
-# Filter out uvloop (Unix-only) from requirements
+# Filter out Unix-only packages from requirements
 $reqFile = "$SRC_DIR\requirements.txt"
 $filteredReqs = (Get-Content $reqFile) | Where-Object { $_ -notmatch '^\s*uvloop' }
 $tmpReq = [System.IO.Path]::GetTempFileName()
 $filteredReqs | Set-Content $tmpReq -Encoding UTF8
-try {
-    & $PYTHON_BIN -m pip install -q -r $tmpReq 2>&1 | Select-Object -Last 3
-} finally {
-    Remove-Item $tmpReq -ErrorAction SilentlyContinue
+# Upgrade pip first to avoid build issues
+& "$PYTHON_BIN" -m pip install -q --upgrade pip setuptools wheel 2>&1 | Out-Null
+$pipOutput = & "$PYTHON_BIN" -m pip install -q -r $tmpReq 2>&1
+$pipExit = $LASTEXITCODE
+Remove-Item $tmpReq -ErrorAction SilentlyContinue
+if ($pipExit -ne 0) {
+    Write-Host "[!] Some dependencies failed to install:" -ForegroundColor Yellow
+    $pipOutput | Select-Object -Last 10 | ForEach-Object { Write-Host "    $_" }
+    Write-Host "    Continuing — server may still work. Fix with: & '$PYTHON_BIN' -m pip install -r '$reqFile'" -ForegroundColor Yellow
+} else {
+    Write-Host "[OK] Python dependencies installed" -ForegroundColor Green
 }
-Write-Host "[OK] Python dependencies installed" -ForegroundColor Green
 
 # =============================================
 # 10. Install Playwright Chromium (equivalent to install.sh playwright install)
@@ -336,13 +342,13 @@ Write-Host "[OK] Python dependencies installed" -ForegroundColor Green
 
 $playwrightOk = $false
 try {
-    & $PYTHON_BIN -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); p.stop()" 2>$null
+    & "$PYTHON_BIN" -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); p.stop()" 2>$null
     $playwrightOk = $true
 } catch { }
 
 if (-not $playwrightOk) {
     Write-Host "-> Installing Playwright Chromium browser..."
-    & $PYTHON_BIN -m playwright install chromium 2>&1 | Select-Object -Last 1
+    & "$PYTHON_BIN" -m playwright install chromium 2>&1 | Select-Object -Last 1
     Write-Host "[OK] Playwright Chromium installed" -ForegroundColor Green
 } else {
     Write-Host "[OK] Playwright Chromium already installed" -ForegroundColor Green
