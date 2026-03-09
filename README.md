@@ -39,7 +39,7 @@ Open **https://localhost:7000** — the setup wizard walks you through everythin
 ### Prerequisites
 
 - Python 3.11+
-- macOS (primary), Linux, or Windows
+- macOS, Windows 10/11, or Linux
 - `ripgrep` (`rg`) installed and on PATH
 - At least one AI provider account (OpenAI, Anthropic, or OpenRouter)
 
@@ -59,7 +59,25 @@ curl -fsSL https://github.com/ryanjw888/KukuiBot/raw/main/install.sh | bash -s -
 
 The installer handles all dependencies (Python 3.11+, mkcert, ripgrep, Node.js 18+, Claude Code CLI), HTTPS certs, launchd services, and cron jobs.
 
-### Manual Setup
+### One-Line Install (Windows)
+
+Open **PowerShell as Administrator** and run:
+
+```powershell
+irm https://github.com/ryanjw888/KukuiBot/raw/main/install.ps1 | iex
+```
+
+Or with custom options:
+
+```powershell
+.\install.ps1 -Port 8443 -Dir C:\kukuibot
+```
+
+The installer uses `winget` for dependencies (Python 3.13, Node.js, mkcert, ripgrep, Claude Code CLI), creates a Windows Scheduled Task for the server (runs at logon), and sets up hourly backups. Requires Windows 10/11 with winget available.
+
+**Note:** `uvloop` is automatically excluded from pip install on Windows (Unix-only). All platform-specific features (vm_stat, launchd, afplay, etc.) gracefully degrade with Windows-appropriate fallbacks.
+
+### Manual Setup (macOS)
 
 ```bash
 # Install native dependencies
@@ -78,6 +96,27 @@ mkcert -cert-file certs/kukuibot.pem -key-file certs/kukuibot-key.pem \
 
 # Run
 python3 server.py
+```
+
+### Manual Setup (Windows)
+
+```powershell
+# Install native dependencies
+winget install Python.Python.3.13 OpenJS.NodeJS FiloSottile.mkcert BurntSushi.ripgrep.MSVC
+mkcert -install
+npm install -g @anthropic-ai/claude-code
+
+# Clone and install Python deps
+git clone https://github.com/ryanjw888/KukuiBot.git; cd kukuibot
+pip install -r requirements.txt  # uvloop will fail — this is expected, server runs without it
+
+# Generate HTTPS certs
+mkdir certs
+$lanIP = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.PrefixOrigin -ne 'WellKnown' } | Select-Object -First 1).IPAddress
+mkcert -cert-file certs\kukuibot.pem -key-file certs\kukuibot-key.pem localhost 127.0.0.1 $lanIP
+
+# Run
+python server.py
 ```
 
 ### First Run
@@ -190,6 +229,8 @@ Requires HTTPS (which KukuiBot provides by default).
 
 ## Uninstalling
 
+### macOS
+
 ```bash
 bash ~/.kukuibot/src/uninstall.sh
 # Or if installed to a custom directory:
@@ -197,6 +238,19 @@ bash ~/my-kukuibot/src/uninstall.sh --dir ~/my-kukuibot
 ```
 
 Removes services, cron jobs, sudoers rules, data, and logs. Does not remove Homebrew packages, Node.js, Claude Code CLI, or the mkcert root CA.
+
+### Windows
+
+```powershell
+# Remove scheduled tasks
+schtasks /Delete /TN KukuiBot-Server /F
+schtasks /Delete /TN KukuiBot-Backup /F
+
+# Remove data directory (adjust path if custom)
+Remove-Item -Recurse -Force "$env:USERPROFILE\.kukuibot"
+```
+
+Does not remove Python, Node.js, Claude Code CLI, or the mkcert root CA.
 
 ## Docs
 
