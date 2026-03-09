@@ -24,7 +24,7 @@ router = APIRouter()
 
 # --- Security ---
 
-ALLOWED_ROOTS = [Path("/Users/jarvis")]
+ALLOWED_ROOTS = [Path("/Users/jarvis"), Path("C:/Users/RyanW")]
 
 VALID_STATUSES = {"active", "archived", "paused"}
 
