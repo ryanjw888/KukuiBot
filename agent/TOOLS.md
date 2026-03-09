@@ -44,7 +44,7 @@ WHERE session_id='SESSION_ID'
 ORDER BY started_at DESC LIMIT 20;
 ```
 
-**DB path:** `/Users/jarvis/.kukuibot/kukuibot.db`
+**DB path:** `~/.kukuibot/kukuibot.db`
 **Tables:** `chat_runs` (assistant responses + metadata), `chat_events` (all events including user messages)
 **Session ID:** Check the "Available Workers" table in your system prompt — your row is marked `(you)`
 
@@ -90,7 +90,7 @@ These are the tools available to the KukuiBot agent out of the box:
 - **Python files only** — non-Python files appear in `tree` mode with size but no symbol parsing
 - **Tip:** Use `tree` → `outline` → `symbol` to drill into a codebase in 3 calls instead of 5-10 `read_file` calls
 
-## Sub-Agent + Reasoning Policy ⭐
+## Sub-Agent + Reasoning Policy
 
 **When to spawn a sub-agent**
 - Spawn for multi-file refactors, deep audits, long research, migration plans, or tasks likely to exceed parent-context focus.
@@ -117,46 +117,6 @@ These are the tools available to the KukuiBot agent out of the box:
 - **Verify:** confirm target output exists and critical sections are non-empty.
 - **Validate:** run at least one historical/variant regression case when parser/schema logic changed.
 - **Record:** update `memory/YYYY-MM-DD.md` + commit with what changed and validation scope.
-
-## Download Tips
-- **Always use `curl -L` for large files** (models, weights, datasets) — HuggingFace `snapshot_download()` and `transformers` auto-download frequently stall/hang on macOS
-- Download model files individually from HuggingFace: `curl -L "https://huggingface.co/{repo}/resolve/main/{file}" -o {file}`
-- Then point `transformers.pipeline()` at the local directory instead of the repo name
-
-## GitHub Repository Management
-
-**Primary Responsibility:** Keep https://github.com/ryanjw888/KukuiBot/ synchronized with local changes.
-
-### Sync Automation
-- **Cron:** Every hour at :30 (`30 * * * *`)
-- **Script:** `/Users/jarvis/.kukuibot/src/scripts/auto-push-github.sh`
-- **Logs:** `/Users/jarvis/.kukuibot/logs/github-push-cron.log`
-- **Auth:** Personal Access Token in git remote config
-
-### Data Safety Guardrails 🔒
-**NEVER push sensitive data to GitHub:**
-- ❌ Reports/audits (network scans, PII)
-- ❌ Session files (`.claude_session_*`, `session-*.md`)
-- ❌ Memory files (`memory/*.md`, `notes-*.md`)
-- ❌ Scan outputs (`.nmap`, `.gnmap`, `rustscan_*.txt`)
-- ❌ Credentials (tokens, API keys, passwords)
-- ❌ Email data (`.eml`, `.msg`, `emails/`)
-
-**Auto-push script includes:**
-- Pre-push sensitive pattern scanning
-- Credential detection in staged files
-- IP address warnings for non-docs
-- Automatic abort on detection
-
-### When to Push Manually
-- After significant features/fixes requiring immediate visibility
-- Before creating releases or tags
-- When auto-push hasn't run yet and changes need to be shared
-- **Always verify no sensitive data is staged first**
-
-### Repository Structure
-- `/Users/jarvis/.kukuibot/src` → **GitHub main branch** (public code)
-- `/Users/jarvis/.kukuibot` → **Local only** (DB, certs, logs, sensitive config, reports)
 
 ## Delegation Tools (Cross-Worker Task Dispatch)
 
@@ -212,7 +172,7 @@ print(resp.read().decode())
 - `worker` (required): `developer`, `it-admin`, `code-analyst`, `assistant`
 - `model` (required): See model ID table below
 - `prompt` (required): Full task prompt with deliverables and stop conditions
-- `parent_session_id` (recommended): Your own tab session ID (e.g. `tab-claude_opus-x3pztrjsd7`). Find it in the Available Workers table — your row is marked `(you)`. Without this, notifications may route to the wrong manager tab.
+- `parent_session_id` (recommended): Your own tab session ID. Find it in the Available Workers table — your row is marked `(you)`. Without this, notifications may route to the wrong manager tab.
 - `force` (optional): `true` to override occupied slots
 
 **Returns:** `{"ok": true, "task_id": "task-xxx", "target_session_id": "...", "slot": 1, "status": "dispatched"}`
@@ -238,7 +198,6 @@ Use these exact strings for the `model` parameter:
 | Claude Opus 4.6 | `claude_opus` | Anthropic |
 | Claude Sonnet 4.5 | `claude_sonnet` | Anthropic |
 | Codex | `codex` | OpenAI |
-| Kimi K2.5 | `openrouter_moonshotai_kimi_k2_5` | OpenRouter |
 
 > Model IDs match the model column in the Available Workers table. For OpenRouter models, the ID is `openrouter_` + the model slug with `/` replaced by `_`.
 
@@ -261,67 +220,15 @@ Use these exact strings for the `model` parameter:
 _Add your environment details here — device names, network info, service URLs, SSH hosts, etc._
 _Keep secrets in `.env` files or the app's credential store, not in this file._
 
----
-
-Add whatever helps the agent do its job. This is its cheat sheet.
-
-## MLX AI Stack (Apple Silicon — M2 Ultra)
-
-All ML models run locally via Apple's MLX framework on the M2 Ultra (64 GB).
-
-### Python Environments
-
-| Environment | Python | Path | Used By |
-|---|---|---|---|
-| System/Homebrew 3.12 | 3.12.2 | `/opt/homebrew/Cellar/python@3.12/3.12.2_1/bin/python3.12` | Wake-listener, MLX models |
-| KukuiBot venv | 3.14.3 | `/Users/jarvis/.kukuibot/venv/bin/python3` | KukuiBot server |
-
-**Important:** All MLX packages are installed under **Python 3.12** (Homebrew). The KukuiBot venv (3.14) does NOT have MLX. Use `python3.12` or the full path when running MLX workloads.
-
-### Installed MLX Packages (Python 3.12)
-
-| Package | Version | Purpose |
-|---|---|---|
-| `mlx` | 0.30.6 | Core MLX framework |
-| `mlx-metal` | 0.30.6 | Metal GPU backend |
-| `mlx-qwen3-asr` | 0.2.3 | Qwen3-ASR 0.6B speech recognition |
-| `mlx-lm` | 0.30.7 | Language model inference (Qwen3.5-4B, etc.) |
-| `mlx-vlm` | 0.3.12 | Vision-language model inference |
-| `mlx-whisper` | 0.4.3 | Whisper STT (fallback/alternative to Qwen-ASR) |
-| `torchaudio` | 2.10.0 | Audio processing utilities |
-
-### Model Locations
-
-| Model | Path | RAM | Purpose |
-|---|---|---|---|
-| Qwen3-ASR 0.6B | `/Users/jarvis/.jarvis/data/asr_benchmark/qwen3-asr-0.6b` | ~1 GB | Speech-to-text |
-| Qwen3.5-4B-MLX-4bit | (loaded via mlx-lm) | ~4 GB | Voice LLM reasoning |
-| Kokoro-82M | (loaded in Jarvis backend) | ~0.5 GB | TTS (CPU-only) |
-
-### Key Integration Points
-
-- **Jarvis backend** (`/Users/jarvis/.jarvis/src/backend/main.py`): Loads Qwen3-ASR at startup via `_ensure_asr()`, exposes `/api/transcribe` endpoint
-- **Wake-listener** (`/Users/jarvis/.kukuibot/src/tools/wake-listener.py`): Uses `mlx_qwen3_asr.Session` for local transcription, falls back to remote
-- **ASR usage**: `from mlx_qwen3_asr import Session; s = Session(model="Qwen/Qwen3-ASR-0.6B"); result = s.transcribe("audio.wav", language="English")`
-
-### Audiobook / TTS Pipeline (In Progress)
-
-- **Qwen3-TTS 1.7B** (MLX): Being installed at `/Users/jarvis/.kukuibot/audiobook/qwen3-tts-apple-silicon/` — voice cloning + emotion control
-- **Source audio**: DCC Book 8 chapters at `/Users/jarvis/.kukuibot/audiobook/This Inevitable Ruin /` (108 M4B files, 1.6 GB)
-- **ElevenLabs V3**: API-based TTS alternative, model_id `eleven_v3`, supports `[emotion]` audio tags inline
-
 ## Gmail Integration
 
-Gmail is connected as **ryan@wilmot.org**. Available email capabilities:
+Gmail capabilities (configured per-install via Settings):
 
 - Read inbox messages
 - Read sent messages
 - Create email drafts
-- Send email (to owner only: ryan@wilmot.org)
-- Send email (within @wilmot.org only)
-- Manual send by user (drafts only, not AI)
+- Send email (permission levels configurable in Settings)
 - Move messages to trash
-- auto_draft
 
 All outbound email is scanned by `email_sanitize.preflight_email()` before sending.
 Inbound message bodies are scanned for sensitive content on read.
