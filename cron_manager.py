@@ -459,7 +459,13 @@ def _cron_to_launchd_schedule(cron_expr: str) -> dict:
 
 
 def _build_job_plist(slug: str, command: str, cron_expr: str, enabled: bool = True) -> bytes:
-    """Build a launchd plist for a scheduled job. Returns plist XML as bytes."""
+    """Build a launchd plist for a scheduled job. Returns plist XML as bytes.
+
+    Only callable on macOS — plistlib is None on Windows.
+    """
+    if platform.system() == "Windows":
+        raise RuntimeError("_build_job_plist is not available on Windows")
+
     label = f"{LAUNCHD_PREFIX}{slug}"
     log_path = str(KUKUIBOT_HOME / "logs" / f"job-{slug}.log")
 
@@ -1270,9 +1276,14 @@ class CronManager:
 
         Only runs if no jobs exist in the DB yet. Scans existing
         com.kukuibot.job.* plists in LaunchAgents and imports them.
+        macOS only — returns empty list on other platforms.
 
         Returns list of imported jobs.
         """
+        if platform.system() == "Windows" or LAUNCHD_DIR is None:
+            logger.debug("import_from_legacy skipped — not on macOS")
+            return []
+
         db = self._get_db()
         try:
             count = db.execute("SELECT COUNT(*) FROM scheduled_jobs").fetchone()[0]

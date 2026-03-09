@@ -1724,11 +1724,14 @@ async def api_system_stats():
     except Exception as e:
         if platform.system() == "Windows":
             try:
-                import ctypes
-                class FILETIME(ctypes.Structure):
-                    _fields_ = [("dwLowDateTime", ctypes.c_ulong), ("dwHighDateTime", ctypes.c_ulong)]
-                idle, kernel, user = FILETIME(), FILETIME(), FILETIME()
-                ctypes.windll.kernel32.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user))
+                r = subprocess.run(
+                    ["wmic", "cpu", "get", "loadpercentage", "/value"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                for line in r.stdout.strip().split("\n"):
+                    if "LoadPercentage=" in line:
+                        cpu_percent = float(line.split("=", 1)[1].strip())
+                        break
             except Exception:
                 pass  # cpu_percent stays 0
         errors.append(f"cpu:{e}")
@@ -3369,17 +3372,19 @@ async def api_listener_restart(req: Request):
         try:
             if platform.system() == "Windows":
                 r = subprocess.run(
-                    ["tasklist", "/FI", "IMAGENAME eq python.exe", "/FO", "CSV"],
+                    ["wmic", "process", "where",
+                     "commandline like '%wake-listener.py%'",
+                     "get", "processid", "/value"],
                     capture_output=True, text=True, timeout=5)
-                # Best-effort: find PIDs running wake-listener
                 for line in r.stdout.strip().split("\n"):
-                    if "wake-listener" in line.lower():
-                        parts = line.strip('"').split('","')
-                        if len(parts) >= 2:
-                            try:
-                                os.kill(int(parts[1].strip('"')), _signal.SIGTERM)
-                            except (ProcessLookupError, ValueError):
-                                pass
+                    if "ProcessId=" in line:
+                        try:
+                            pid = line.split("=", 1)[1].strip()
+                            subprocess.run(
+                                ["taskkill", "/PID", pid, "/F"],
+                                capture_output=True, timeout=5)
+                        except (ValueError, subprocess.TimeoutExpired):
+                            pass
             else:
                 r = subprocess.run(["pgrep", "-f", "wake-listener.py"],
                                    capture_output=True, text=True, timeout=5)

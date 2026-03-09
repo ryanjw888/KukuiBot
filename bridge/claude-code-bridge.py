@@ -61,13 +61,74 @@ from log_store import log_query
 
 # No OpenRouter fallback — KukuiBot handles that in server.py
 
-CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
+def _find_claude_binary() -> str:
+    """Find the claude binary, with Windows .cmd/.bat support.
+
+    On Windows, npm installs claude as claude.cmd — shutil.which() resolves
+    this correctly, but we must also check explicit Windows paths.
+    """
+    import shutil
+
+    # 1. Explicit env var
+    env_bin = os.environ.get("CLAUDE_BIN", "").strip()
+    if env_bin and os.path.isfile(env_bin):
+        return env_bin
+
+    # 2. shutil.which — resolves .cmd/.bat on Windows via PATHEXT
+    found = shutil.which("claude")
+    if found:
+        return found
+
+    # 3. On Windows, also try 'claude.cmd' explicitly
+    if platform.system() == "Windows":
+        found = shutil.which("claude.cmd")
+        if found:
+            return found
+
+    # 4. Check common install locations
+    home = Path.home()
+    candidates = [
+        home / ".local" / "bin" / "claude",
+        Path("/opt/homebrew/bin/claude"),
+        Path("/usr/local/bin/claude"),
+        home / ".npm-global" / "bin" / "claude",
+    ]
+    if platform.system() == "Windows":
+        appdata = os.environ.get("APPDATA", "")
+        localappdata = os.environ.get("LOCALAPPDATA", "")
+        progfiles = os.environ.get("ProgramFiles", "")
+        if appdata:
+            candidates.append(Path(appdata) / "npm" / "claude.cmd")
+        if localappdata:
+            candidates.append(Path(localappdata) / "Programs" / "claude" / "claude.exe")
+        if progfiles:
+            candidates.append(Path(progfiles) / "nodejs" / "claude.cmd")
+
+    for p in candidates:
+        if p.is_file():
+            return str(p)
+
+    # Fallback — will fail at spawn time with a clear error
+    return "claude"
+
+
+CLAUDE_BIN = _find_claude_binary()
 
 
 def _cmd_prefix() -> list:
-    """On Windows, .cmd/.bat files can't be exec'd directly — prepend cmd /c."""
-    if platform.system() == "Windows" and CLAUDE_BIN.lower().endswith((".cmd", ".bat")):
-        return ["cmd.exe", "/c", CLAUDE_BIN]
+    """On Windows, .cmd/.bat files can't be exec'd directly — prepend cmd /c.
+
+    Also handles the case where CLAUDE_BIN is bare 'claude' on Windows —
+    we resolve it via shutil.which to find the actual .cmd path.
+    """
+    if platform.system() == "Windows":
+        if CLAUDE_BIN.lower().endswith((".cmd", ".bat")):
+            return ["cmd.exe", "/c", CLAUDE_BIN]
+        # Bare name like "claude" — resolve to find .cmd wrapper
+        import shutil
+        resolved = shutil.which(CLAUDE_BIN)
+        if resolved and resolved.lower().endswith((".cmd", ".bat")):
+            return ["cmd.exe", "/c", resolved]
     return [CLAUDE_BIN]
 DEFAULT_MODEL = "opus"  # Claude Code alias — maps to latest Opus
 DEFAULT_PORT = 9085

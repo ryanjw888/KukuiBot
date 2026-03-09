@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-import pwd
+import platform
 import shlex
 import socket
 import stat
@@ -20,6 +20,9 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+
+if platform.system() != "Windows":
+    import pwd
 
 SOCKET_PATH = os.environ.get("KUKUIBOT_PRIV_SOCKET", "/tmp/kukuibot-priv.sock")
 LOG_PATH = os.environ.get("KUKUIBOT_PRIV_LOG", "/tmp/kukuibot-privileged.log")
@@ -202,9 +205,8 @@ def _cleanup_stale_sudoers():
 
 
 def serve_forever():
-    import platform as _platform
-    if _platform.system() == "Windows":
-        print("Privileged helper not supported on Windows")
+    if platform.system() == "Windows":
+        print("Privileged helper is only available on macOS")
         import sys
         sys.exit(1)
     _cleanup_stale_sudoers()

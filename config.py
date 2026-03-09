@@ -208,7 +208,11 @@ DEFAULT_SELF_COMPACT = True
 
 # --- Paths for tool execution ---
 if platform.system() == "Windows":
+    # Inherit system PATH and ensure npm global dir is included
     TOOL_PATH = os.environ.get("PATH", "")
+    _npm_global = os.path.join(os.environ.get("APPDATA", ""), "npm")
+    if _npm_global and os.path.isdir(_npm_global) and _npm_global not in TOOL_PATH:
+        TOOL_PATH = _npm_global + ";" + TOOL_PATH
 else:
     TOOL_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 TOOL_ENV = {**os.environ, "PATH": TOOL_PATH}

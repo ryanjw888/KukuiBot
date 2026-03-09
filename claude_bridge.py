@@ -205,20 +205,30 @@ def _find_claude_binary() -> str:
     import shutil
     import subprocess as _sp
 
+    _is_win = platform.system() == "Windows"
+
     # 1. Explicit env var
     env_bin = os.environ.get("CLAUDE_BIN", "").strip()
     if env_bin:
-        if os.path.isfile(env_bin) and os.access(env_bin, os.X_OK):
+        # On Windows, .cmd files are executable even without X_OK bit
+        if os.path.isfile(env_bin) and (_is_win or os.access(env_bin, os.X_OK)):
             logger.info(f"Claude binary from CLAUDE_BIN env: {env_bin}")
             return env_bin
         # If env var is set but file doesn't exist, log warning and continue searching
         logger.warning(f"CLAUDE_BIN={env_bin} not found or not executable, searching...")
 
-    # 2. Already on PATH
+    # 2. Already on PATH (shutil.which resolves .cmd/.bat on Windows via PATHEXT)
     found = shutil.which("claude")
     if found:
         logger.info(f"Claude binary on PATH: {found}")
         return found
+
+    # 2b. On Windows, also try 'claude.cmd' explicitly
+    if platform.system() == "Windows":
+        found = shutil.which("claude.cmd")
+        if found:
+            logger.info(f"Claude binary on PATH (claude.cmd): {found}")
+            return found
 
     # 3. Check common locations
     home = Path.home()
@@ -230,10 +240,15 @@ def _find_claude_binary() -> str:
         home / ".nvm" / "current" / "bin" / "claude",
     ]
     if platform.system() == "Windows":
-        common_paths.extend([
-            Path(os.environ.get("APPDATA", "")) / "npm" / "claude.cmd",
-            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "claude" / "claude.exe",
-        ])
+        appdata = os.environ.get("APPDATA", "")
+        localappdata = os.environ.get("LOCALAPPDATA", "")
+        progfiles = os.environ.get("ProgramFiles", "")
+        if appdata:
+            common_paths.append(Path(appdata) / "npm" / "claude.cmd")
+        if localappdata:
+            common_paths.append(Path(localappdata) / "Programs" / "claude" / "claude.exe")
+        if progfiles:
+            common_paths.append(Path(progfiles) / "nodejs" / "claude.cmd")
 
     # Also check npm global prefix if npm is available
     try:
@@ -241,6 +256,9 @@ def _find_claude_binary() -> str:
         if result.returncode == 0:
             npm_prefix = result.stdout.strip()
             if npm_prefix:
+                # On Windows, npm globals are at <prefix>/claude.cmd (no bin/ subdir)
+                if _is_win:
+                    common_paths.insert(0, Path(npm_prefix) / "claude.cmd")
                 common_paths.insert(0, Path(npm_prefix) / "bin" / "claude")
     except Exception:
         pass
@@ -258,7 +276,7 @@ def _find_claude_binary() -> str:
             pass
 
     for p in common_paths:
-        if p.is_file() and os.access(p, os.X_OK):
+        if p.is_file() and (_is_win or os.access(p, os.X_OK)):
             logger.info(f"Claude binary found at: {p}")
             return str(p)
 
@@ -270,16 +288,19 @@ def _find_claude_binary() -> str:
         "/opt/homebrew",
         "/usr/local",
     ]
+    # On Windows, also look for claude.cmd in the walk
+    _walk_names = ["claude.cmd", "claude.exe", "claude"] if _is_win else ["claude"]
     for search_dir in search_dirs:
         if not os.path.isdir(search_dir):
             continue
         try:
             for root, dirs, files in os.walk(search_dir):
-                if "claude" in files:
-                    candidate = os.path.join(root, "claude")
-                    if os.access(candidate, os.X_OK):
-                        logger.info(f"Claude binary discovered via walk: {candidate}")
-                        return candidate
+                for _name in _walk_names:
+                    if _name in files:
+                        candidate = os.path.join(root, _name)
+                        if _is_win or os.access(candidate, os.X_OK):
+                            logger.info(f"Claude binary discovered via walk: {candidate}")
+                            return candidate
                 # Don't descend into node_modules or deep trees
                 if root.count(os.sep) - search_dir.count(os.sep) > 5:
                     dirs.clear()
@@ -298,9 +319,19 @@ CLAUDE_BIN = _find_claude_binary()
 
 
 def _cmd_prefix() -> list[str]:
-    """On Windows, .cmd/.bat files can't be exec'd directly — prepend cmd /c."""
-    if platform.system() == "Windows" and CLAUDE_BIN.lower().endswith((".cmd", ".bat")):
-        return ["cmd.exe", "/c", CLAUDE_BIN]
+    """On Windows, .cmd/.bat files can't be exec'd directly — prepend cmd /c.
+
+    Also handles the case where CLAUDE_BIN is bare 'claude' on Windows —
+    we resolve it via shutil.which to find the actual .cmd path.
+    """
+    if platform.system() == "Windows":
+        if CLAUDE_BIN.lower().endswith((".cmd", ".bat")):
+            return ["cmd.exe", "/c", CLAUDE_BIN]
+        # Bare name like "claude" — resolve to find .cmd wrapper
+        import shutil
+        resolved = shutil.which(CLAUDE_BIN)
+        if resolved and resolved.lower().endswith((".cmd", ".bat")):
+            return ["cmd.exe", "/c", resolved]
     return [CLAUDE_BIN]
 
 
@@ -355,6 +386,9 @@ async def claude_health() -> ClaudeHealth:
         if not os.path.isabs(path):
             import shutil
             found = shutil.which(path)
+            # On Windows, also try 'claude.cmd' if bare name didn't resolve
+            if not found and platform.system() == "Windows":
+                found = shutil.which(path + ".cmd")
             path = found or path
 
         if not os.path.isfile(path):

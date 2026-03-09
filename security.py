@@ -30,6 +30,8 @@ _DEFAULT_ELEVATE_BASH_PATTERNS = [
     "schtasks ",
     "net stop ",
     "sc delete ",
+    "reg delete ",
+    "icacls ",
     "runas ",
 ]
 
