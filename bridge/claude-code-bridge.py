@@ -116,19 +116,14 @@ CLAUDE_BIN = _find_claude_binary()
 
 
 def _cmd_prefix() -> list:
-    """On Windows, .cmd/.bat files can't be exec'd directly — prepend cmd /c.
+    """On Windows, always use cmd.exe /c to launch Claude CLI.
 
-    Also handles the case where CLAUDE_BIN is bare 'claude' on Windows —
-    we resolve it via shutil.which to find the actual .cmd path.
+    npm installs 'claude' as claude.cmd (a batch wrapper).
+    create_subprocess_exec() can't run .cmd files directly (WinError 193).
+    cmd.exe /c handles .cmd, .bat, and bare names via PATHEXT resolution.
     """
     if platform.system() == "Windows":
-        if CLAUDE_BIN.lower().endswith((".cmd", ".bat")):
-            return ["cmd.exe", "/c", CLAUDE_BIN]
-        # Bare name like "claude" — resolve to find .cmd wrapper
-        import shutil
-        resolved = shutil.which(CLAUDE_BIN)
-        if resolved and resolved.lower().endswith((".cmd", ".bat")):
-            return ["cmd.exe", "/c", resolved]
+        return ["cmd.exe", "/c", CLAUDE_BIN]
     return [CLAUDE_BIN]
 DEFAULT_MODEL = "opus"  # Claude Code alias — maps to latest Opus
 DEFAULT_PORT = 9085
