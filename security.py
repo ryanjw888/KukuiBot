@@ -27,6 +27,10 @@ _DEFAULT_ELEVATE_BASH_PATTERNS = [
     " ftp ",
     " python -c",
     " python3 -c",
+    "schtasks ",
+    "net stop ",
+    "sc delete ",
+    "runas ",
 ]
 
 _DEFAULT_EGRESS_REGEX = r"(^|[;&|()\\s])(wget|scp|sftp|rsync|nc|ncat|netcat|ftp)([\\s;&|()]|$)"

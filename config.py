@@ -207,7 +207,10 @@ DEFAULT_NUDGE_ENABLED = True
 DEFAULT_SELF_COMPACT = True
 
 # --- Paths for tool execution ---
-TOOL_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+if platform.system() == "Windows":
+    TOOL_PATH = os.environ.get("PATH", "")
+else:
+    TOOL_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 TOOL_ENV = {**os.environ, "PATH": TOOL_PATH}
 
 # --- TTS Service ---

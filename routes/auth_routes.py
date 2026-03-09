@@ -6,6 +6,7 @@ Extracted from server.py Phase 6.
 import hashlib
 import logging
 import os
+import platform
 import secrets
 import subprocess
 import time
@@ -528,6 +529,8 @@ async def reset_password_terminal(req: Request):
     end tell
     '''
     try:
+        if platform.system() == "Windows":
+            return JSONResponse({"error": "Terminal password reset not supported on Windows"}, status_code=501)
         _subprocess.Popen(["osascript", "-e", applescript])
         return {"ok": True, "message": "Terminal opened with password reset"}
     except Exception as e:
@@ -554,7 +557,12 @@ async def system_login(req: Request):
     if not system_password:
         return JSONResponse({"error": "macOS password is required"}, status_code=400)
 
-    # Verify macOS system password via dscl
+    # Verify system password
+    if platform.system() == "Windows":
+        return JSONResponse(
+            {"error": "System login not supported on Windows — use application credentials"},
+            status_code=501,
+        )
     import pwd
     mac_user = pwd.getpwuid(os.getuid()).pw_name
     try:

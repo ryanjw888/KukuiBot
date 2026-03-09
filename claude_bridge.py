@@ -32,6 +32,7 @@ import asyncio
 import json
 import logging
 import os
+import platform
 import re
 import time
 from dataclasses import dataclass
@@ -228,6 +229,11 @@ def _find_claude_binary() -> str:
         home / ".npm-global" / "bin" / "claude",
         home / ".nvm" / "current" / "bin" / "claude",
     ]
+    if platform.system() == "Windows":
+        common_paths.extend([
+            Path(os.environ.get("APPDATA", "")) / "npm" / "claude.cmd",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "claude" / "claude.exe",
+        ])
 
     # Also check npm global prefix if npm is available
     try:

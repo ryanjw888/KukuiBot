@@ -17,6 +17,9 @@ class PrivilegedHelperClient:
         self.timeout = timeout
 
     def _request(self, payload: dict[str, Any], timeout: float | None = None) -> dict[str, Any]:
+        import platform
+        if platform.system() == "Windows":
+            raise OSError("Privileged helper not available on Windows")
         t = float(timeout if timeout is not None else self.timeout)
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:

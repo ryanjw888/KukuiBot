@@ -629,7 +629,7 @@ def _get_system_prompt(model_key: str = "", worker_identity: str = "", project_i
     src_dir = str(src_path.resolve()) if src_path.exists() else "(not linked)"
 
     parts = [
-        f"You are {APP_NAME}, a self-hosted AI agent running on macOS.",
+        f"You are {APP_NAME}, a self-hosted AI agent running on {platform.system()}.",
         "You have direct access to the filesystem and can run commands via tools.",
         "Be concise, helpful, and get things done.",
         "On first message in a session, greet the user by their name from USER.md.",
@@ -1722,35 +1722,68 @@ async def api_system_stats():
         load1, _, _ = os.getloadavg()
         cpu_percent = round(max(0.0, min(100.0, (load1 / max(1, cores)) * 100.0)), 1)
     except Exception as e:
+        if platform.system() == "Windows":
+            try:
+                import ctypes
+                class FILETIME(ctypes.Structure):
+                    _fields_ = [("dwLowDateTime", ctypes.c_ulong), ("dwHighDateTime", ctypes.c_ulong)]
+                idle, kernel, user = FILETIME(), FILETIME(), FILETIME()
+                ctypes.windll.kernel32.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user))
+            except Exception:
+                pass  # cpu_percent stays 0
         errors.append(f"cpu:{e}")
 
-    # Memory (macOS via vm_stat)
+    # Memory
     used_bytes = 0
     free_bytes = 0
     total_bytes = 0
     mem_used_pct = 0.0
     try:
-        vm = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=2)
-        vm_out = vm.stdout or ""
-        page_size = 4096
-        m = re.search(r"page size of (\d+) bytes", vm_out)
-        if m:
-            page_size = int(m.group(1))
+        if platform.system() != "Windows":
+            # macOS via vm_stat
+            vm = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=2)
+            vm_out = vm.stdout or ""
+            page_size = 4096
+            m = re.search(r"page size of (\d+) bytes", vm_out)
+            if m:
+                page_size = int(m.group(1))
 
-        def _pages(label: str) -> int:
-            mm = re.search(rf"{re.escape(label)}:\s+(\d+)\.", vm_out)
-            return int(mm.group(1)) if mm else 0
+            def _pages(label: str) -> int:
+                mm = re.search(rf"{re.escape(label)}:\s+(\d+)\.", vm_out)
+                return int(mm.group(1)) if mm else 0
 
-        free_pages = _pages("Pages free")
-        speculative_pages = _pages("Pages speculative")
-        active_pages = _pages("Pages active")
-        wired_pages = _pages("Pages wired down")
-        compressed_pages = _pages("Pages occupied by compressor")
+            free_pages = _pages("Pages free")
+            speculative_pages = _pages("Pages speculative")
+            active_pages = _pages("Pages active")
+            wired_pages = _pages("Pages wired down")
+            compressed_pages = _pages("Pages occupied by compressor")
 
-        free_bytes = int((free_pages + speculative_pages) * page_size)
-        used_bytes = int((active_pages + wired_pages + compressed_pages) * page_size)
-        total_bytes = int(free_bytes + used_bytes)
-        mem_used_pct = round((used_bytes / total_bytes) * 100.0, 1) if total_bytes > 0 else 0.0
+            free_bytes = int((free_pages + speculative_pages) * page_size)
+            used_bytes = int((active_pages + wired_pages + compressed_pages) * page_size)
+            total_bytes = int(free_bytes + used_bytes)
+            mem_used_pct = round((used_bytes / total_bytes) * 100.0, 1) if total_bytes > 0 else 0.0
+        else:
+            # Windows — memory stats via ctypes
+            import ctypes
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+            stat = MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(stat)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
+            total_bytes = int(stat.ullTotalPhys)
+            free_bytes = int(stat.ullAvailPhys)
+            used_bytes = total_bytes - free_bytes
+            mem_used_pct = round((used_bytes / total_bytes) * 100.0, 1) if total_bytes > 0 else 0.0
     except Exception as e:
         errors.append(f"memory:{e}")
 
@@ -1864,29 +1897,54 @@ async def api_security_quick_check():
     # 2) Firewall status — warn only if disabled (as requested).
     fw_state = "unknown"
     fw_detail = "firewall status unavailable"
-    rc, out, err = _run(["/usr/libexec/ApplicationFirewall/socketfilterfw", "--getglobalstate"])
-    txt = (out or err).lower()
-    if rc == 0 and txt:
-        if "disabled" in txt or "state = 0" in txt:
+    if platform.system() == "Windows":
+        try:
+            rc, out, err = _run(["netsh", "advfirewall", "show", "allprofiles", "state"])
+            txt = (out or err).lower()
+            if rc == 0 and "on" in txt:
+                fw_state = "ok"
+                fw_detail = "Windows Firewall enabled"
+            elif rc == 0 and "off" in txt:
+                fw_state = "warn"
+                fw_detail = "Windows Firewall disabled"
+                findings.append({
+                    "id": "firewall_disabled",
+                    "severity": "warn",
+                    "title": "System Firewall",
+                    "status": "warn",
+                    "detail": "Firewall is disabled.",
+                    "recommendation": "Enable firewall unless you intentionally rely on unrestricted LAN exposure.",
+                })
+            else:
+                fw_state = "warn"
+                fw_detail = (err or out or "unknown firewall state")[:200]
+        except Exception:
             fw_state = "warn"
-            fw_detail = "Firewall disabled"
-            findings.append({
-                "id": "firewall_disabled",
-                "severity": "warn",
-                "title": "macOS Firewall",
-                "status": "warn",
-                "detail": "Firewall is disabled.",
-                "recommendation": "Enable firewall unless you intentionally rely on unrestricted LAN exposure.",
-            })
-        elif "enabled" in txt or "state = 1" in txt:
-            fw_state = "ok"
-            fw_detail = "Firewall enabled"
+            fw_detail = "firewall check failed"
+    else:
+        rc, out, err = _run(["/usr/libexec/ApplicationFirewall/socketfilterfw", "--getglobalstate"])
+        txt = (out or err).lower()
+        if rc == 0 and txt:
+            if "disabled" in txt or "state = 0" in txt:
+                fw_state = "warn"
+                fw_detail = "Firewall disabled"
+                findings.append({
+                    "id": "firewall_disabled",
+                    "severity": "warn",
+                    "title": "System Firewall",
+                    "status": "warn",
+                    "detail": "Firewall is disabled.",
+                    "recommendation": "Enable firewall unless you intentionally rely on unrestricted LAN exposure.",
+                })
+            elif "enabled" in txt or "state = 1" in txt:
+                fw_state = "ok"
+                fw_detail = "Firewall enabled"
+            else:
+                fw_state = "warn"
+                fw_detail = out or err or "unknown firewall state"
         else:
             fw_state = "warn"
-            fw_detail = out or err or "unknown firewall state"
-    else:
-        fw_state = "warn"
-        fw_detail = (err or out or "firewall check failed")[:200]
+            fw_detail = (err or out or "firewall check failed")[:200]
 
     # 3) Remote Login (SSH) status.
     ssh_state = "unknown"
@@ -3010,14 +3068,18 @@ async def api_listener_chime(req: Request):
             # Fallback to macOS system sound
             sound = "/System/Library/Sounds/Tink.aiff"
         try:
-            subprocess.run(
-                ["afplay", sound],
-                timeout=3, check=False,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
+            if platform.system() == "Windows":
+                import winsound
+                winsound.PlaySound(sound, winsound.SND_FILENAME | winsound.SND_ASYNC)
+            else:
+                subprocess.run(
+                    ["afplay", sound],
+                    timeout=3, check=False,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
             return {"ok": True, "sound": os.path.basename(sound)}
         except FileNotFoundError:
-            return {"ok": False, "error": "afplay not available (not macOS?)"}
+            return {"ok": False, "error": "audio player not available"}
         except subprocess.TimeoutExpired:
             return {"ok": False, "error": "chime playback timed out"}
 
@@ -3305,14 +3367,28 @@ async def api_listener_restart(req: Request):
         import subprocess, signal as _signal
         # Kill existing wake-listener processes
         try:
-            r = subprocess.run(["pgrep", "-f", "wake-listener.py"],
-                               capture_output=True, text=True, timeout=5)
-            pids = [p.strip() for p in r.stdout.strip().split("\n") if p.strip()]
-            for pid in pids:
-                try:
-                    os.kill(int(pid), _signal.SIGTERM)
-                except (ProcessLookupError, ValueError):
-                    pass
+            if platform.system() == "Windows":
+                r = subprocess.run(
+                    ["tasklist", "/FI", "IMAGENAME eq python.exe", "/FO", "CSV"],
+                    capture_output=True, text=True, timeout=5)
+                # Best-effort: find PIDs running wake-listener
+                for line in r.stdout.strip().split("\n"):
+                    if "wake-listener" in line.lower():
+                        parts = line.strip('"').split('","')
+                        if len(parts) >= 2:
+                            try:
+                                os.kill(int(parts[1].strip('"')), _signal.SIGTERM)
+                            except (ProcessLookupError, ValueError):
+                                pass
+            else:
+                r = subprocess.run(["pgrep", "-f", "wake-listener.py"],
+                                   capture_output=True, text=True, timeout=5)
+                pids = [p.strip() for p in r.stdout.strip().split("\n") if p.strip()]
+                for pid in pids:
+                    try:
+                        os.kill(int(pid), _signal.SIGTERM)
+                    except (ProcessLookupError, ValueError):
+                        pass
         except Exception:
             pass
         time.sleep(0.5)
@@ -3702,13 +3778,20 @@ async def api_tts_speak(req: Request):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
 
     if result.get("ok") and play:
-        # Play via afplay in background
+        # Play audio in background
         filepath = result.get("path", "")
         if filepath and os.path.isfile(filepath):
-            subprocess.Popen(
-                ["afplay", filepath],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
+            if platform.system() == "Windows":
+                try:
+                    import winsound
+                    winsound.PlaySound(filepath, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                except Exception:
+                    pass
+            else:
+                subprocess.Popen(
+                    ["afplay", filepath],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
             result["played"] = True
 
     return result
@@ -4552,7 +4635,7 @@ async def api_restart(req: Request):
 
     async def _delayed_exit():
         await asyncio.sleep(0.3)
-        logger.info("Restart requested — exiting (launchd will respawn)")
+        logger.info("Restart requested — exiting (process manager will respawn)")
         os._exit(0)
 
     asyncio.create_task(_delayed_exit())

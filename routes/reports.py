@@ -210,6 +210,10 @@ def _sync_nightly_report_cron_job():
 
 def _ensure_launchd_sync():
     """Ensure all DB scheduled jobs have launchd plists on startup."""
+    import platform
+    if platform.system() == "Windows":
+        logger.info("Skipping launchd sync on Windows")
+        return
     try:
         mgr = _get_scheduler()
         mgr.sync_launchd()

@@ -1717,15 +1717,22 @@ async def run_server(port: int = DEFAULT_PORT):
             return web.json_response({"status": "error", "error": str(e)}, status=500)
     
     # Sudoers file written on root enable, removed on revoke/expiry
-    SUDOERS_FILE = "/etc/sudoers.d/kukuibot-root-30m"
-    SUDOERS_USER = os.environ.get("USER", os.getlogin())
-    SUDOERS_RULES = (
-        f"{SUDOERS_USER} ALL=(ALL) NOPASSWD: "
-        "/bin/launchctl, /usr/bin/launchctl, "
-        "/bin/chmod, /usr/sbin/chown, "
-        "/usr/bin/install, /bin/mkdir, "
-        "/usr/sbin/visudo, /bin/cat"
-    )
+    import platform as _platform
+    if _platform.system() != "Windows":
+        SUDOERS_FILE = "/etc/sudoers.d/kukuibot-root-30m"
+        SUDOERS_USER = os.environ.get("USER", os.getlogin())
+        SUDOERS_RULES = (
+            f"{SUDOERS_USER} ALL=(ALL) NOPASSWD: "
+            "/bin/launchctl, /usr/bin/launchctl, "
+            "/bin/chmod, /usr/sbin/chown, "
+            "/usr/bin/install, /bin/mkdir, "
+            "/usr/sbin/visudo, /bin/cat"
+        )
+    else:
+        SUDOERS_FILE = None
+        SUDOERS_USER = os.environ.get("USERNAME", os.getlogin())
+        SUDOERS_RULES = None
+        logger.info("Sudoers/NOPASSWD not applicable on Windows — skipping")
 
     async def _write_sudoers(password: str) -> bool:
         """Write the NOPASSWD sudoers file using the validated password.

@@ -14,7 +14,7 @@ Legacy crontab support has been removed — macOS TCC blocks crontab writes.
 import json
 import logging
 import os
-import plistlib
+import platform
 import re
 import sqlite3
 import subprocess
@@ -24,6 +24,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+if platform.system() != "Windows":
+    import plistlib
+else:
+    plistlib = None  # type: ignore[assignment]
+
 logger = logging.getLogger("kukuibot.scheduler")
 
 # ---------------------------------------------------------------------------
@@ -32,12 +37,21 @@ logger = logging.getLogger("kukuibot.scheduler")
 
 # launchd constants
 LAUNCHD_PREFIX = "com.kukuibot.job."
-LAUNCHD_DIR = Path.home() / "Library" / "LaunchAgents"
+if platform.system() != "Windows":
+    LAUNCHD_DIR = Path.home() / "Library" / "LaunchAgents"
+else:
+    LAUNCHD_DIR = None  # type: ignore[assignment]
 KUKUIBOT_HOME = Path.home() / ".kukuibot"
-LAUNCHD_ENV = {
-    "HOME": str(Path.home()),
-    "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-}
+if platform.system() != "Windows":
+    LAUNCHD_ENV = {
+        "HOME": str(Path.home()),
+        "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    }
+else:
+    LAUNCHD_ENV = {
+        "HOME": str(Path.home()),
+        "PATH": os.environ.get("PATH", ""),
+    }
 
 PRESETS = {
     "every_5_min":        {"schedule": "*/5 * * * *",  "label": "Every 5 minutes"},
@@ -886,6 +900,9 @@ class CronManager:
         For each enabled shell job: write plist, launchctl load.
         For disabled/missing jobs: launchctl unload, remove plist.
         """
+        if platform.system() == "Windows":
+            logger.warning("launchd not available on Windows — skipping sync")
+            return
         LAUNCHD_DIR.mkdir(parents=True, exist_ok=True)
 
         db = self._get_db()
@@ -943,6 +960,9 @@ class CronManager:
 
     def _launchctl_load(self, label: str, plist_path: Path):
         """Load a launchd agent."""
+        if platform.system() == "Windows":
+            logger.warning("launchd not available on Windows")
+            return
         try:
             subprocess.run(
                 ["launchctl", "load", str(plist_path)],
@@ -953,6 +973,9 @@ class CronManager:
 
     def _launchctl_unload(self, label: str, plist_path: Path):
         """Unload a launchd agent."""
+        if platform.system() == "Windows":
+            logger.warning("launchd not available on Windows")
+            return
         try:
             subprocess.run(
                 ["launchctl", "unload", str(plist_path)],
@@ -963,6 +986,9 @@ class CronManager:
 
     def _ensure_launchd_loaded(self, label: str, plist_path: Path):
         """Check if agent is loaded; load if not."""
+        if platform.system() == "Windows":
+            logger.warning("launchd not available on Windows")
+            return
         try:
             result = subprocess.run(
                 ["launchctl", "list", label],

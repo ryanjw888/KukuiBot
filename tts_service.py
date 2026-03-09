@@ -1,4 +1,4 @@
-#!/opt/homebrew/bin/python3.12
+#!/usr/bin/env python3
 """
 tts_service.py — Kokoro-82M TTS microservice.
 

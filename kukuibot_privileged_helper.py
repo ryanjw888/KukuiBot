@@ -202,6 +202,11 @@ def _cleanup_stale_sudoers():
 
 
 def serve_forever():
+    import platform as _platform
+    if _platform.system() == "Windows":
+        print("Privileged helper not supported on Windows")
+        import sys
+        sys.exit(1)
     _cleanup_stale_sudoers()
     helper = Helper()
 
